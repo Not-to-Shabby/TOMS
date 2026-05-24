@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ESP32-S3 CDC-ACM device filter -->
+    <usb-device vendor-id="12346" product-id="32769" />
+    <!-- Espressif generic -->
+    <usb-device vendor-id="4292" />
+</resources>

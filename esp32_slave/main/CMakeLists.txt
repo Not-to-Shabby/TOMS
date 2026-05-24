@@ -1,0 +1,34 @@
+idf_component_register(
+    SRC_DIRS
+        "."
+        "display"
+        "qr_gen"
+        "button"
+        "ui"
+        "sleep"
+        "nfc_sync"
+        "../../shared_lib/pn532"
+        "../../shared_lib/espnow_comm"
+        "../../shared_lib/crypto"
+        "../../shared_lib/protocol"
+    INCLUDE_DIRS
+        "."
+        "display"
+        "qr_gen"
+        "button"
+        "ui"
+        "sleep"
+        "nfc_sync"
+        "../../shared_lib/pn532"
+        "../../shared_lib/espnow_comm"
+        "../../shared_lib/crypto"
+        "../../shared_lib/protocol"
+    REQUIRES
+        driver
+        esp_wifi
+        nvs_flash
+        esp_timer
+        esp_lcd
+        mbedtls
+        vfs
+)

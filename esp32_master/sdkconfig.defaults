@@ -1,0 +1,47 @@
+# =============================================================================
+# TOMS Master - SDK Configuration Defaults
+# =============================================================================
+
+# --- USB CDC (TinyUSB) ---
+CONFIG_TINYUSB=y
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_RX_BUFSIZE=512
+CONFIG_TINYUSB_CDC_TX_BUFSIZE=512
+CONFIG_TINYUSB_DESC_MANUFACTURER_STRING="TOMS"
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="TOMS Master POS Bridge"
+CONFIG_TINYUSB_DESC_CDC_STRING="TOMS Serial"
+
+# --- USB PHY ---
+# Use internal USB PHY on GPIO 19/20
+CONFIG_USB_OTG_SUPPORTED=y
+
+# --- Wi-Fi (required for ESP-NOW, no AP connection) ---
+CONFIG_ESP_WIFI_ENABLED=y
+
+# --- ESP-NOW ---
+CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM=2
+
+# --- SPIFFS ---
+CONFIG_SPIFFS_MAX_PARTITIONS=1
+
+# --- NVS ---
+CONFIG_NVS_ENCRYPTION=n
+
+# --- mbedTLS (AES-256) ---
+CONFIG_MBEDTLS_AES_C=y
+CONFIG_MBEDTLS_CIPHER_MODE_CBC=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_UNICORE=n
+
+# --- Console output via UART (GPIO 43/44) for external debugging ---
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+
+# --- Watchdog ---
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

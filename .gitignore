@@ -1,0 +1,30 @@
+# VS Code
+.vscode/
+
+# Build and compiled directories
+build/
+latex/
+html/
+esp32_master/build/
+esp32_slave/build/
+toms_mobile/build/
+
+# Android/Flutter artifacts
+.gradle/
+local.properties
+*.keystore
+*.jks
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+*~
+
+# ESP-IDF specific
+sdkconfig
+sdkconfig.old
+dependencies.lock
+
+# OS files
+.DS_Store
+Thumbs.db

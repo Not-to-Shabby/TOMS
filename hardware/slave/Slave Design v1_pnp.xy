@@ -1,0 +1,16 @@
+# Pick And Place List
+# eMail=
+#
+# Project=Slave Design v1
+# Date=22:28:13
+# CreatedBy=Fritzing 1.0.6.2025-10-07.CD-2239-0-04e5bb02
+#
+# Coordinates in mils, always center of component
+# Origin 0/0=Lower left corner of PCB. Rotation in degree (0-360, math. pos.)
+RefDes,Description,Package,X,Y,Rotation,Side,Mount
+Description: resistance;capacitance;inductance;voltage;current;power;mpn;mn;
+A1,";;;;;;;;","",529.672,1750.46,0,Top,MANUAL
+LCD1,";;;;;;;;","",1547.7,1298.12,-90,Top,MANUAL
+S1,";;;;;;;;","tactile-pth",428,566.542,0,Top,SMT
+U1,";;;3.7V;;;;;","lipo-110",1603.17,1223.8,90,Top,SMT
+R1,"10k;;;;;0.25W;;;","THT",400,1055.54,180,Top,THT

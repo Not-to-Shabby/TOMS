@@ -1,0 +1,493 @@
+/**
+ * @file app_main.c
+ * @brief TOMS Slave — Passenger interface entry point.
+ *
+ * Phase 2.1: Master-driven passive architecture with dual-trigger support.
+ *
+ * Boarding can be triggered two ways:
+ *   1. Master-driven: ESP-NOW BOARD_COMMAND or UART BOARD_COMMAND (primary)
+ *   2. Manual: Physical button press → notifies Master, waits for BOARD_COMMAND
+ *
+ * Anti-fraud: All BOARD_COMMAND packets are validated against this Slave's
+ * unique hardware UID (eFuse MAC). Mismatched UIDs are silently dropped.
+ *
+ * Lifecycle:
+ *   Wake → Init → Read UID → Show Welcome
+ *     → Wait for Master Command / Button
+ *     → Validate UID → Show Fare → Show QR → Idle → Sleep
+ */
+
+#include <string.h>
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_mac.h"
+#include "esp_random.h"
+#include "nvs_flash.h"
+
+/* TOMS modules */
+#include "display.h"
+#include "qr_gen.h"
+#include "button.h"
+#include "ui.h"
+#include "sleep.h"
+#include "crypto.h"
+#include "espnow_comm.h"
+#include "protocol.h"
+#include "nfc_sync.h"
+#include "lvgl.h"
+
+static const char *TAG = "toms_slave";
+
+/* ── Configuration ────────────────────────────────────────────────────── */
+
+/* Master MAC (updated via CONFIG_SYNC) */
+static uint8_t s_master_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+/* ESP-NOW LMK — must match Master */
+static const uint8_t s_espnow_lmk[16] = {
+    0x54, 0x4F, 0x4D, 0x53, 0x5F, 0x4C, 0x4D, 0x4B,
+    0x5F, 0x53, 0x4C, 0x41, 0x56, 0x45, 0x30, 0x31
+};
+
+/* This Slave's unique hardware UID (eFuse MAC, 16 bytes, zero-padded) */
+static uint8_t s_slave_uid[16];
+
+/* Sequence counter */
+static uint8_t s_seq = 0;
+
+/* ── Shared State (written by tasks, read by main logic) ──────────────── */
+
+static volatile bool s_button_pressed    = false;  /* Manual button trigger */
+static volatile bool s_board_cmd_pending = false;  /* Master boarding command ready */
+static toms_board_command_t s_pending_cmd;          /* Latest board command payload */
+static volatile bool s_debug_active      = false;  /* Debug mode active */
+static bool          s_debug_qr_shown    = false;
+static toms_debug_receipt_t s_debug_receipt;
+
+/* ── Forward Declarations ─────────────────────────────────────────────── */
+
+static void on_button_event(toms_button_event_t event);
+static void on_nfc_board_command(const toms_board_command_t *cmd);
+static void espnow_handler_task(void *arg);
+static void main_logic_task(void *arg);
+static void lvgl_timer_task(void *arg);
+static void execute_boarding(const toms_board_command_t *cmd);
+static void send_heartbeat(void);
+static void build_debug_receipt(toms_debug_receipt_t *out);
+static void build_debug_qr(const toms_debug_receipt_t *receipt, char *out, size_t out_size);
+
+/* ── UID Utilities ────────────────────────────────────────────────────── */
+
+static void uid_init(void)
+{
+    memset(s_slave_uid, 0, sizeof(s_slave_uid));
+    esp_read_mac(s_slave_uid, ESP_MAC_WIFI_STA);
+    ESP_LOGI(TAG, "Slave UID: %02X:%02X:%02X:%02X:%02X:%02X",
+             s_slave_uid[0], s_slave_uid[1], s_slave_uid[2],
+             s_slave_uid[3], s_slave_uid[4], s_slave_uid[5]);
+}
+
+static bool uid_matches(const uint8_t *target_uid)
+{
+    return (memcmp(target_uid, s_slave_uid, 16) == 0);
+}
+
+/* ── Debug Receipt Helpers ───────────────────────────────────────────── */
+
+static void build_debug_receipt(toms_debug_receipt_t *out)
+{
+    if (!out) return;
+
+    memset(out, 0, sizeof(*out));
+    out->fare_centavos = 1200;
+
+    snprintf(out->title, sizeof(out->title), "Mitsco");
+    snprintf(out->datetime, sizeof(out->datetime), "05/04/2026 11:47 AM");
+    snprintf(out->route, sizeof(out->route), "City Proper-Country Hills");
+    snprintf(out->terminal, sizeof(out->terminal), "DPWH - TAMBO TERMINAL");
+    snprintf(out->discount, sizeof(out->discount),
+             "DISCOUNT: 1 x %u.%02u = P %u.%02u",
+             (unsigned int)(out->fare_centavos / 100),
+             (unsigned int)(out->fare_centavos % 100),
+             (unsigned int)(out->fare_centavos / 100),
+             (unsigned int)(out->fare_centavos % 100));
+
+    out->ticket_no = (uint32_t)(esp_random() % 100000000U);
+    snprintf(out->payment_mode, sizeof(out->payment_mode), "Cash");
+    snprintf(out->bus_id, sizeof(out->bus_id), "CDB%04u",
+             (unsigned int)(esp_random() % 10000U));
+    snprintf(out->etim_no, sizeof(out->etim_no), "MITSCO%02u",
+             (unsigned int)(esp_random() % 100U));
+    out->waybill_no = (uint32_t)(esp_random() % 100000U);
+    snprintf(out->duty_no, sizeof(out->duty_no), "NA");
+    snprintf(out->driver_id, sizeof(out->driver_id), "DCDR1001");
+}
+
+static void build_debug_qr(const toms_debug_receipt_t *receipt, char *out, size_t out_size)
+{
+    if (!receipt || !out || out_size == 0) return;
+
+    snprintf(out, out_size,
+             "TOMS|DEBUG|%s|P%u.%02u|T%08u|%s|%s",
+             receipt->datetime,
+             (unsigned int)(receipt->fare_centavos / 100),
+             (unsigned int)(receipt->fare_centavos % 100),
+             (unsigned int)receipt->ticket_no,
+             receipt->bus_id,
+             receipt->etim_no);
+}
+
+/* ── Button Handler ───────────────────────────────────────────────────── */
+
+static void on_button_event(toms_button_event_t event)
+{
+    if (event == TOMS_BTN_LONG_PRESS) {
+        ESP_LOGI(TAG, "Debug long press detected -> show receipt");
+        s_debug_active = true;
+        s_debug_qr_shown = false;
+        build_debug_receipt(&s_debug_receipt);
+        toms_ui_show_debug_receipt(&s_debug_receipt);
+        return;
+    }
+
+    if (event == TOMS_BTN_PRESS && s_debug_active) {
+        toms_ui_screen_t curr = toms_ui_get_current();
+        if (curr == TOMS_UI_DEBUG_RECEIPT) {
+            ESP_LOGI(TAG, "Debug mode: receipt -> QR");
+            char qr_buf[200];
+            build_debug_qr(&s_debug_receipt, qr_buf, sizeof(qr_buf));
+            toms_ui_show_qr(qr_buf);
+            s_debug_qr_shown = true;
+        } else if (curr == TOMS_UI_QR) {
+            ESP_LOGI(TAG, "Debug mode: exit -> welcome");
+            s_debug_active = false;
+            s_debug_qr_shown = false;
+            toms_ui_show_welcome();
+        }
+        return;
+    }
+
+    if (event == TOMS_BTN_PRESS) {
+        ESP_LOGI(TAG, "=> Physical Master/Dock connection detected! (GPIO 4 LOW)");
+        ESP_LOGI(TAG, "Button event: PRESS (flagging s_button_pressed)");
+        s_button_pressed = true;
+        toms_sleep_reset_idle();
+
+        /* Notify Master of button press so it can trigger a boarding command */
+        toms_packet_t pkt;
+        toms_packet_build(&pkt, TOMS_MSG_BUTTON_PRESS, s_seq++,
+                          s_slave_uid, 6);  /* Include UID so master knows who pressed */
+        toms_espnow_send(s_master_mac, &pkt);
+        ESP_LOGI(TAG, "Button press notified to master");
+    }
+}
+
+/* ── NFC Board Command Callback ─────────────────────────────────────── */
+
+static void on_nfc_board_command(const toms_board_command_t *cmd)
+{
+    ESP_LOGI(TAG, "=> Master NFC tap session — boarding command received!");
+
+    /* Copy and set flag — expanded from dictionary by nfc_sync.c */
+    memcpy(&s_pending_cmd, cmd, sizeof(toms_board_command_t));
+    s_board_cmd_pending = true;
+    toms_sleep_reset_idle();
+}
+
+/* ── ESP-NOW Handler Task ─────────────────────────────────────────────── */
+
+static void espnow_handler_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "ESP-NOW handler task started");
+
+    toms_espnow_event_t event;
+
+    while (1) {
+        if (!toms_espnow_receive(&event, 500)) continue;
+
+        ESP_LOGI(TAG, "ESP-NOW RX: type=0x%02X from " MACSTR,
+                 event.packet.msg_type, MAC2STR(event.src_mac));
+        toms_sleep_reset_idle();
+
+        switch (event.packet.msg_type) {
+
+        case TOMS_MSG_BOARD_COMMAND:
+            if (event.packet.length >= sizeof(toms_board_command_t)) {
+                const toms_board_command_t *cmd =
+                    (const toms_board_command_t *)event.packet.payload;
+
+                /* Anti-fraud UID check */
+                if (uid_matches(cmd->target_uid)) {
+                    ESP_LOGI(TAG, "ESP-NOW board command validated — fare=%d",
+                             cmd->fare_centavos);
+                    memcpy(&s_pending_cmd, cmd, sizeof(toms_board_command_t));
+                    s_board_cmd_pending = true;
+
+                    /* Save master MAC */
+                    memcpy(s_master_mac, event.src_mac, 6);
+
+                    /* ACK */
+                    toms_packet_t ack;
+                    toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
+                    toms_espnow_send(event.src_mac, &ack);
+                } else {
+                    ESP_LOGW(TAG, "Board command UID mismatch — dropped");
+                }
+            }
+            break;
+
+        case TOMS_MSG_CONFIG_SYNC:
+            if (event.packet.length >= sizeof(toms_config_payload_t)) {
+                const toms_config_payload_t *cfg =
+                    (const toms_config_payload_t *)event.packet.payload;
+                ESP_LOGI(TAG, "Config sync: route=%d, base_fare=%d",
+                         cfg->route_id, cfg->base_fare_centavos);
+                memcpy(s_master_mac, event.src_mac, 6);
+
+                toms_packet_t ack;
+                toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
+                toms_espnow_send(event.src_mac, &ack);
+            }
+            break;
+
+        case TOMS_MSG_FARE_TABLE_UPDATE:
+            ESP_LOGI(TAG, "Fare table update received");
+            /* TODO: persist to NVS */
+            {
+                toms_packet_t ack;
+                toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
+                toms_espnow_send(event.src_mac, &ack);
+            }
+            break;
+
+        case TOMS_MSG_HEARTBEAT:
+            ESP_LOGD(TAG, "Heartbeat from master");
+            break;
+
+        default:
+            ESP_LOGD(TAG, "Unhandled msg: 0x%02X", event.packet.msg_type);
+            break;
+        }
+    }
+}
+
+/* ── Boarding Execution ───────────────────────────────────────────────── */
+
+/**
+ * Executes the full boarding display sequence using data from the Master's
+ * BOARD_COMMAND. This is the only path that generates the QR receipt.
+ */
+static void execute_boarding(const toms_board_command_t *cmd)
+{
+    ESP_LOGI(TAG, "Executing boarding — fare=%d centavos, seat=%d",
+             cmd->fare_centavos, cmd->seat_number);
+
+    toms_ui_show_processing();
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    /* Show fare screen */
+    char route_str[16];
+    snprintf(route_str, sizeof(route_str), "Route %d", cmd->route_id);
+    toms_ui_show_fare(route_str, cmd->fare_centavos, cmd->seat_number);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    /* Build QR receipt string: TOMS|VEH_ID|TIMESTAMP|FARE|UID */
+    char qr_buf[160];
+    char uid_hex[13];
+    snprintf(uid_hex, sizeof(uid_hex), "%02X%02X%02X%02X%02X%02X",
+             s_slave_uid[0], s_slave_uid[1], s_slave_uid[2],
+             s_slave_uid[3], s_slave_uid[4], s_slave_uid[5]);
+
+    if (toms_qr_build_receipt(
+            (const char *)cmd->vehicle_id,
+            cmd->timestamp,
+            cmd->fare_centavos,
+            uid_hex,
+            qr_buf, sizeof(qr_buf))) {
+        toms_ui_show_qr(qr_buf);
+        vTaskDelay(pdMS_TO_TICKS(8000));
+    }
+
+    /* Notify Master with the completed passenger event */
+    toms_passenger_event_t pe = {0};
+    pe.timestamp     = cmd->timestamp;
+    pe.boarding_type = TOMS_BOARD_CARD;  /* Master-commanded = card/swipe type */
+    pe.fare_centavos = cmd->fare_centavos;
+    pe.seat_number   = cmd->seat_number;
+    pe.route_id      = cmd->route_id;
+    memcpy(pe.passenger_id, s_slave_uid, 6);  /* UID as passenger identity */
+
+    toms_packet_t pkt;
+    toms_packet_build(&pkt, TOMS_MSG_PASSENGER_BOARD, s_seq++,
+                      (const uint8_t *)&pe, sizeof(pe));
+    toms_espnow_send(s_master_mac, &pkt);
+
+    toms_ui_show_welcome();
+}
+
+/* ── Heartbeat ────────────────────────────────────────────────────────── */
+
+static void send_heartbeat(void)
+{
+    toms_packet_t pkt;
+    toms_packet_build(&pkt, TOMS_MSG_HEARTBEAT, s_seq++, NULL, 0);
+    toms_espnow_send(s_master_mac, &pkt);
+    ESP_LOGD(TAG, "Heartbeat sent");
+}
+
+/* ── LVGL Timer Task ─────────────────────────────────────────────────── */
+
+static void lvgl_timer_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "LVGL timer task started");
+    while (1) {
+        toms_ui_process();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+/* ── Main Logic Task ──────────────────────────────────────────────────── */
+
+static void main_logic_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "Main logic task started");
+
+    toms_ui_show_welcome();
+
+    while (1) {
+        /* Priority 1: Master board command (ESP-NOW or NFC) */
+        if (s_board_cmd_pending) {
+            ESP_LOGI(TAG, "Board command pending -> execute_boarding");
+            s_board_cmd_pending = false;
+            s_button_pressed    = false;  /* Clear manual flag too */
+            execute_boarding(&s_pending_cmd);
+        }
+
+        /* Priority 2: Manual button — just notify master, don't self-board */
+        if (s_button_pressed) {
+            ESP_LOGI(TAG, "Manual button flag seen -> show processing");
+            s_button_pressed = false;
+            toms_ui_show_processing();  /* "Waiting for master..." */
+            
+            /* Wait up to 5 seconds for Master response, checking for s_board_cmd_pending */
+            int wait_ms = 0;
+            bool got_response = false;
+            while (wait_ms < 5000) {
+                if (s_board_cmd_pending) {
+                    got_response = true;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(50));
+                wait_ms += 50;
+            }
+
+            if (!got_response) {
+                /* Timeout */
+                ESP_LOGW(TAG, "Master timeout waiting for board command");
+                toms_ui_show_error("Master Timeout");
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                toms_ui_show_welcome();
+            } else {
+                /* Process the response immediately without going to welcome screen */
+                ESP_LOGI(TAG, "Master response received -> execute_boarding");
+                s_board_cmd_pending = false;
+                execute_boarding(&s_pending_cmd);
+            }
+        }
+
+        /* Deep sleep on idle timeout */
+        if (toms_sleep_should_sleep()) {
+            ESP_LOGI(TAG, "Idle timeout — entering deep sleep");
+            toms_ui_show_sleep();
+            vTaskDelay(pdMS_TO_TICKS(100));
+            toms_sleep_enter();
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
+
+/* ── Main Entry Point ─────────────────────────────────────────────────── */
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "=== TOMS Slave Firmware v0.2.0 ===");
+
+    toms_wake_cause_t wake = toms_sleep_get_wake_cause();
+    ESP_LOGI(TAG, "Wake cause: %d", (int)wake);
+
+    /* ── Step 1: NVS ────────────────────────────────────────────────── */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    /* ── Step 2: Slave UID (eFuse MAC) ──────────────────────────────── */
+    uid_init();
+
+    /* ── Step 3: Crypto ─────────────────────────────────────────────── */
+    toms_crypto_init();
+
+    /* ── Step 4: ESP-NOW ────────────────────────────────────────────── */
+    toms_espnow_init(NULL);
+    toms_espnow_add_peer(s_master_mac, s_espnow_lmk, TOMS_ESPNOW_CHANNEL);
+
+    /* ── Step 5: NFC Sync (PN532 Target) ───────────────────────────── */
+    err = toms_slave_nfc_init();
+    if (err != 0) {
+        ESP_LOGE(TAG, "NFC init failed (%d) — continuing without NFC sync", err);
+    }
+    toms_slave_nfc_set_board_cb(on_nfc_board_command);
+
+    /* ── Step 6: Display ──────────────────────────────────────────── */
+    toms_display_init();
+    toms_ui_init();
+
+    /* ── Step 7: Button ─────────────────────────────────────────────── */
+    toms_button_init();
+    toms_button_set_callback(on_button_event);
+
+    /* ── Step 8: Sleep Manager ──────────────────────────────────────── */
+    toms_sleep_init();
+
+    /* ── Timer wake: send heartbeat with UID and go back to sleep ────── */
+    if (wake == TOMS_WAKE_TIMER) {
+        ESP_LOGI(TAG, "Timer wake — sending heartbeat");
+        send_heartbeat();
+        vTaskDelay(pdMS_TO_TICKS(200));
+        toms_sleep_enter();
+        /* Never returns */
+    }
+
+    /* ── Launch tasks ───────────────────────────────────────────────── */
+    ESP_LOGI(TAG, "Launching tasks...");
+
+    /* ESP-NOW handler — Core 1, latency-sensitive */
+    xTaskCreatePinnedToCore(espnow_handler_task, "espnow_handler",
+                            4096, NULL, 6, NULL, 1);
+
+    /* NFC Target listener — Core 0 */
+    xTaskCreatePinnedToCore(toms_slave_nfc_task, "nfc_sync",
+                            4096, NULL, 5, NULL, 0);
+
+    /* Button input — Core 0 */
+    xTaskCreatePinnedToCore(toms_button_task, "button",
+                            4096, NULL, 4, NULL, 0);
+
+    /* LVGL timer — Core 0 */
+    xTaskCreatePinnedToCore(lvgl_timer_task, "lvgl_timer",
+                            8192, NULL, 7, NULL, 0);
+
+    /* Main logic — Core 0 */
+    xTaskCreatePinnedToCore(main_logic_task, "main_logic",
+                            8192, NULL, 3, NULL, 0);
+
+    ESP_LOGI(TAG, "=== TOMS Slave ready (wake: %d) ===", (int)wake);
+}
