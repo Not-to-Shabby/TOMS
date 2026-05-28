@@ -1,0 +1,690 @@
+﻿CHAPTER II
+
+
+Design and Development of an RFID-Based POS and Passenger Monitoring System for Public Minibus Transportation: A Systematic Literature Review
+Abstract
+Public transportation, particularly minibuses, still relies on manual fare collection and paper tickets, leading to inaccurate passenger counts and revenue inconsistencies. These inefficiencies make it difficult to monitor real-time occupancy, resulting in poor capacity management and potential income loss. This study focuses on conducting a Systematic Literature Review (SLR) on microcontroller-based systems designed for accurate passenger occupancy monitoring.  Using PRISMA guidelines, 2,020 records were identified and filtered down to 22 primary studies for technical analysis. Findings show that modern systems use microcontrollers like the ESP32 combined with RFID, optical sensors, or camera-based solutions for real-time passenger detection. Notably, ESP32-CAM modules using machine learning (e.g., FOMO algorithm) achieve up to 96% accuracy, while hybrid optical-RFID systems can reach near 100% counting accuracy through backend verification. GPS modules are also integrated to associate occupancy data with routes and stops. Despite these advancements, challenges such as counting errors during crowding, hardware costs, and unreliable connectivity persist. This study addresses these gaps by proposing a cost-effective handheld and sensor-assisted system that prioritizes precise occupancy tracking, enabling better capacity management, reduced fraud, and improved decision-making in public transportation.
+Keywords: RFID, Fare Collection, Passenger Counting, IoT, Android POS Terminal.
+2.1 Introduction
+Traditional fare collection and passenger monitoring in public transportation is a major problem worldwide, especially in developing countries like the Philippines where manual systems are still used. Using paper tickets and manual counting often leads to revenue loss and frequent arguments over incorrect change (Zaman et al., 2023; Ingabire, 2023). These old manual methods are very slow, and conductors often make mistakes during daily bus trips (Agarwal et al., 2022; Ingabire, 2023). Research indicates that transitioning to automated systems can significantly reduce these inefficiencies, potentially decreasing transit operating costs by up to 30% (Adebiyi et al., 2021). While advanced electronic systems exist in developed countries, they are usually too expensive for small transport businesses in local areas (Murdan et al., 2020).
+In the Philippines, mini-buses still rely on conductors to count passengers and collect money by hand. Research shows that this is an ineffective way to record exact fares because manual collection is highly susceptible to human error, vulnerable to fraud, and lacks transparency (Kannan et al., 2020; Ingabire, 2023). This manual setup often enables conductor malpractice, such as failing to issue tickets, which directly results in inaccurate passenger manifests and significant revenue leakage (Ingabire, 2023). These systems do not give passengers digital receipts, leaving them with no proof of payment (Kulange et al., 2025). Also, many passengers struggle daily because they do not have the exact "change" needed for the bus fare (Jenita et al., 2026). As cities grow, there is a strong need for a more reliable way to track passengers and their payments to ensure profit accuracy and prevent fraud (Kulange et al., 2025; Ingabire, 2023).
+New technology using microcontrollers, RFID cards, and GPS can significantly improve public transport (Nirmala et al., 2024). These systems can track vehicle locations and keep a digital record of every payment made (Rajkumar et al., 2018). Advanced implementations now incorporate machine learning techniques like FOMO (Faster Objects, More Objects) on ESP32-CAM modules to detect seat vacancy and count passengers with up to 95.3% accuracy (Gonzales et al., 2025). Furthermore, integrating dual-verification architectures, such as optical-RFID synchronization, can achieve 100% accuracy in counting events, ensuring that every passenger is accounted for and fraud is eliminated (Lam et al., 2026). Recent research also explores frictionless fare collection by matching smartphone location data with vehicle trajectories using Dynamic Time Warping (DTW) and Longest Common Subsequence (LCSS) algorithms (Ghorbankhani, 2024). Developments even utilize Random Forest algorithms to optimize profit structures and predict passenger demand based on cloud-stored data (Vadivel et al., 2024).
+Using RFID cards has already worked well in metro systems to stop long lines, prevent ticketing loopholes, and make travel more secure (Suvarna et al., 2022). However, some studies show that keeping these systems secure and paying for the equipment are still big challenges (Kulange et al., 2025). Most existing systems also lack the proper implementation of reusable cards that can track travel history while reducing paper waste in an eco-friendly way (Pijdurkar et al., 2024; Ingabire, 2023).
+This systematic literature review (SLR) aims to study existing RFID-based Point-of-Sale (POS) and passenger monitoring systems for mini-buses. It evaluates the hardware currently being built (Bhavani et al., 2025), how they record fares (Iswarya et al., 2022), and what is still missing for a cheap and easy-to-use system. Following PRISMA guidelines, the study identified an initial pool of 2,020 records, 2,019 from the Google Scholar database and 1 from an institutional repository (air.ashesi.edu.gh), which was systematically screened to select 22 primary studies for detailed technical analysis and synthesis. By using the CIMO framework, this review answers how a new system can fix the manual problems in Iligan City. The main goal is to see how an RFID handheld device and reusable cards can make passenger counting and fare collection more accurate than the old manual way, effectively maximizing profit accuracy and eliminating fraud (Lam et al., 2026; Ingabire, 2023).
+
+
+2.2 Research Methods
+This study utilized a Systematic Literature Review (SLR) methodology to identify existing RFID-based Point-of-Sale (POS) and passenger monitoring technologies for public minibus transportation. The review follows the Preferred Reporting Items for Systematic Reviews and Meta-Analyses (PRISMA) reporting guidelines and is composed of five distinct steps. The first step involves framing clear and focused research questions regarding manual fare issues using collaborative writing tools,  the second step includes identifying and gathering relevant literature from an initial pool of 2,020 records, consisting of 2,019 records retrieved from the Google Scholar database using the Harzing tool and 1 record identified from an institutional repository (air.ashesi.edu.gh); the third step entails critically appraising and selecting studies through Rayyan for abstract screening and Google Scholar for full-text reviews, applying inclusion criteria such as the use of microcontroller-based logic, IoT-integrated hardware architectures, and high-quality technical gray literature (Suvarna et al., 2022; Ingabire, 2023); the fourth step summarizes and synthesizes key findings from the 22 selected primary studies using Google Spreadsheets for data extraction, focusing on accurate passenger counting, profit accuracy, and the prevention of conductor fraud (Gonzales et al., 2025; Lam et al., 2026; Vadivel et al., 2024); and finally, the fifth step evaluates the applicability of these results to real-world minibus scenarios in Iligan City.
+Table 2.1 SLR Process and Tools
+SLR Stage
+	Tool/Platform
+	Function
+	Research Problem
+	Google Docs
+	Establish clear and focused research questions.
+	Identification and Gathering
+	Harzing's Publish
+	Search and retrieve relevant literature from digital libraries.
+	Title & Abstract Screening
+	Rayyan
+	Select studies based on title and abstract screening.
+	Full Text Screening
+	Google Scholar
+	Screen full text for eligibility.
+	Quality Assessment & Data Extraction
+	Google Spreadsheets
+	Summarize, synthesize, and extract technical data from selected studies.
+	Reference Management
+	Mendeley
+	Organize, manage, and format bibliographic citations and references.
+	
+
+2.2.1. Review Protocol 
+This phase involved the formulation of a systematic literature review (SLR) protocol to ensure transparency, repeatability, and to reduce bias during the research process. This protocol acts as a detailed plan outlining the methodology and processes followed throughout the review, which includes the following: (i) the establishment of focused research questions using Google Docs to address the challenges of manual ticketing, real-time passenger occupancy monitoring, and revenue leakage in Iligan City; (ii) a systematic search strategy executed through Harzing’s Publish or Perish to gather an initial pool of 2,020 records, including 2,019 from Google Scholar and 1 from the air.ashesi.edu.gh repository; (iii) title, abstract, and full-text screening using Rayyan and Google Scholar to apply inclusion and exclusion criteria focused on microcontroller-based logic, automated counting sensors, and RFID-integrated systems (Suvarna et al., 2022; Ingabire, 2023); (iv) quality assessment and data extraction via Google Spreadsheets to synthesize findings regarding how RFID, GPS, and occupancy detection algorithms automate fare recording to maximize profit accuracy and prevent conductor fraud (Gonzales et al., 2025; Lam et al., 2026); and (v) reference management utilizing Mendeley to systematically organize and format bibliographic citations throughout the review. 
+2.2.2. Research Question
+The primary goal of this research is to identify and assess existing microcontroller-based passenger monitoring and fare collection technologies used in the public transportation sector. This includes identifying the specific hardware configurations, such as RFID readers, GPS modules, and handheld Point-of-Sale (POS) devices, as well as the software logic used for fare calculation. The review also aims to uncover existing challenges and gaps in the literature to guide the development of a more accurate and automated system for local minibuses. Accordingly, the study is structured around the following research questions based on the CIMO (Context, Intervention, Mechanism, Outcome) framework:
+RQ1: What are the challenges and limitations of the current manual passenger counting and fare monitoring systems in public utility vehicles, particularly in local settings like Iligan City?
+RQ2 : How can an RFID-based Point-of-Sale (POS)and passenger monitoring system be designed using RFID cards and handheld devices to effectively record passenger destinations and fares?
+RQ3 : Through what mechanisms do RFID scanning and seat card systems automate the process of passenger counting and fare recording in public transportation? 
+RQ4 : How effective is an automated RFID-based system in improving the accuracy of passenger monitoring and fare collection compared to traditional manual methods? 
+
+
+2.2.3. Search Strategy
+This phase involves the identification of relevant works through the Harzing search engine, focusing on the Google Scholar database to ensure a wide-reaching search of both academic journals and technical conference papers. The search was conducted on March 11, 12, and 13, 2026, to gather an initial pool of 2,020 records. This total consists of 2,019 records retrieved via Harzing’s Publish or Perish and 1 record identified from an institutional repository (air.ashesi.edu.gh). This approach was chosen to capture the most recent developments in microcontroller-based transit systems found in specialized engineering journals and high-quality technical gray literature. The search queries were designed to cover the hardware, payment logic, and occupancy monitoring aspects of the study. To ensure the results were relevant to the "Design and Development of an RFID-Based Point-of-Sale (POS) and Passenger Monitoring System," the following combinations of keywords were used:
+Table 2.2 Search Keywords and Strings
+
+
+Queries
+	Search Term
+	STN1
+	"RFID" AND ("ticketing" OR "fare collection" OR "transportation")
+	STN2
+	"RFID" AND ("passenger counting" OR "RFID counting" OR "crowd" OR "occupancy")
+	STN3
+	("RFID" AND ("ticketing" OR "fare collection" OR "transportation")) AND ("passenger counting" OR "RFID counting" OR "crowd" OR "occupancy") AND ("microcontroller" OR "IoT" OR "Android POS terminal")
+	Note. STN = Search Term Number
+The rationale of STN1 is to include studies focused solely on the hardware and POS (Point of Sale) aspect that involves systems and devices with microcontrollers or FPGA-based logic. The rationale of STN2 is to include studies that emphasize the transportation monitoring and passenger occupancy tracking without focusing heavily on the payment hardware. Finally, the rationale of STN3 is to include studies addressing both the fare collection and monitoring aspects of STN1 and STN2 to understand fully integrated systems.
+The search results were exported in RIS file format from the Harzing search engine and uploaded to Rayyan, a tool designed to facilitate the screening process. Rayyan was used to detect and remove duplicate records and to enable the application of inclusion and exclusion criteria to titles and abstracts. This process ensured that the selection of papers was transparent and reliable. The search process for STN1, STN2, and STN3 resulted in 2,015 entries identified through the Google Scholar database using the Harzing search engine.
+2.2.4. Inclusion and Exclusion Criteria
+The eligibility criteria for the selection of relevant literature consist of inclusion and exclusion criteria to evaluate and ensure the relevance of the results from the previous process. Table 2.2 shows the criteria used to select the most relevant literature for this systematic review.
+Table 2.3
+Inclusion and exclusion criteria for the systematic literature review
+Inclusion Criteria (IC)
+	Exclusion Criteria (EC)
+	IC1: Published between 2020 and 2026 (includes 2018–2019 if relevant results are < 10).
+	EC1: Published outside the defined year range.
+	IC2: Studies written in English.
+	EC2: Studies not written in English.
+	IC3: Studies exploring the challenges, operations, or limitations of passenger counting and fare monitoring in public transportation systems (mini-buses, buses, or PUVs).
+	EC3: Studies focused on personal vehicles, freight, logistics, or large-scale non-road transport systems without public passenger monitoring.
+	IC4: Studies involving the design and use of RFID technology, handheld POS devices, or smart cards for passenger ticketing, seat management, and receipt generation.
+	EC4: Studies utilizing RFID for unrelated industries (e.g., inventory, cold chain) or studies that do not involve automated POS/ticketing systems.
+	IC5: Studies containing empirical data, implementations, or evaluations measuring the accuracy and effectiveness of automated occupancy tracking and fare collection.
+	EC5: Studies lacking empirical data or system implementations, or those that do not evaluate accuracy and automated mechanisms.
+	IC6: Studies that are peer-reviewed articles or relevant review papers with accessible full text from recognized databases.
+	EC6: Studies that are not peer-reviewed (e.g., blogs, opinion pieces), inaccessible, or duplicate records.
+	
+
+The review process began with an individual screening of the search results to filter studies based on the established Inclusion and Exclusion Criteria. This step was performed using Rayyan, a web-based application that allows for efficient sorting of titles and abstracts to ensure they match the research goals. After this individual phase, a meeting was conducted to compare findings, resolve any disagreements regarding paper eligibility, and reach a final consensus on the selection. As a result, a total of 26 papers were chosen for detailed data extraction, quality assessment, and synthesis. While the selection process was thorough, the final inclusion of 22 studies focused specifically on the 2020–2026 year range to ensure the hardware and software technology remained modern. The criteria required papers to be in English and specifically focused on RFID technology, handheld POS devices, and passenger counting in public utility vehicles like mini-buses (IC3, IC4). Studies focusing on personal vehicles or unrelated industries like inventory and logistics (EC3, EC4) were excluded to maintain the focus on public transport. By focusing on technical implementations and system accuracy (IC5), the review may have limited coverage of broader transport policies or government regulations.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Figure 2.1 PRISMA flow diagram of the systematic literature review
+The search and selection process followed PRISMA 2020 guidelines to ensure a systematic and transparent literature filtering. An initial pool of 2,020 records was identified, consisting of 2,019 from Google Scholar via Harzing’s Publish or Perish and 1 from the Ashesi University repository (air.ashesi.edu.gh). After removing 149 duplicates, 1,870 unique records were screened by title and abstract, leading to the exclusion of 1,792 studies that were irrelevant or incomplete. Of the 78 reports sought for full-text retrieval, 21 were inaccessible, leaving 57 reports for eligibility assessment. From these, 36 reports were excluded: 34 were rejected for focusing on qualitative commuter surveys rather than technical hardware implementations, and only 2 failed the quality assessment rubric. This methodical process resulted in a final selection of 21 primary studies and 1 additional institutional report, totaling 22 studies (S1–S22) that provide the technical and engineering foundation for the proposed handheld POS and monitoring system.
+2.2.5. Quality Assessment
+This process involved the formal evaluation of the 22 selected publications using a standardized quality checklist to ensure the technical reliability of the research. Each study was appraised based on four core criteria (Q1–Q4) focusing on the clarity of objectives, the technical detail of the hardware and software for reproducibility, the validity of testing through simulations or prototypes, and the strength of the conclusions. To quantify the quality, each criterion was scored on a 1–4 scale, where a score of 4 represents a "Fully Met" requirement with detailed evidence, and 1 represents a "Not Met" status. Studies were then categorized into High, Medium, or Low quality based on their total points. This rigorous filtering ensures that only studies with reliable data on RFID and POS systems, such as those providing specific circuit logic or transaction metrics, are used to inform the development of the system for Iligan City.
+________________
+
+
+Table 2.4: Quality Assessment Criteria and Scoring Rubric
+
+
+Category
+	ID
+	Assessment Question / Criterion
+	Scoring Rubric (1–4 Scale)
+	Objectives
+	Q1
+	Is the research question or objective clearly stated?
+	4: Fully Met (Detailed evidence  provided)
+	Reproducibility
+	Q2
+	Is the methodology (hardware/software) detailed enough to be reproduced?
+	3: Mostly Met (Strong evidence, minor details missing)
+	Validation
+	Q3
+	Are the results validated through real-world testing or computer simulation?
+	2: Partially Met (Lacks detail for reproduction)
+	Conclusion
+	Q4
+	Is there a clear conclusion directly linked to the research findings?
+	1: Not Met (Information is missing or unclear)
+	2.2.6. Data Extraction
+Following the quality assessment, a structured data extraction process was implemented to organize the findings from the final 22 primary studies (S1–S22). Using Google Spreadsheets, a comprehensive Literature Review Matrix was developed to facilitate a side-by-side comparison of different technologies and methodologies. This matrix focuses on extracting specific technical details, such as the choice of microcontroller (e.g., ESP32 or Arduino), RFID identification modules, and the empirical accuracy of passenger counting and fare collection results. The extraction process also prioritized advanced features relevant to system reliability, including machine learning for seat vacancy detection (Gonzales et al., 2025), dual-verification architectures for 100% counting accuracy (Lam et al., 2026), and cloud-based profit optimization algorithms (Vadivel et al., 2024). By categorizing the data by technical performance and hardware integration, the extraction process highlights the most effective strategies for ensuring profit accuracy and preventing conductor fraud in public transportation settings.
+
+
+
+
+
+
+Table 2.5: Structured Data Extraction Matrix Layout
+
+
+Extraction Field
+	Description and Purpose
+	Relevant STN / RQ
+	Author / Date
+	Identifies the most recent innovations between 2020 and 2026.
+	Context
+	Country
+	Compares transport challenges in similar regions to the Iligan City context.
+	RQ1
+	Technologies Used
+	Lists specific hardware (e.g., RFID-RC522, POS terminals) and software.
+	RQ2
+	Methodology
+	Identifies whether the study used physical prototypes, FPGA logic, or IoT clouds.
+	RQ3
+	Key Results
+	Documents transaction speed, fare accuracy, and passenger counting efficiency.
+	RQ4
+	Identified Gaps
+	Notes missing features like reusable seat cards or secure offline payments.
+	Future Research
+	2.2.7. Data Analysis and Synthesis
+This process involved utilizing the extracted data to conduct a systematic analysis and synthesis aimed at answering the defined research questions. For RQ1, the study identified specific challenges of manual systems in Iligan City, focusing on revenue leakage, lack of digital records, and conductor fraud. For RQ2, the review analyzed various RFID-based POS designs, highlighting the ESP32 as the preferred microcontroller for dual-core processing and mobile connectivity. For RQ3, the mechanisms of optical-RFID synchronization and machine learning-based object detection (such as the FOMO algorithm) were examined to understand how they automate seat occupancy tracking and fare recording logic. For RQ4, the effectiveness of these systems was evaluated, showing that automated implementations can achieve up to 100% counting accuracy and significantly reduce transit operating costs compared to traditional manual methods. Additionally, Table 2.5 summarizes the 22 selected primary studies (S1–S22) that informed the thematic analysis. Based on the synthesized results of this systematic literature review, a derived conceptual framework was developed. This framework illustrates the integration of existing microcontroller technologies, identified research gaps, such as the need for reusable cards with physical feedback, and the proposed design for a more reliable and transparent passenger monitoring system for minibus transportation
+
+
+  
+
+	Figure 2.2. Research Focus Distribution Across Selected Studies (n=22) 
+
+
+Table 2.6. Thematic Analysis and Summary of Selected Studies (S1–22)
+Study ID
+	Focus / Theme
+	Key Technology
+	Primary Findings
+	S7, S11, S16, S17, S18, S21
+	System Architecture & Precision Counting
+	ESP32, RFID, Dual-Verification, Offline Logic
+	Automated ticketing reduces human error. S21 achieves 100% accuracy via dual-verification. S18 prevents fraud using offline storage.
+	S4, S8, S9, S15, S20
+	Fare Calculation & Frictionless Logic
+	GPS, Smart Cards, Algorithms (DTW/LCSS)
+	Manual systems cause revenue leakage. S20 enables frictionless billing via trajectory matching.
+	S1, S3, S5, S13, S19
+	Real-Time Monitoring & Seat Vacancy
+	ESP32-CAM, FOMO Algorithm, Sensors
+	Monitoring optimizes vehicle dispatch and capacity. S19 uses the FOMO algorithm for 95.3% seat precision.
+	S2, S6, S10, S12, S14, S22
+	Profit Optimization & Cloud Security
+	Cloud, Random Forest, AI, GSM
+	Emphasizes secure cloud data and safety alerts. S22 utilizes Random Forest to predict demand and optimize profit.
+	2.2.8 Limitations of the Review 
+
+
+This systematic review is not without its limitations and potential risks of bias. Firstly, the study does not apply meta-analyses, focusing instead on a qualitative and technical synthesis of hardware logic and system implementations for RFID-based POS terminals and passenger monitoring. While a comprehensive search strategy was executed using the Harzing tool to gather an initial pool of 2,020 records from Google Scholar and the Ashesi University repository, there is a possibility that relevant publications were missed because the search was restricted to specific digital databases. Consequently, this review does not provide an exhaustive list of all global microcontroller-based transport monitoring technologies, as other engineering-specific libraries might contain additional literature. Furthermore, no formal snowballing was performed during the selection process, meaning that the references of the 22 primary studies were not independently searched to identify further relevant data.
+Other inherent biases include a language bias, as the review only included English-language publications, which may have excluded region-specific innovations published in other languages. A recency bias is also present due to the focus on the 2018–2026 timeframe; while this ensured the inclusion of modern hardware like the ESP32 and advanced machine learning models (Gonzales et al., 2025), it may have overlooked older foundational studies in electronic fare collection. Finally, while the review prioritized peer-reviewed articles and conference papers to ensure technical reliability, it made a deliberate effort to include high-quality technical gray literature from institutional repositories (e.g., Ingabire, 2023) to capture practical insights into the unique operations of public utility vehicles. Despite these efforts, some unpublished industry prototypes or proprietary local systems might remain unexamined.
+
+
+2.3. Results and Discussion
+Table 2.7 Study Characteristics
+
+
+Study ID
+	Author(s) (Year)
+	Title of Study
+	Methodology
+	Hardware Used
+	Software / Algorithms
+	Key Findings
+	S1
+	R. Kalpana, R. Subiksha, C. Bavasree, and G. Udhaya Nila (2022)
+	Digitised Bus Navigator with Self Authorization Facility Using IoT
+	RFID-based autonomous ticketing with real-time geolocation.
+	NodeMCU ESP8266, RFID, GPS, fire & accident sensors.
+	Blynk App, Google Maps, Wi-Fi protocols.
+	Fares deducted automatically, safety modules provide higher security tiers.
+	S2
+	K.S.S. Iswarya, G. Chandra Sai Sri, S. Pavan Chandu, K. Shamnukha Sai, and S. Ravi Kumar (2022)
+	TICKET GENERATION USING SMART CARD
+	RFID ticketing using IR sensors to track boarding points for distance-based fares.
+	Arduino UNO, RFID, GSM, LCD, IR sensors.
+	GSM SMS notification and OTP security framework.
+	Contactless design found vital for public health; low-cost reusable alternative to paper.
+	S3
+	Anshu Prakash Murdan, Vicky Bucktowar, Vishwamitra Oree, and Marcus P. Enoch (2020)
+	Low-cost bus seating information technology system
+	IoT-based passenger counting and seat occupancy detection.
+	Raspberry Pi, Arduino, GPS, IR counters, seat sensors.
+	Python, OpenCV, and a weight-based threshold algorithm for seat logic.
+	Dashboards matched manual logs; 95% cheaper than commercial systems.
+	S4
+	G. Mageshkumar, S. Suthagar, and D. Maher Shalal (2023)
+	Flexi-Pay System for Public Transport
+	Dynamic fare adjustment based on distance and passenger comfort status.
+	RFID, GPS, ultrasonic sensors.
+	Web-based fare system with time-weighted comfort factors.
+	Comfort quantified as a billable commodity; transparent interface for expenses.
+	S5
+	M. Nirmala, S. Ayyanar, and M. V. Ravi Shankar (2024)
+	BUS TRACKING SYSTEM WITH IOT INTEGRATION
+	Real-time bus tracking and automated fare collection via RFID.
+	NodeMCU ESP8266, GPS, RFID, LCD, I2C adaptor.
+	TinyGPS++, ESP8266WebServer, and a custom web app.
+	Minimized manual errors; provided digital travel records with timestamps.
+	S6
+	A. Bhavani, K. Anjali, Ch. Saritha, M. Sneha, and Ch. Rekha (2025)
+	SMART RFID-BASED BUS TICKETING WITH GPS–GSM ACCIDENT DETECTION
+	Multimodal system combining RFID ticketing with MEMS accident detection.
+	Arduino, RFID, MEMS, GSM/GPS, buzzer, motor.
+	Threshold-based MEMS emergency alert system.
+	Cost-effective safety net; faster boarding and zero paper waste.
+	S7
+	Tushar Suvarna, Aditya Mali, Purushotham Panasa, Sanmitra Kamble, and Mahalaxmi Palinje (2022)
+	Smart Ticketing System for Public Transport
+	Cloud-based single RFID card system for bus, train, and metro.
+	NodeMCU ESP32, RFID.
+	SMS e-tickets and parental location tracking app.
+	Bridged gaps between operators; potentially lowers deforestation by eliminating paper.
+	S8
+	Shazid Bin Zaman, Richard Victor Biswas, and Eftakharul Islam Emon (2023)
+	Bus Fare Collection System Using RFID and GPS
+	"Dual-Punch" system calculating fares based strictly on distance traveled.
+	Arduino Mega 2560, RFID, GPS.
+	State-Comparison Algorithm for punches; fallback for indoor GPS loss.
+	Automated student discounts; identifies low commuter satisfaction.
+	S9
+	Marion Olubunmi Adebiyi, Roseline Oluwaseun Ogundokun, Alabo Inatimi Nathus, and Emmanuel Abidemi Adeniyi (2021)
+	Smart transit payment for university campus transportation
+	Electronic payment system designed to replace manual methods in campus transit.
+	RFID smart cards and readers.
+	C# with .NET APIs and SQL Server 2012.
+	Significantly reduced transaction times; mitigates "Human Error Fallacy" in funds.
+	S10
+	Atharva Joshi, Yash Chavan, Atharva Kale, Pratik Patkar, and Gaurav Tawde (2023)
+	Automated Public Transport Fare Collection System Using RFID
+	Self-service RFID system verifying registration and deducting fares automatically.
+	Raspberry Pi 3 B+, RFID reader, I2C module, LCD.
+	Python, PuTTY, and VNC for secure remote control.
+	Eliminated human touch for safety; instant denial for unregistered users.
+	S11
+	Karthika J., Varshanapriyaa S., Sai Haran S., and SuriyaPrakash (2020)
+	AUTOMATIC BUS FARE COLLECTION SYSTEM USING GPS AND RFID TECHNOLOGY
+	CFMT system using GPS for distance and IR sensors for boarding verification.
+	Arduino, RFID, GPS, Wi-Fi, LCD.
+	Cloud fare monitoring; explores fuzzy logic for traffic management.
+	Primary solution to urban pollution; adaptable for highway tolls.
+	S12
+	Nishtha Agarwal, Kartik Bansal, Vedant Verma, and Nidhi (2022)
+	Conductor less Bus Ticketing System Using RFID Technology
+	Contactless fare system using preloaded cards and electromagnetic contact.
+	Arduino UNO, RC522 RFID, LCD, LEDs.
+	Automated tag identification and fund deduction.
+	Inclusive of smart cards and QR codes; correctly calculated fares in real-time.
+	S13
+	Angelin Jenita. A, Harshetha. V, and Taj Sanofia (2026)
+	Smart Ticketing System
+	Multimodal cashless system with "Dual-Case" journey validation.
+	Arduino, RFID, NFC, QR scanners, GSM/Wi-Fi.
+	Cloud DBMS, HTML/CSS/JS, and role-based encryption.
+	Secure transactions; real-time alerts and fare updates.
+	S14
+	Md. Sadman Haque, Zobaer Ibn Razzaque, Robiul Awoul Robin, Fahim Hafiz, and Riasat Azim (2026)
+	Energy-Efficient Smart Bus Transport Management System
+	Three-tier system combining safety sensors and cloud data information.
+	Raspberry Pi 4B, ESP32, Arduino Mega, cameras, sonar.
+	YOLOv4-Tiny, React/Node.js/SQL, socket programming.
+	98.8% detection precision; sonar-buzzer alerts mitigate collision risks.
+	S15
+	Prof. Ashwini Pijdurkar, Om Suryawanshi, Jayant Sawarkar, Arun Sable, and Pandhare Prathmesh (2024)
+	RFID Based Smart E-Ticketing System
+	"Eco-Pass" system using unique IDs to manage real-time central database transactions.
+	RFID cards and readers, ESP Wi-Fi modules.
+	Multi-tier architecture with passenger and conductor apps.
+	Accommodated complex concession structures; IR sensors deter malpractices.
+	S16
+	M. Pandaravel Kannan, R. Pitchai Kumar Arun, P. Ponselva Kumar, and R. Vasanthan (2020)
+	Travel Card For State Transport Corporation Using RFID
+	Autonomous fare system with "Dual-Punch" GPS and IR discrepancy detection.
+	Arduino UNO, RFID, GPS, Wi-Fi, IR sensors.
+	Arduino IDE managing database queries.
+	Resilient offline logic; Device ID Lock prevents fraudulent card writing.
+	S17
+	Prathmesh Kulange (2025)
+	RFID and IoT-Enabled Public Transport Fare Systems
+	"Offline-First" system storing balances on cards for low-connectivity areas.
+	ESP32, RFID, OLED display, keypad, thermal printer.
+	Node.js with MongoDB backend.
+	Web recharges sync later; authorizes transactions without real-time pings.
+	S18
+	Ingabire Igihozo Emerance (2023)
+	An Automated Fare Collection for Public Transport (Touch & Go)
+	IoT-based automated fare collection using NFC/RFID smart cards.
+	Raspberry Pi, RFID/NFC reader, LCD I2C display, keypad.
+	Web application with database integration.
+	Reduced cash handling; improved fare transparency and account management.
+	S19
+	Helen Grace Gonzales, et al. (2025)
+	Enhancing Object Detection with FOMO
+	Smart monitoring system with GPS tracking and AI-based seat detection.
+	ESP32-CAM, NEO-6M GPS, OLED display, buck converter.
+	React Native, Firebase, FOMO algorithm.
+	Efficient AI detection; improved commuter convenience via real-time tracking.
+	S20
+	Nafise Ghorbankhani (2024)
+	RFID-Based Public Transportation Interoperability
+	Interoperable system for seamless multi-transport access.
+	RFID smart card infrastructure.
+	RFID interoperability framework.
+	Easier multimodal travel; sustainability and coordination between providers.
+	S21
+	Phi Van Lam, Tran Thi Lan, and Trinh Luong Mien (2026)
+	Design and Implementation of an IoT-Enabled Automatic Token Counting Machine for Metro Systems
+	Synchronized optical-RFID dual-verification for backend batch processing.
+	ESP32, RC522 RFID reader, optical sensor, motor drivers, DC motor.
+	ASP.NET dashboard, MariaDB, and dual-verification logic.
+	100% accuracy for batches up to 250 tokens; 500 tokens/min throughput.
+	S22
+	M. Vadivel, S. Hemalatha, V. Bini Marin, and S. Murugan (2024)
+	Cloud-Based Passenger Experience Management in Bus Fare Ticketing Systems
+	Integration of cloud and Random Forest for demand estimation and efficiency.
+	GPS modules, RFID readers/tags, IR or camera-based sensors.
+	Random Forest Algorithm, cloud data processing, and mobile apps.
+	Accuracy hovering around 90%; optimized routes and dynamic fare adjustments.
+	2.3.1. Risk of bias in studies
+To ensure the study is robust and reliable, each of the selected papers underwent a Quality Assessment (QA) process. This process identifies the risk of bias by evaluating the clarity of objectives, the reproducibility of the hardware and software designs, and the technical validity of the testing results. Following the eligibility screening, 26 potential studies were subjected to formal Quality Assessment. Studies with a total score of 13–16 were categorized as High Quality, while those scoring 9–12 were considered Medium Quality. High-quality examples include studies providing comprehensive engineering data and validated counting accuracy, such as the work on machine learning-based detection (Gonzales et al., 2025) and dual-verification architectures (Lam et al., 2026). Studies scoring below 9 were classified as Low Quality and were excluded to prevent low-reliability data from biasing the synthesis. After applying these criteria, only 4 studies were excluded for failing the quality rubric, leaving 22 primary studies (S1–S22) to be retained for the final analysis. This final selection, which includes 21 journal and conference papers and 1 institutional report (Ingabire, 2023), provides the technical foundation for the proposed system.
+
+
+Table 2.8 Summary of Quality Assessment Results Existing Microcontrollers, Modules and Sensors Used
+Category
+	Count
+	Percentage %
+	Description
+	High Quality
+	14
+	64%
+	Comprehensive engineering data and validated accuracy
+	Medium Quality
+	8
+	36%
+	Solid system architectures but limited empirical testing
+	Total Included
+	22
+	100%
+	Final selection for technical synthesis.
+	Excluded
+	4
+	
+
+	Insufficient hardware details or low reliability scores.
+	Table 2.8 summarizes the quality assessment results of the literature evaluated for this study. Out of 26 total papers screened, 22 met the rigorous inclusion criteria to form the technical foundation for the proposed system, while 4 papers were excluded due to insufficient hardware documentation or low reliability scores.
+Among the accepted literature, the majority (64%, 14 studies) were classified as high quality, offering comprehensive engineering data and validated system accuracy. The remaining 36% (8 studies) were designated as medium quality, presenting solid architectural designs but limited empirical field testing. This rigorous screening process ensures that the hardware selection and technical benchmarks used in this research are derived exclusively from highly credible and technically sound sources.
+
+
+  
+
+Figure 2.3. Distribution of Microcontroller Platforms Across Selected Studies (n=22) 
+
+
+Table 2.9
+Technical Performance Benchmarks and Distribution of Microcontroller Platforms  
+Microcontroller Platform
+	Specific MCU Part Number
+	Synthesis Matrix Reference
+	Number of Studies
+	Percentage (%)
+	Performance & Capability Overview
+	Arduino
+	ATmega328P / ATmega2560
+	[S2], [S4], [S6], [S8], [S9], [S11], [S12], [S16]
+	8
+	36%
+	Basic: 8-bit, 16MHz clock, lacks built-in IoT, primarily used for early-stage sensor interfacing.
+	ESP32
+	ESP32-WROOM / ESP32-CAM
+	[S7], [S14], [S15], [S17], [S18], [S19], [S21]
+	7
+	32%
+	High: 32-bit Dual-core, 240MHz; integrated Wi-Fi/Bluetooth; supports FOMO ML and 100% counting accuracy.
+	ESP8266 / NodeMCU
+	ESP-12E / NodeMCU
+	[S1], [S5], [S10]
+	3
+	14%
+	Moderate: 32-bit Single-core, 80MHz; integrated Wi-Fi; suitable for real-time dashboard syncing.
+	Raspberry Pi
+	Broadcom (Pi 3 Model B)
+	[S3]
+	1
+	5%
+	Advanced: 64-bit Quad-core; utilized for heavy camera data processing and local database gateways.
+	Multi-Modal / Agnostic
+	Digital Ecosystem / Cloud Logic
+	[S13], [S20], [S22]
+	3
+	13%
+	Complex: Hardware-agnostic, utilizes cloud algorithms (e.g., Random Forest) for profit optimization.
+	
+
+  
+
+Figure 2.4. Visualized Evaluation of the Weighted Decision Matrix for Microcontroller Selection 
+	Table 2.10
+Weighted Decision Matrix for Microcontroller Selection 
+Selection Criteria
+	Weight
+	Rationale & Evidence Source (S1–S22)
+	Uno
+	ESP8266
+	ESP32
+	Raspberry Pi 3
+	Processing Power
+	30%
+	Required for ML occupancy (S19) and high-speed accuracy (S21). 8-bit systems (S2, S4, S6, S8, S9, S11, S12, S16) lack clock speed for real-time tasks.
+	1
+	3
+	5
+	5
+	IoT Connectivity
+	25%
+	Native Wi-Fi/BT is vital for cloud sync (S1, S5, S7, S10, S14, S15, S19, S21). External modules (S2, S4, S6, S8, S9, S12) increase complexity.
+	1
+	5
+	5
+	5
+	Power Efficiency
+	20%
+	Handheld use requires low draw and sleep modes (S14, S15, S17, S18$\). High-performance SBCs (S3) exceed power/heat limits.
+	4
+	3
+	4
+	1
+	I/O & Memory
+	15%
+	High GPIO/RAM needed for multi-sensor interface (S17, S18, S21). ESP8266 units (S1, S5, S10$) lack sufficient pins.
+	2
+	2
+	5
+	5
+	Cost & Scalability
+	10%
+	Low-cost scaling was prioritized for fleets (S1, S2, S4-S12) over expensive industrial platforms (S3, S13, S20, S22).
+	5
+	5
+	4
+	1
+	Weighted Total
+	100%
+	Final Derived Score
+	2.35
+	3.65
+	4.70
+	3.80
+	
+
+The formula used for each microcontroller is: 
+
+As illustrated in Table 2.9, while the Arduino platform remains prevalent in earlier research prototypes (36%), contemporary literature (2022–2026) demonstrates a definitive shift toward 32-bit IoT-enabled controllers (46% combined). This transition is primarily driven by the operational necessity for dual-core processing to manage simultaneous RFID tasks and vision-based occupancy algorithms, such as the FOMO model identified in S19 and the high-speed synchronization logic in S21.
+The mathematical derivation in Table 2.10 further establishes the ESP32 as the optimal platform for this study, achieving a weighted score of 4.70. While high-performance platforms like the Raspberry Pi 3 (3.80) offer superior raw computation, they are deemed impractical for the specific operational constraints, such as the decentralized routes and power limitations, characteristic of the minibus transport sector in Iligan City. The ESP32’s balanced performance in processing, native wireless resilience, and power-efficient operation ensures that the proposed system can maintain high counting accuracy and revenue transparency, effectively overcoming the technical limitations identified in traditional 8-bit systems within the literature
+  
+
+Figure 2.5. Distribution of Communication, Storage, and Sensor Modules Across Selected Studies (n=22) 
+	Table 2.11
+Communication, Storage, and Sensor Modules used in Selected Studies
+Module
+	Specific Model
+Number
+	Purpose
+	Synthesis Matrix No.
+	Count
+	RFID Module
+	RC522, MFRC522, EM-18
+	Facilitates contactless passenger identification and secure fare debiting.
+	[S1], [S2], [S4], [S5], [S6], [S7], [S8], [S9], [S10], [S11], [S12], [S14], [S15], [S16], [S17], [S18], [S19], [S21]
+	18
+	Connectivity Module
+	SIM800L/900A, ESP8266/ESP32, Cloud API
+	Enables real-time data transmission to servers for revenue and occupancy monitoring.
+	[S1], [S2], [S4], [S5], [S6], [S7], [S13], [S14], [S15], [S16], [S17], [S18], [S19], [S20], [S21], [S22]
+	16
+	GPS Module
+	NEO-6M, NEO-7M, Smartphone GPS
+	Tracks vehicle coordinates for distance-based fares and fleet trajectory matching.
+	[S1], [S3], [S4], [S5], [S6], [S8], [S11], [S14], [S15], [S20]
+	10
+	Local Logic / Storage
+	Offline DB Sync,
+SD Card
+	Ensures transaction data integrity and anti-malpractice logging during network loss.
+	[S1], [S16], [S17], [S18]
+	4
+	Monitoring Sensors
+	IR, Optical, ESP32-CAM, MEMS
+	Detects physical entry/exit, seat occupancy via ML, and optical-RFID synchronization.
+	[S3], [S4], [S6], [S14], [S19], [S21]
+	6
+	Table 2.11 shows the hardware technologies commonly used in the selected studies for passenger monitoring and fare collection. The results show that RFID modules (RC522, MFRC522, and EM-18) are the most widely used technology, appearing in 81.8% of the studies (18 papers). This shows that contactless identification is commonly used for fare payment and passenger tracking [S1, S2, S4–S12, S14–S19, S21]. Connectivity modules such as ESP32, ESP8266, and SIM800L/900A were used in 72.7% of the studies (16 papers). This means that sending real-time data to servers is important for monitoring vehicles and managing fare records [S1, S2, S4–S7, S13–S22]. GPS modules (NEO-6M/7M) appeared in 45.5% of the studies (10 papers) and were mainly used for distance-based fare calculation and vehicle tracking [S1, S3–S6, S8, S11, S14, S15, S20]. The review also found that Monitoring Sensors and Local Storage were less commonly used. Only 27.3% of the studies (6 papers) used sensors such as ESP32-CAM or IR sensors to detect passenger entry and exit. However, these studies introduced more advanced ideas, such as using the FOMO machine learning algorithm for seat vacancy detection (S19) and combining optical sensors with RFID for more accurate passenger counting (S21). In addition, Local Logic and Storage appeared in only 18.2% of the studies (4 papers). This means that offline data storage and synchronization are still not commonly explored. By including these less-used features, especially offline data storage and more accurate occupancy sensing, the proposed system for Iligan City aims to solve problems such as weak network signal areas and manual passenger counting errors that are still not fully addressed in existing studies.
+
+
+  
+
+Figure 2.6. Sensor Type Distribution Across Selected Studies (n=22) 
+	Table 2.12
+Sensors used in selected studies
+Sensor Type
+	Specific Sensor / Model
+	Purpose
+	Synthesis Matrix Reference
+	Count
+	RFID Reader
+	RC522 / MFRC522 (13.56 MHz)
+	Primary sensor for identifying passenger cards and processing secure, contactless fare transactions.
+	[S1], [S2], [S4], [S5], [S6], [S7], [S8], [S9], [S10], [S11], [S12], [S13], [S14], [S15], [S16], [S17], [S18], [S19], [S21]
+	19
+	GPS Module
+	NEO-6M / NEO-7M / Smartphone GPS
+	Detects real-time coordinates to automate distance-based fare calculation and fleet trajectory matching.
+	[S1], [S3], [S4], [S5], [S6], [S8], [S11], [S14], [S15], [S20]
+	10
+	Occupancy / Counting Sensor
+	Optical, ESP32-CAM, FSR, Ultrasonic
+	Automates passenger counting and manifest generation through physical flow detection or machine learning.
+	[S3], [S4], [S14], [S19], [S21]
+	5
+	Safety & Predictive AI
+	MEMS, Camera (FOMO), Cloud AI
+	Detects collisions (safety) or utilizes ML algorithms (e.g., Random Forest) to optimize profit and demand.
+	[S6], [S14], [S19], [S22]
+	4
+	
+
+	Table 2.12 presents the distribution of the sensors used in the selected studies and their purpose in automating passenger monitoring and fare collection for public transportation. It can be observed that RFID sensors (specifically the RC522 and MFRC522 readers) remain the most commonly used, with 82% adoption across the final selection of 22 primary studies. This reinforces contactless identification as the primary mechanism for modernizing public utility vehicle (PUV) payments and passenger tracking in current research [S1, S2, S4–S12, S14–S19, S21]. GPS modules, used as location sensors (NEO-6M/7M), were integrated in 45% of the studies (10 papers). While distance-aware billing is essential for fare transparency, recent trends show an evolution toward frictionless trajectory matching, where GPS data from smartphones or cloud-based logs (S20) replaces traditional hardware tapping [S1, S3, S4, S5, S6, S8, S11, S14, S15, S20]. Occupancy and physical counting sensors, including Camera-based detection, optical sensors, and Ultrasonic modules, appeared in 27% of the studies (6 papers). These are critical for generating electronic manifests and monitoring real-time seat availability. This category saw significant innovation with the use of the FOMO machine learning algorithm for seat vacancy (S19) and optical-RFID synchronization to achieve 100% counting accuracy (S21) [S3, S4, S6, S14, S19, S21]. Finally, specialized safety sensors and predictive algorithms (such as MEMS for accident detection and Random Forest for profit optimization) were adopted in 18.2% of the studies (4 papers) [S6, S14, S19, S22]. This distribution confirms that while payment identification is a mature technology, the intelligent automation of physical monitoring and data-driven profit management represent the current frontiers for innovation in the system for Iligan City.
+2.3.2. Emerging Trends and Advancements
+Several emerging trends and advancements in microcontroller-based transport monitoring and fare collection have been identified from the literature (S1–S22). These developments focus on maximizing operational efficiency, revenue transparency, and commuter convenience by transitioning from manual paper-based systems to integrated IoT ecosystems.
+Real-time IoT and Cloud Integration
+Modern solutions have moved beyond simple data logging to active profit optimization. Utilizing microcontrollers like the ESP32 and NodeMCU, current systems send real-time transaction data to cloud platforms for immediate oversight. This allows transport owners to monitor passenger counts and revenue streams instantly via mobile dashboards, significantly reducing the risk of lost income (Kulange et al., 2025; Jenita et al., 2026; Vadivel et al., 2024).
+Automated Passenger Counting (APC) and AI
+A major trend is the elimination of manual counting through high-precision sensor integration. While early systems relied on Infrared (IR) sensors and force-sensitive resistors (FSRs), newer research utilizes the FOMO algorithm on ESP32-CAM (Gonzales et al., 2025) and dual-verification architectures to achieve 100% counting accuracy (Lam et al., 2026). This ensures that vehicle occupancy perfectly matches the number of fares collected without human intervention (Murdan et al., 2020; Haque et al., 2024).
+GPS-Based Distance Calculation and Frictionless Fare
+To ensure fare fairness, systems are shifting toward automated distance-based billing. Many designs now include GPS modules (NEO-6M) to track where a passenger boards and alights, automatically deducting the correct amount from an RFID card (Zaman et al., 2023; Suthagar, 2023). Emerging "frictionless" methods even use smartphone trajectory matching to automate this process without requiring a physical "tap" from the commuter.
+Portable Handheld POS and Mobile Accessibility
+Recent research has shifted focus from bulky, fixed hardware to compact, handheld POS devices and integrated web portals. These platforms empower passengers to recharge cards remotely, check real-time balances, and track bus locations, making the system highly accessible and convenient (Pijdurkar et al., 2024; Jenita et al., 2026).
+Sustainable and Reusable RFID Systems
+There is a growing emphasis on "green" transport by replacing single-use paper tickets with reusable RFID cards. Evidence shows that this transition reduces environmental waste and operational costs while providing a more durable solution for the high-frequency nature of public utility vehicles (Agarwal et al., 2022).
+Offline Data Storage and Reliability
+Addressing the challenges of unstable mobile networks, modern implementations prioritize offline-first logic. Local storage and database synchronization allow devices to log transactions in signal "dead zones," ensuring that data is preserved and synced with the cloud once connectivity is restored. This reliability is critical for preventing conductor malpractice and ensuring total revenue transparency (Ingabire, 2023; Iswarya et al., 2022).
+2.3.3. Current Challenges and Research Gaps
+Based on the 22 reviewed papers, several challenges and research gaps in applying microcontroller-based technologies to public minibus transportation have been revealed. These challenges are multifaceted, spanning from technical hardware limitations and connectivity issues to the unique operational needs of local transport.
+
+
+Current Challenges
+Several current challenges and limitations in microcontroller-based transport monitoring have been identified from the literature (S1–S22). These issues highlight the critical gap between theoretical designs and the practical, high-demand operational environment of public utility vehicles (PUVs) in regions like Iligan City.
+Inaccurate Real-Time Passenger Manifests: Traditional manual operations are highly susceptible to revenue leakage and human logging errors. Even within automated systems, researchers note that basic Infrared (IR) and ultrasonic sensors often struggle with precision when passengers move in close proximity at the doorway, making it difficult to maintain a flawless real-time count without advanced sensor synchronization or machine learning verification (Haque et al., 2024; Murdan et al., 2020).
+Connectivity and Synchronization Challenges: Maintaining a stable cloud connection in a moving transit vehicle remains a primary engineering obstacle. Most standard IoT architectures fail to synchronize data effectively when a vehicle enters a cellular signal "dead zone." This operational reality necessitates the implementation of robust offline-to-online relational logic to ensure no fare or tracking data is permanently lost during transit (Kulange et al., 2025; Nirmala et al., 2024).
+Portability and Hardware Robustness: Many existing RFID-based designs are structurally intended for large, stationary bus terminals or train station gates rather than compact, mobile units. Public utility minibuses require dense, battery-powered handheld devices capable of withstanding constant vehicle vibration, high thermal heat, and rigorous physical handling by conductors (Bhavani et al., 2025; Kalpana et al., 2022).
+High Initial Costs and Resistance to Change: Implementing smart e-ticketing ecosystems requires a notable initial investment in physical hardware and backend infrastructure. Research indicates that small-scale transport operators and local cooperatives are often resistant to these upfront costs, preferring traditional manual collection despite its documented financial inefficiency (Murdan et al., 2020; Zaman et al., 2023).
+Data Security and Fare Transparency: The systemic shift to automated billing raises valid security concerns regarding RFID card cloning, unauthorized database access, and fraudulent transactions. Establishing a secure, tamper-proof logging system using unique hardware IDs or encrypted data transmission protocols is essential for building trust between transport operators and commuters (Iswarya et al., 2022; Kulange et al., 2025).
+
+
+Research Gaps
+Analysis of the existing literature (S1–S22) reveals several critical research gaps regarding the intersection of hardware portability and localized operational logic, which the design and development of the proposed system aims to address. A primary gap exists in the development of a unified handheld POS device that integrates automatic passenger counting; while high-precision monitoring has been achieved through machine learning (Gonzales et al., 2025) and dual-verification architectures (Lam et al., 2026), these features are typically confined to fixed gate infrastructure rather than portable units suitable for mobile conductors. Furthermore, a significant discrepancy is found in the card distribution model, where most studies assume personal "smart card" ownership (Agarwal et al., 2022; Pijdurkar et al., 2024), leaving a void in the literature regarding reusable, seat-based RFID markers which are more practical for high-turnover public utility vehicles (PUVs). This lack of localized adaptation extends to technical reliability, as current frameworks often overlook energy-efficient, intermittent synchronization tailored for rugged transit environments (Ingabire, 2023; Kulange et al., 2025). Ultimately, most transport research prioritizes standardized metro systems (Zaman et al., 2023), resulting in a scarcity of low-cost, open-source solutions designed for the unique, unscheduled, and "konduktor-led" operations characteristic of the transport sector. The proposed system addresses these technical limitations by tailoring these global methodologies directly to the unique public utility vehicle constraints within Iligan City. 
+
+
+2.3.4. Derived Conceptual Framework
+The synthesis of the 22 reviewed studies (S1–S22) provided a comprehensive foundation for the Design and Development of an RFID-Based POS and Passenger Monitoring System, identifying the technical requirements and operational constraints necessary for successful implementation.
+Firstly, the review identified essential hardware platforms, noting a definitive shift from basic Arduino prototypes (Rajkumar, 2020; Zaman et al., 2023) toward IoT-enabled microcontrollers like the ESP32 for dual-core processing and mobile connectivity (Kulange et al., 2025; Nirmala et al., 2024). These platforms, paired with MFRC522 RFID modules and GPS Neo-6M sensors (Kannan et al., 2020), establish the baseline for real-time passenger identification and distance-based fare monitoring.
+Secondly, emerging trends highlighted a transition toward intelligent automation, including the use of Machine Learning (FOMO algorithm) on ESP32-CAM for high-precision seat occupancy detection (Gonzales et al., 2025) and dual-verification architectures to achieve 100% counting accuracy (Lam et al., 2026). Furthermore, the integration of cloud-based algorithms, such as Random Forest, was identified as a key method for optimizing profit and predicting passenger demand (Vadivel et al., 2024; Jenita et al., 2026).
+Thirdly, critical research gaps were identified, such as the persistent challenge of cloud synchronization in signal "dead zones" (Kulange et al., 2025; Ingabire, 2023) and a lack of unified handheld devices that combine fare collection with automated counting. A significant void was also noted regarding reusable, seat-based RFID card logic, as most literature assumes personal card ownership rather than vehicle-specific markers suitable for high-turnover public utility vehicles.
+Drawing from these insights, the conceptual framework was derived to bridge the gap between high-tech IoT trends and the rugged operational realities of Iligan City. The framework outlines that while existing MCUs provide the baseline, the unique challenges of connectivity loss and the "konduktor-led" system necessitate a specialized approach. The proposed system integrates optical-RFID synchronization, offline-ready database logic, and a reusable seat-marker system within a single handheld terminal to ensure revenue transparency and automated manifest generation for the local minibus environment.
+2.3.5. Synthesis of Research Findings
+Answers to the Research Questions:
+RQ1: Challenges of Manual Systems Traditional fare collection methods are universally defined by chronic revenue leakage, human logging errors, and an absolute lack of operational transparency. Manual ticketing is inherently slow, serves as a frequent catalyst for commuter-conductor disputes, and generates significant environmental waste through single-use paper receipts (Murdan et al., 2020; Zaman et al., 2023).
+RQ2: Design of RFID-Based POS High-performing system architectures consistently prioritize the ESP32 microcontroller for its dual-core processing and native IoT capabilities, seamlessly integrating the MFRC522 RFID module for passenger identification and the NEO-6M/7M GPS module for distance tracking. A critical, non-negotiable architectural requirement identified across the literature is offline-first local storage logic to maintain transaction data integrity when transit vehicles pass through cellular signal "dead zones" (Ingabire, 2023; Kulange et al., 2025).
+RQ3: Automation and Counting Mechanisms System automation relies heavily on "Dual-Punch" GPS coordinates for dynamic, distance-based fare indexing alongside Automated Passenger Counting (APC) mechanisms. While legacy frameworks heavily relied on rudimentary hardware like infrared (IR) beam-break sensors, state-of-the-art implementations utilize the edge-AI FOMO machine learning algorithm and real-time optical-RFID synchronization to ensure physical passenger manifests consistently match digital occupancy metrics (Gonzales et al., 2025; Lam et al., 2026).
+RQ4: Effectiveness vs. Traditional Methods Automated transit monitoring platforms reduce overall vehicle operational costs by approximately 30% while simultaneously achieving up to 100% passenger counting accuracy. By eliminating the "Human Error Fallacy," these unified hardware-software ecosystems systematically mitigate internal fraud, maximize daily revenue yield, and optimize the overall commuter experience through accelerated vehicle boarding times and secure digital transaction logging.
+
+
+Synthesis
+The synthesis of research findings from the 22 primary studies (S1–S22) identifies a significant technological evolution in public transportation monitoring and fare collection. Initially, many systems utilized the Arduino platform for early-stage prototypes focused on basic RFID and GPS interfacing. However, recent research demonstrates a definitive shift toward IoT-enabled microcontrollers like the ESP32 and ESP8266, which are now preferred for their dual-core processing and integrated wireless connectivity. This technical infrastructure supports more complex operations, such as real-time cloud synchronization and high-speed reporting, which are essential for managing modern transit environments.
+Regarding fare management, RFID technology remains the dominant mechanism for contactless identification, appearing in 81.8% of the reviewed literature. These systems have evolved to include "Dual-Punch" logic, utilizing GPS modules to record boarding and alighting coordinates to automate distance-based fare calculations. A critical innovation identified in the synthesis is the implementation of offline-first storage logic. This architecture ensures that transaction data is preserved in local memory during network "dead zones," which is vital for preventing revenue leakage and conductor malpractice in rugged transit environments.
+Significant advancements have also been made in Automated Passenger Counting (APC) to eliminate the "Human Error Fallacy" associated with manual monitoring. While traditional systems relied on basic infrared or ultrasonic sensors, newer implementations utilize advanced machine learning techniques, such as the FOMO algorithm on ESP32-CAM modules, which can achieve high precision. Furthermore, dual-verification architectures that synchronize optical sensors with RFID data have demonstrated the potential to reach 100% counting accuracy. These automated mechanisms ensure that digital manifests match actual vehicle occupancy without human intervention.
+Despite these technological strides, several research gaps remain that directly inform the development of the proposed system. The literature indicates a lack of unified, portable handheld devices that integrate high-precision passenger counting, as most advanced features are currently confined to fixed gate infrastructure. Additionally, there is a significant void regarding the use of reusable, seat-based RFID markers, which are more practical for high-turnover public utility vehicles than individual smart card ownership. Most existing transport research also prioritizes standardized metro systems, leaving a scarcity of low-cost, open-source solutions tailored for the unique, "konduktor-led" operations characteristic of the Philippine transport sector. This study aims to address these deficiencies by developing a localized, offline-ready platform specifically designed for the minibus environment in Iligan City.
+
+
+2.4. Conclusion
+This systematic literature review (SLR) analyzed 22 studies on microcontroller-based POS systems and passenger monitoring in public transportation. The findings showed a shift from Arduino and basic RFID systems to ESP32-based technologies with IoT capabilities, GPS integration, and advanced Automated Passenger Counting (APC) systems for more accurate and automated fare collection.
+The review also identified common challenges such as unstable internet connectivity, expensive proprietary systems, and the “Human Error Fallacy” in manual passenger counting. A major research gap found was the lack of a unified and portable system that combines fare collection and automatic passenger monitoring, especially for “konduktor-led” public utility vehicles in cities like Iligan.
+These findings served as the foundation for the proposed RFID-Based POS and Passenger Monitoring System. The study aims to develop a low-cost, open-source, and localized solution that improves revenue protection, passenger monitoring, and operational efficiency through automation
+________________
+REFERENCES
+
+
+Adebiyi, M. O., Ogundokun, R. O., Nathus, A. I., & Adeniyi, E. A. (2021). Smart transit payment for university campus transportation using RFID card system. International Journal of Electrical and Computer Engineering (IJECE), 11(5), 4353–4360. https://doi.org/10.11591/IJECE.V11I5.PP4353-4360
+Agarwal, N., Bansal, K., Verma, V., & Nidhi. (2022). Conductor-less bus ticketing system using RFID technology. International Journal for Research in Applied Science and Engineering Technology, 10(5). https://doi.org/10.22214/ijraset.2022.42592
+Bhavani, A., Anjali, K., Saritha, C., Sneha, M., & Rekha, C. (2025). Smart RFID-based bus ticketing with GPS–GSM accident detection. International Journal of Data Science and IoT Management System, 4(4), 66–73. https://ijdim.com/journal/index.php/ijdim/article/view/279
+Ghorbankhani, N. (2024). Transit bus number identification for frictionless fare collection using passenger location data [Doctoral dissertation, McMaster University]. MacSphere. https://macsphere.mcmaster.ca/items/35d17b49-eab1-4147-a09a-cad32847a9e6
+Gonzales, H. G., Parambita, J. C., Emar, K. J. U., Garsuta, A. A. A., & Galarce, R. J. V. (2025). Enhancing object detection with FOMO: A user-friendly smart application for real-time tracking of modern bus and seat availability. Mindanao Journal of Science and Technology, 23(2), 193–225. https://doi.org/10.61310/mjst.v23i2.2494
+Haque, M. S., Razzaque, Z. I., Robin, R. A., Hafiz, F., & Azim, R. (n.d.). An energy-efficient smart bus transport management system with blind-spot collision detection ability. arXiv. https://arxiv.org/pdf/2601.01274
+Ingabire, I. I. (2023). An automated fare collection for public transport (Touch & Go) [Bachelor's thesis, Ashesi University]. Ashesi Institutional Repository. https://air.ashesi.edu.gh/items/5df5f4da-1989-412e-b9e4-f5de13723cd4
+Iswarya, K. S. S., Chandra Sai Sri, G., Pavan Chandu, S., Shamnukha Sai, K., & Ravi Kumar, S. (2022). Ticket generation using smart card. Dogo Rangsang Research Journal, 12(6), 1–8. https://journal-dogorangsang.in/no_2_Online_22/16.pdf
+Jenita, A. A., Harshetha, V., & Taj Sanofia, S. (2026). Smart ticketing system. International Journal for Research in Applied Science and Engineering Technology, 14(2). https://doi.org/10.22214/ijraset.2026.77756
+Joshi, A., Chavan, Y., Kale, A., Patkar, P., & Tawde, G. (2023). Automated public transport fare collection system using RFID. International Journal for Research in Applied Science and Engineering Technology (IJRASET), 11(5). https://doi.org/10.22214/ijraset.2023.52225
+Kalpana, R., Subiksha, R., Bavasree, C., & Nila, G. U. (2022). Digitised bus navigator with self authorization facility using IoT. International Journal of Health Sciences, 6(S1), 10571–10583. https://doi.org/10.53730/ijhs.v6nS1.7187
+Kannan, M. P., Arun, R. P. K., Kumar, P. P., Vasanthan, R., & Sankar, N. (2020). Travel card for state transport corporation using RFID. International Journal of Scientific & Technology Research. https://www.ijstr.org/final-print/feb2020/Travel-Card-For-State-Transport-Corporation-Using-Rfid.pdf
+Kulange, P., Sarvade, D., Shelar, S., & Ghuge, A. (2025). RFID and IoT-enabled public transport fare systems: A comparative survey of technologies and security challenges. International Journal For Research in Applied Science and Engineering Technology, 13(11). https://doi.org/10.22214/ijraset.2025.74592
+Murdan, A. P., Bucktowar, V., Oree, V., & Enoch, M. P. (2020). Low-cost bus seating information technology system. IET Intelligent Transport Systems, 14(10), 1303–1310. https://doi.org/10.1049/iet-its.2019.0529
+Nirmala, M., Ayyanar, S., & Ravi Shankar, M. V. (2024). Bus tracking system with IoT integration. International Journal of Emerging Knowledge Studies, 3(8), 438–442. https://doi.org/10.70333/ijeks-03-07-028
+Pijdurkar, A., Suryawanshi, O., Sawarkar, J., Sable, A., & Prathmesh, P. (2024). RFID based smart e-ticketing system. International Journal of Advanced Research in Science, Communication and Technology (IJARSCT), 4(7), 255–260. https://doi.org/10.48175/IJARSCT-18640
+Rajkumar, K., Varshanapriyaa, S., Sai Haran, S., & SuriyaPrakash, C. (2018). Automatic bus fare collection system using GPS and RFID technology. International Journal of Pure and Applied Mathematics, 118(20), 1119–1124. http://www.ijpam.eu
+Suthagar, S. (2023). Flexi-pay system for public transport based on passenger comfort using global positioning system. Springer. https://doi.org/10.1007/978-981-19-7402-1_42
+Suvarna, T., Mali, A., Panasa, P., Kamble, S., & Palinje, M. (2022). Smart ticketing system for public transport. International Research Journal of Engineering and Technology (IRJET). https://www.academia.edu/85971869/Smart_Ticketing_System_for_Public_Transport
+Vadivel, M., Hemalatha, S., Bini Marin, V., Murugan, S., Balasubramani, S., & Velmurugan, S. (2024). Cloud-based passenger experience management in bus fare ticketing systems using random forest algorithm. SSRN. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5311210
+Lam, P. V., Lan, T. T., & Mien, T. L. (2026). Design and implementation of an IoT-enabled automatic token counting machine for metro systems. Engineering, Technology & Applied Science Research, 16(2), 34337–34350 . https://mail.etasr.com/index.php/ETASR/article/view/17737.
+Zaman, S. B., Biswas, R. V., & Emon, E. I. (2023). Bus fare collection system using RFID and GPS. EasyChair Preprint, 10476. https://www.researchgate.net/profile/Richard-Victor-Biswas/publication/371970889_Bus_Fare_Collection_System_Using_RFID_and_GPS_Bus_Fare_Collection_System_using_RFID_and_GPS/links/64a036e395bbbe0c6e06d368/Bus-Fare-Collection-System-Using-RFID-and-GPS-Bus-Fare-Collection-System-using-RFID-and-GPS.pdf

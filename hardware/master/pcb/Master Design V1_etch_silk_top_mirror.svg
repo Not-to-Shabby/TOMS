@@ -1,0 +1,71 @@
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
+<!-- Created with Fritzing (https://fritzing.org/) -->
+<svg xmlns="http://www.w3.org/2000/svg" baseProfile="tiny" height="1.77165in" version="1.2" viewBox="0 0 192.756 127.559" width="2.67717in" x="0in"  xmlns:svg="http://www.w3.org/2000/svg" y="0in">
+ <g transform="matrix(-1, 0, 0, 1, 192.756, 0)">
+  <g partID="855596752">
+   <g id="silkscreen">
+    <rect fill="none" height="126.983" stroke="black" stroke-width="0.576" width="192.18" x="0.288" y="0.288"/>
+   </g>
+  </g>
+  <g partID="855596750">
+   <g id="board">
+    <rect fill="none" fill-opacity="0.5" height="126.983" id="boardoutline" stroke="black" stroke-width="0.5" width="192.18" x="0.288" y="0.288"/>
+   </g>
+  </g>
+  <g partID="855596752">
+   <g id="silkscreen" >
+    <rect fill="none" height="126.983" stroke="black" stroke-width="0.576" width="192.18" x="0.288"  y="0.288"/>
+   </g>
+  </g>
+  <g partID="855602172">
+   <g transform="translate(59.9213,0.1316)">
+    <g transform="matrix(0,1,-1,0,0,0)">
+     <g id="silkscreen" >
+      <path d="M5.53131,0.36L72.1454,0.36L72.1454,51.3836L5.53131,51.3836Z" fill="none" id="upper" stroke="black" stroke-width="0.72" />
+      <path d="M0.36,16.9944L5.52174,16.9944L5.52174,33.7149L0.36,33.7149Z" fill="none" id="path1" stroke="black" stroke-width="0.72" />
+     </g>
+    </g>
+   </g>
+  </g>
+  <g partID="855624450">
+   <g transform="translate(15.0787,89.5496)">
+    <g id="silkscreen" >
+     <text fill="black" font-family="OCR-Fritzing-mono" font-size="9.75999" id="label" stroke-width="0" text-anchor="middle" x="16.6164" xml:space="preserve"  xmlns:xml="http://www.w3.org/XML/1998/namespace" y="14.03">TOMS</text>
+    </g>
+   </g>
+  </g>
+  <g partID="855609622">
+   <g transform="translate(65.2681,4.27358)">
+    <g transform="matrix(1,0,0,1,0,0)">
+     <g gorn="0.2" id="silkscreen" >
+      <path d="M0.455001,119.386L121.04,119.386L121.04,0L0.455001,0L0.455001,119.386" fill="none" stroke="black" stroke-width="0.576001" />
+      <g >
+       <title >element:J1</title>
+       <g >
+        <title >package:HEAD15-NOSS</title>
+       </g>
+      </g>
+      <g >
+       <title >element:J2</title>
+       <g >
+        <title >package:HEAD15-NOSS-1</title>
+       </g>
+      </g>
+      <g >
+       <title >element:U2</title>
+       <g >
+        <title >package:SSOP28</title>
+       </g>
+      </g>
+      <g >
+       <title >element:U3</title>
+       <g >
+        <title >package:SOT223</title>
+       </g>
+      </g>
+     </g>
+    </g>
+   </g>
+  </g>
+ </g>
+</svg>
