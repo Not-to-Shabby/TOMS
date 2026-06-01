@@ -19,6 +19,7 @@
 #include "esp_system.h"
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include "driver/gpio.h"
 
 /* TOMS modules */
 #include "storage.h"
@@ -62,6 +63,41 @@ static uint32_t s_max_capacity   = 20;
 
 /* Fare dictionary (shared with Slaves, synced via ESP-NOW CONFIG_SYNC) */
 static toms_fare_dict_t s_fare_dict;
+
+/* ── Status LED Configuration ─────────────────────────────────────────── */
+#define TOMS_LED_PIN          8   /* GPIO pin for onboard/external status LED */
+#define TOMS_LED_ACTIVE_LEVEL 0   /* 0 = Active Low (standard for ESP32-S3 SuperMini blue LED), 1 = Active High */
+#define TOMS_LED_BLINK_MS     200 /* Duration of LED blink in milliseconds */
+
+static esp_timer_handle_t s_led_timer = NULL;
+
+static void led_timer_callback(void *arg)
+{
+    gpio_set_level(TOMS_LED_PIN, !TOMS_LED_ACTIVE_LEVEL);
+}
+
+static void toms_led_init(void)
+{
+    ESP_LOGI(TAG, "Initializing status LED on GPIO%d...", TOMS_LED_PIN);
+    gpio_reset_pin(TOMS_LED_PIN);
+    gpio_set_direction(TOMS_LED_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(TOMS_LED_PIN, !TOMS_LED_ACTIVE_LEVEL); /* LED OFF by default */
+
+    esp_timer_create_args_t timer_args = {
+        .callback = &led_timer_callback,
+        .name = "led_timer"
+    };
+    esp_timer_create(&timer_args, &s_led_timer);
+}
+
+static void toms_led_blink(void)
+{
+    if (s_led_timer) {
+        esp_timer_stop(s_led_timer);
+        gpio_set_level(TOMS_LED_PIN, TOMS_LED_ACTIVE_LEVEL); /* Turn LED ON */
+        esp_timer_start_once(s_led_timer, TOMS_LED_BLINK_MS * 1000ULL);
+    }
+}
 
 /* ── Forward Declarations ─────────────────────────────────────────────── */
 
@@ -369,6 +405,7 @@ static void espnow_handler_task(void *arg)
 
     while (1) {
         if (toms_espnow_receive(&event, 1000)) {
+            toms_led_blink();
             ESP_LOGI(TAG, "ESP-NOW RX from " MACSTR ": type=0x%02X",
                      MAC2STR(event.src_mac), event.packet.msg_type);
 
@@ -601,6 +638,9 @@ void app_main(void)
     ESP_LOGI(TAG, "=== TOMS Master Firmware ===");
     ESP_LOGI(TAG, "Firmware version: 0.1.0");
     ESP_LOGI(TAG, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+
+    /* Initialize Status LED */
+    toms_led_init();
 
     /* ── Step 1: Storage (NVS + SPIFFS) ─────────────────────────────── */
     ESP_LOGI(TAG, "[1/7] Initializing storage...");
