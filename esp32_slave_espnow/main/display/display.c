@@ -63,10 +63,10 @@ static void lv_tick_task(void *arg)
 
 static void backlight_init(void)
 {
-    ESP_LOGI(TAG, "Initializing P-channel backlight GPIO%d (default ON/LOW)...", TOMS_LCD_PIN_LED);
+    ESP_LOGI(TAG, "Initializing direct backlight GPIO%d (default ON/HIGH)...", TOMS_LCD_PIN_LED);
     gpio_reset_pin(TOMS_LCD_PIN_LED);
     gpio_set_direction(TOMS_LCD_PIN_LED, GPIO_MODE_OUTPUT);
-    gpio_set_level(TOMS_LCD_PIN_LED, 0); /* LOW = MOSFET/PNP ON */
+    gpio_set_level(TOMS_LCD_PIN_LED, 1); /* HIGH = ON */
 }
 
 /* ── Public API ───────────────────────────────────────────────────────── */
@@ -157,8 +157,8 @@ int toms_display_init(void)
 
 void toms_display_set_backlight(uint8_t brightness)
 {
-    /* brightness > 0 -> turn ON (LOW), otherwise turn OFF (HIGH) */
-    gpio_set_level(TOMS_LCD_PIN_LED, brightness > 0 ? 0 : 1);
+    /* brightness > 0 -> turn ON (HIGH), otherwise turn OFF (LOW) */
+    gpio_set_level(TOMS_LCD_PIN_LED, brightness > 0 ? 1 : 0);
 }
 
 void toms_display_backlight(bool on)
