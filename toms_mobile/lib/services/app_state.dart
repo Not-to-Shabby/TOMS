@@ -136,6 +136,31 @@ class AppState extends ChangeNotifier {
     await connectivityService.init();
     syncService.startRetryTimer();
 
+    // 1. Fetch vehicle config first to determine its active assigned route ID
+    int activeRouteId = 1;
+    try {
+      if (connectivityService.isOnline) {
+        final response = await http
+            .get(Uri.parse('${Env.apiBaseUrl}/api/vehicles'))
+            .timeout(const Duration(seconds: 5));
+        if (response.statusCode == 200) {
+          final List<dynamic> vehiclesList = jsonDecode(response.body);
+          final currentVehicle = vehiclesList.firstWhere(
+            (v) => v['id'] == occupancyService.vehicleId,
+            orElse: () => null,
+          );
+          if (currentVehicle != null) {
+            occupancyService.maxCapacity =
+                currentVehicle['max_capacity'] as int? ?? 20;
+            activeRouteId = currentVehicle['assigned_route_id'] as int? ?? 1;
+            debugPrint('Loaded vehicle config. Route ID: $activeRouteId, Max Capacity: ${occupancyService.maxCapacity}');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading vehicles from API: $e');
+    }
+
     // Load route stops dynamically from API and cache locally
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -146,12 +171,12 @@ class AppState extends ChangeNotifier {
         try {
           // Loaded from environment variables configuration.
           final responsePaths = await http
-              .get(Uri.parse('${Env.apiBaseUrl}/api/routes/1/paths'))
+              .get(Uri.parse('${Env.apiBaseUrl}/api/routes/$activeRouteId/paths'))
               .timeout(const Duration(seconds: 5));
           if (responsePaths.statusCode == 200) {
             pathsJson = responsePaths.body;
             await prefs.setString('cached_paths', pathsJson);
-            debugPrint('Successfully fetched and cached fresh paths.');
+            debugPrint('Successfully fetched and cached fresh paths for route $activeRouteId.');
           }
 
           final responseRoutes = await http
@@ -160,12 +185,16 @@ class AppState extends ChangeNotifier {
           if (responseRoutes.statusCode == 200) {
             final routesList = json.decode(responseRoutes.body) as List;
             if (routesList.isNotEmpty) {
-              final activeRoute = routesList.first;
+              final activeRoute = routesList.firstWhere(
+                (r) => r['id'] == activeRouteId,
+                orElse: () => routesList.first,
+              );
               final baseFare = (activeRoute['base_fare'] ?? 15.0).toDouble();
               final perKmFare = (activeRoute['per_km_fare'] ?? 2.5).toDouble();
               sessionService.updateFareMatrix(baseFare, perKmFare);
               await prefs.setDouble('cached_base_fare', baseFare);
               await prefs.setDouble('cached_per_km_fare', perKmFare);
+              debugPrint('Fare Matrix Updated: Base ₱$baseFare, Per Km ₱$perKmFare');
             }
           }
         } catch (e) {
@@ -197,26 +226,6 @@ class AppState extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('Critical error loading stops or fares: $e');
-    }
-
-    // Load vehicle config from Backend API
-    try {
-      final response = await http
-          .get(Uri.parse('${Env.apiBaseUrl}/api/vehicles'))
-          .timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        final List<dynamic> vehiclesList = jsonDecode(response.body);
-        final currentVehicle = vehiclesList.firstWhere(
-          (v) => v['id'] == occupancyService.vehicleId,
-          orElse: () => null,
-        );
-        if (currentVehicle != null) {
-          occupancyService.maxCapacity =
-              currentVehicle['max_capacity'] as int? ?? 20;
-        }
-      }
-    } catch (e) {
-      debugPrint('Error loading vehicles from API: $e');
     }
 
     // Phase 3 — GPS + Proximity
