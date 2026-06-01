@@ -20,6 +20,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
+#include "led_strip.h"
 
 /* TOMS modules */
 #include "storage.h"
@@ -58,24 +59,45 @@ static uint32_t s_max_capacity   = 20;
 /* Fare dictionary (shared with Slaves, synced via ESP-NOW CONFIG_SYNC) */
 static toms_fare_dict_t s_fare_dict;
 
-/* ── Status LED Configuration ─────────────────────────────────────────── */
-#define TOMS_LED_PIN          8   /* GPIO pin for onboard/external status LED */
-#define TOMS_LED_ACTIVE_LEVEL 0   /* 0 = Active Low (standard for ESP32-S3 SuperMini blue LED), 1 = Active High */
-#define TOMS_LED_BLINK_MS     200 /* Duration of LED blink in milliseconds */
+/* ── Status LED Configuration (WS2812 NeoPixel) ─────────────────────────── */
+#define TOMS_LED_PIN          48   /* WS2812 is on GPIO 48 */
+#define TOMS_LED_BLINK_MS     200
 
+static led_strip_handle_t s_led_strip = NULL;
 static esp_timer_handle_t s_led_timer = NULL;
 
 static void led_timer_callback(void *arg)
 {
-    gpio_set_level(TOMS_LED_PIN, !TOMS_LED_ACTIVE_LEVEL);
+    if (s_led_strip) {
+        led_strip_clear(s_led_strip);
+    }
 }
 
 static void toms_led_init(void)
 {
-    ESP_LOGI(TAG, "Initializing status LED on GPIO%d...", TOMS_LED_PIN);
-    gpio_reset_pin(TOMS_LED_PIN);
-    gpio_set_direction(TOMS_LED_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(TOMS_LED_PIN, !TOMS_LED_ACTIVE_LEVEL); /* LED OFF by default */
+    ESP_LOGI(TAG, "Initializing onboard WS2812 status LED on GPIO%d...", TOMS_LED_PIN);
+    
+    /* Configure WS2812 led strip */
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = TOMS_LED_PIN,
+        .max_leds = 1,
+        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
+        .led_model = LED_MODEL_WS2812,
+        .flags.invert_out = false,
+    };
+    
+    led_strip_rmt_config_t rmt_config = {
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10 * 1000 * 1000, /* 10MHz */
+        .flags.with_dma = false,
+    };
+    
+    esp_err_t err = led_strip_new_rmt_device(&strip_config, &rmt_config, &s_led_strip);
+    if (err == ESP_OK) {
+        led_strip_clear(s_led_strip);
+    } else {
+        ESP_LOGE(TAG, "Failed to initialize WS2812 LED: %s", esp_err_to_name(err));
+    }
 
     esp_timer_create_args_t timer_args = {
         .callback = &led_timer_callback,
@@ -86,9 +108,11 @@ static void toms_led_init(void)
 
 static void toms_led_blink(void)
 {
-    if (s_led_timer) {
+    if (s_led_strip && s_led_timer) {
         esp_timer_stop(s_led_timer);
-        gpio_set_level(TOMS_LED_PIN, TOMS_LED_ACTIVE_LEVEL); /* Turn LED ON */
+        /* Set LED to blue (r=0, g=0, b=255) */
+        led_strip_set_pixel(s_led_strip, 0, 0, 0, 255);
+        led_strip_refresh(s_led_strip);
         esp_timer_start_once(s_led_timer, TOMS_LED_BLINK_MS * 1000ULL);
     }
 }
