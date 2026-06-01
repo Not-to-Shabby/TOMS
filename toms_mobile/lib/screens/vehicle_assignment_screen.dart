@@ -6,6 +6,7 @@ import '../theme/toms_theme.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import '../config/env.dart';
 
 class VehicleAssignmentScreen extends StatefulWidget {
   const VehicleAssignmentScreen({super.key});
@@ -27,7 +28,7 @@ class _VehicleAssignmentScreenState extends State<VehicleAssignmentScreen> {
 
   Future<void> _loadVehicles() async {
     try {
-      final response = await http.get(Uri.parse('http://10.0.2.2:3000/api/vehicles')).timeout(const Duration(seconds: 5));
+      final response = await http.get(Uri.parse('${Env.apiBaseUrl}/api/vehicles')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final List<dynamic> vehiclesList = jsonDecode(response.body);
         setState(() {

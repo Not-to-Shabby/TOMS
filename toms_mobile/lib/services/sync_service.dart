@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../config/env.dart';
 import 'database_service.dart';
 import 'connectivity_service.dart';
 
@@ -9,8 +10,8 @@ class SyncService extends ChangeNotifier {
   final DatabaseService db;
   final ConnectivityService connectivity;
 
-  // Configurable server endpoint URL (using Android emulator local alias for now).
-  String serverUrl = 'http://10.0.2.2:3000/api/events';
+  // Configurable server endpoint URL loaded from environment variables.
+  String serverUrl = '${Env.apiBaseUrl}/api/events';
 
   /// Injected at runtime from AuthService so we never hardcode the token.
   String Function()? tokenGetter;
@@ -130,14 +131,16 @@ class SyncService extends ChangeNotifier {
 
   Future<bool> _trySendNow(String payload) async {
     try {
-      final response = await http.post(
-        Uri.parse(serverUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $_authToken',
-        },
-        body: payload,
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(
+            Uri.parse(serverUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $_authToken',
+            },
+            body: payload,
+          )
+          .timeout(const Duration(seconds: 5));
 
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {

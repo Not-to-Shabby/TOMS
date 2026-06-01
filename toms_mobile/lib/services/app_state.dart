@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/models.dart';
+import '../config/env.dart';
 import 'database_service.dart';
 import 'usb_service.dart';
 import 'session_service.dart';
@@ -69,9 +70,8 @@ class AppState extends ChangeNotifier {
   int get totalLogs => _totalLogs;
 
   // Occupancy delegation
-  List<PassengerSlot> get activeSlots => occupancyService.getPassengerSlots(
-        batteryMap: _slaveBatteryMap,
-      );
+  List<PassengerSlot> get activeSlots =>
+      occupancyService.getPassengerSlots(batteryMap: _slaveBatteryMap);
   int get slavesDeployed => occupancyService.slavesDeployed;
   int get maxCapacity => occupancyService.maxCapacity;
   double get occupancyRate => occupancyService.occupancyRate;
@@ -144,15 +144,19 @@ class AppState extends ChangeNotifier {
       // Attempt to fetch fresh stops and matrix if online
       if (connectivityService.isOnline) {
         try {
-          // Using standard Android emulator loopback alias. For real device, change to server IP.
-          final responsePaths = await http.get(Uri.parse('http://10.0.2.2:3000/api/routes/1/paths')).timeout(const Duration(seconds: 5));
+          // Loaded from environment variables configuration.
+          final responsePaths = await http
+              .get(Uri.parse('${Env.apiBaseUrl}/api/routes/1/paths'))
+              .timeout(const Duration(seconds: 5));
           if (responsePaths.statusCode == 200) {
             pathsJson = responsePaths.body;
             await prefs.setString('cached_paths', pathsJson);
             debugPrint('Successfully fetched and cached fresh paths.');
           }
 
-          final responseRoutes = await http.get(Uri.parse('http://10.0.2.2:3000/api/routes')).timeout(const Duration(seconds: 5));
+          final responseRoutes = await http
+              .get(Uri.parse('${Env.apiBaseUrl}/api/routes'))
+              .timeout(const Duration(seconds: 5));
           if (responseRoutes.statusCode == 200) {
             final routesList = json.decode(responseRoutes.body) as List;
             if (routesList.isNotEmpty) {
@@ -178,11 +182,7 @@ class AppState extends ChangeNotifier {
         // Final fallback to bundled assets if no cache exists (first launch offline)
         final stopsStr = await rootBundle.loadString('assets/stops.json');
         _paths = [
-          {
-            'id': 1,
-            'name': 'Primary',
-            'stops': json.decode(stopsStr)
-          }
+          {'id': 1, 'name': 'Primary', 'stops': json.decode(stopsStr)},
         ];
         debugPrint('Loaded default paths from assets.');
       }
@@ -201,7 +201,9 @@ class AppState extends ChangeNotifier {
 
     // Load vehicle config from Backend API
     try {
-      final response = await http.get(Uri.parse('http://10.0.2.2:3000/api/vehicles')).timeout(const Duration(seconds: 5));
+      final response = await http
+          .get(Uri.parse('${Env.apiBaseUrl}/api/vehicles'))
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final List<dynamic> vehiclesList = jsonDecode(response.body);
         final currentVehicle = vehiclesList.firstWhere(
@@ -209,7 +211,8 @@ class AppState extends ChangeNotifier {
           orElse: () => null,
         );
         if (currentVehicle != null) {
-          occupancyService.maxCapacity = currentVehicle['max_capacity'] as int? ?? 20;
+          occupancyService.maxCapacity =
+              currentVehicle['max_capacity'] as int? ?? 20;
         }
       }
     } catch (e) {
@@ -226,8 +229,9 @@ class AppState extends ChangeNotifier {
     // Setup USB stream listeners
     _passengerSub = usbService.passengerStream.listen(_onPassengerLogReceived);
     _nfcTapSub = usbService.nfcTapStream.listen(_onNfcTapReceived);
-    _buttonPressSub =
-        usbService.buttonPressStream.listen(_onButtonPressReceived);
+    _buttonPressSub = usbService.buttonPressStream.listen(
+      _onButtonPressReceived,
+    );
     _releaseSub = usbService.releaseStream.listen(_onReleaseReceived);
     _slaveBatterySub = usbService.slaveBatteryStream.listen((event) {
       _slaveBatteryMap[event.slaveUid] = event.batteryPct;
@@ -235,7 +239,9 @@ class AppState extends ChangeNotifier {
     });
 
     // Listen to connectivity state changes
-    _connectivitySub = connectivityService.onConnectivityChanged.listen((online) {
+    _connectivitySub = connectivityService.onConnectivityChanged.listen((
+      online,
+    ) {
       if (online) syncService.flushQueue();
       notifyListeners();
     });
@@ -277,7 +283,8 @@ class AppState extends ChangeNotifier {
     );
     final plugin = _notifications
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     await plugin?.createNotificationChannel(channel);
   }
 
@@ -285,7 +292,8 @@ class AppState extends ChangeNotifier {
   Future<void> _onProximityAlarm(PassengerSession session) async {
     final slot = occupancyService.getSlotNumber(session.slaveUid);
     final fare = session.finalFareCentavos;
-    final fareStr = '₱${fare ~/ 100}.${(fare % 100).toString().padLeft(2, '0')}';
+    final fareStr =
+        '₱${fare ~/ 100}.${(fare % 100).toString().padLeft(2, '0')}';
 
     // Vibrate: SOS pattern (felt even if phone is silent)
     if (await Vibration.hasVibrator()) {
@@ -373,8 +381,9 @@ class AppState extends ChangeNotifier {
     // Check manual assignment target first
     if (_manualAssignTarget != null) {
       try {
-        target = sessionService.pendingQueue
-            .firstWhere((p) => p.id == _manualAssignTarget);
+        target = sessionService.pendingQueue.firstWhere(
+          (p) => p.id == _manualAssignTarget,
+        );
         _manualAssignTarget = null;
       } catch (_) {
         _manualAssignTarget = null; // target was removed — fall through
@@ -415,8 +424,10 @@ class AppState extends ChangeNotifier {
       passengerId: uid,
       synced: false,
       passengerType: session.type.index,
-      discountCentavos:
-          sessionService.calculateDiscount(session.baseFareCentavos, session.type),
+      discountCentavos: sessionService.calculateDiscount(
+        session.baseFareCentavos,
+        session.type,
+      ),
       boardingStop: session.boarding.name,
       destinationStop: session.destination.name,
       destinationLat: session.destination.lat,
@@ -450,10 +461,13 @@ class AppState extends ChangeNotifier {
   }
 
   void _pushSyncEvent(
-      String type, String uid, PassengerSession session, int slotNum) async {
-    
+    String type,
+    String uid,
+    PassengerSession session,
+    int slotNum,
+  ) async {
     final seatMapJson = jsonEncode(
-      occupancyService.getPassengerSlots().map((s) => s.toJson()).toList()
+      occupancyService.getPassengerSlots().map((s) => s.toJson()).toList(),
     );
 
     final prefs = await SharedPreferences.getInstance();
@@ -468,8 +482,10 @@ class AppState extends ChangeNotifier {
       slaveUid: uid,
       passengerType: session.type.name,
       fareCentavos: session.finalFareCentavos,
-      discountCentavos:
-          sessionService.calculateDiscount(session.baseFareCentavos, session.type),
+      discountCentavos: sessionService.calculateDiscount(
+        session.baseFareCentavos,
+        session.type,
+      ),
       boardingStop: session.boarding.name,
       destinationStop: session.destination.name,
       occupancyNow: occupancyService.slavesDeployed,
@@ -485,7 +501,10 @@ class AppState extends ChangeNotifier {
   // ── Public UI Actions ────────────────────────────────────────
   /// Queue a new passenger from the POS boarding form.
   void queuePassenger(
-      TransitStop boarding, TransitStop destination, PassengerType type) {
+    TransitStop boarding,
+    TransitStop destination,
+    PassengerType type,
+  ) {
     sessionService.addToQueue(boarding, destination, type);
     notifyListeners();
   }
@@ -502,8 +521,12 @@ class AppState extends ChangeNotifier {
   }
 
   /// Direct manual boarding when conductor fills in all data themselves.
-  void assignManualPassenger(String uid, TransitStop boarding,
-      TransitStop destination, PassengerType type) {
+  void assignManualPassenger(
+    String uid,
+    TransitStop boarding,
+    TransitStop destination,
+    PassengerType type,
+  ) {
     sessionService.addToQueue(boarding, destination, type);
     final pending = sessionService.pendingQueue.last;
     final session = sessionService.assignSlave(pending.id, uid);
@@ -564,8 +587,10 @@ class AppState extends ChangeNotifier {
       waypoints: waypoints,
     );
 
-    debugPrint('syncFareConfigToMaster: sent base=₱${baseFare / 100} '
-        'per_km=₱${perKm / 100} cap=$cap waypoints=$waypoints');
+    debugPrint(
+      'syncFareConfigToMaster: sent base=₱${baseFare / 100} '
+      'per_km=₱${perKm / 100} cap=$cap waypoints=$waypoints',
+    );
   }
 
   @override
@@ -592,8 +617,17 @@ class AppState extends ChangeNotifier {
     if (_paths.isEmpty) return;
 
     final now = DateTime.now();
-    final currentDay = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'][now.weekday - 1];
-    final currentTimeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+    final currentDay = [
+      'mon',
+      'tue',
+      'wed',
+      'thu',
+      'fri',
+      'sat',
+      'sun',
+    ][now.weekday - 1];
+    final currentTimeStr =
+        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
 
     Map<String, dynamic>? activePath;
 
@@ -604,7 +638,8 @@ class AppState extends ChangeNotifier {
         if (days.contains(currentDay)) {
           final start = sched['start_time'] as String;
           final end = sched['end_time'] as String;
-          if (currentTimeStr.compareTo(start) >= 0 && currentTimeStr.compareTo(end) <= 0) {
+          if (currentTimeStr.compareTo(start) >= 0 &&
+              currentTimeStr.compareTo(end) <= 0) {
             activePath = p;
             break;
           }
@@ -613,21 +648,24 @@ class AppState extends ChangeNotifier {
     }
 
     // Fallback to Primary or first path
-    activePath ??= _paths.firstWhere((p) => p['name'] == 'Primary', orElse: () => _paths.first);
+    activePath ??= _paths.firstWhere(
+      (p) => p['name'] == 'Primary',
+      orElse: () => _paths.first,
+    );
 
     if (activePath != null && activePath['id'] != _activePathId) {
       _activePathId = activePath['id'];
       _activePathName = activePath['name'];
-      
+
       final stopsList = activePath['stops'] as List? ?? [];
       final uniqueStops = <String, dynamic>{};
       for (final s in stopsList) {
         if (!uniqueStops.containsKey(s['name'])) uniqueStops[s['name']] = s;
       }
-      
+
       final stopsJson = json.encode(uniqueStops.values.toList());
       _stops = _parseStopsFromJson(stopsJson);
-      
+
       gpsService.init(_stops);
       notifyListeners();
     }
@@ -640,5 +678,3 @@ List<TransitStop> _parseStopsFromJson(String jsonStr) {
   final List<dynamic> stopsList = jsonDecode(jsonStr);
   return stopsList.map((j) => TransitStop.fromJson(j)).toList();
 }
-
-
