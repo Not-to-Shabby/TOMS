@@ -133,6 +133,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  seat_number;           /**< Seat number assigned */
     uint8_t  route_id;              /**< Route identifier */
     uint8_t  vehicle_id[16];        /**< Vehicle UUID for QR receipt */
+    uint8_t  boarding_type;         /**< toms_boarding_type_t: CARD=0, BUTTON=1, QR=2 */
 } toms_board_command_t;
 
 /* ── Alarm Command Payload (Master → Slave) ──────────────────────────────── */

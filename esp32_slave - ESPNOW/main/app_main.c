@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_mac.h"
@@ -69,9 +70,18 @@ static toms_board_command_t s_pending_cmd;          /* Latest board command payl
 static volatile bool s_debug_active      = false;  /* Debug mode active */
 static bool          s_debug_qr_shown    = false;
 static toms_debug_receipt_t s_debug_receipt;
-static volatile bool s_ack_received      = false;
 static volatile bool s_release_requested = false;
 static volatile toms_ui_screen_t s_held_screen_before_progress = TOMS_UI_WELCOME;
+
+/* Issue 5 fixed: use FreeRTOS EventGroup for cross-core ACK signal (atomic on ESP32-S3) */
+static EventGroupHandle_t s_evt_group;
+#define EVT_ACK_RECEIVED  BIT0
+
+/* Issue 1 fixed: non-blocking button-wait state — avoids blocking main_logic_task */
+static bool        s_waiting_for_board   = false;
+static TickType_t  s_button_wait_start   = 0;
+#define BUTTON_BOARD_WAIT_TICKS  pdMS_TO_TICKS(5000)
+#define BUTTON_ERROR_SHOW_TICKS  pdMS_TO_TICKS(2000)
 
 /* ── Forward Declarations ─────────────────────────────────────────────── */
 
@@ -100,7 +110,11 @@ static void uid_init(void)
 
 static bool uid_matches(const uint8_t *target_uid)
 {
-    return (memcmp(target_uid, s_slave_uid, 16) == 0);
+    /* Issue 4 fixed: compare only the 6-byte eFuse MAC portion.
+     * The master always fills only 6 bytes; bytes 6–15 stay zero.
+     * Comparing 16 bytes worked by accident but breaks once RFID
+     * card UIDs (full 16 bytes) are introduced. */
+    return (memcmp(target_uid, s_slave_uid, 6) == 0);
 }
 
 /* ── Debug Receipt Helpers ───────────────────────────────────────────── */
@@ -367,7 +381,8 @@ static void espnow_handler_task(void *arg)
 
         case TOMS_MSG_ACK_MASTER:
             ESP_LOGI(TAG, "ACK received from master");
-            s_ack_received = true;
+            /* Issue 5 fixed: set EventGroup bit (atomic cross-core signal) */
+            xEventGroupSetBits(s_evt_group, EVT_ACK_RECEIVED);
             break;
 
         default:
@@ -417,7 +432,9 @@ static void execute_boarding(const toms_board_command_t *cmd)
     /* Notify Master with the completed passenger event */
     toms_passenger_event_t pe = {0};
     pe.timestamp     = cmd->timestamp;
-    pe.boarding_type = TOMS_BOARD_CARD;  /* Master-commanded = card/swipe type */
+    /* Issue 2 fixed: use the boarding_type set by master (BUTTON, CARD, QR)
+     * instead of hardcoding TOMS_BOARD_CARD for all Demo Mode boardings. */
+    pe.boarding_type = cmd->boarding_type;
     pe.fare_centavos = cmd->fare_centavos;
     pe.seat_number   = cmd->seat_number;
     pe.route_id      = cmd->route_id;
@@ -553,8 +570,9 @@ static void main_logic_task(void *arg)
         /* Priority 1: Master board command (ESP-NOW or NFC) */
         if (s_board_cmd_pending) {
             ESP_LOGI(TAG, "Board command pending -> execute_boarding");
-            s_board_cmd_pending = false;
-            s_button_pressed    = false;  /* Clear manual flag too */
+            s_board_cmd_pending  = false;
+            s_button_pressed     = false;  /* Clear manual flag too */
+            s_waiting_for_board  = false;  /* Cancel any pending button wait */
             execute_boarding(&s_pending_cmd);
         }
 
@@ -566,23 +584,22 @@ static void main_logic_task(void *arg)
             toms_packet_t pkt;
             toms_packet_build(&pkt, TOMS_MSG_RELEASE, s_seq++,
                               s_slave_uid, 6);
-            s_ack_received = false;
+
+            /* Issue 5 fixed: clear EventGroup bit before sending so we don't
+             * pick up a stale ACK from a previous operation. */
+            xEventGroupClearBits(s_evt_group, EVT_ACK_RECEIVED);
             toms_espnow_send(s_master_mac, &pkt);
 
             toms_ui_show_processing();
 
-            int wait_ms = 0;
-            bool got_ack = false;
-            while (wait_ms < 3000) {
-                if (s_ack_received) {
-                    got_ack = true;
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(50));
-                wait_ms += 50;
-            }
+            /* Block up to 3s for master ACK — EventGroup is atomic across cores */
+            EventBits_t bits = xEventGroupWaitBits(
+                    s_evt_group, EVT_ACK_RECEIVED,
+                    pdTRUE,   /* clear on exit */
+                    pdFALSE,  /* any bit */
+                    pdMS_TO_TICKS(3000));
 
-            if (got_ack) {
+            if (bits & EVT_ACK_RECEIVED) {
                 ESP_LOGI(TAG, "Release ACKed by master");
             } else {
                 ESP_LOGW(TAG, "Release ACK timeout");
@@ -590,36 +607,31 @@ static void main_logic_task(void *arg)
             toms_ui_show_welcome();
         }
 
-        /* Priority 2: Manual button — just notify master, don't self-board */
+        /* Priority 2: Button pressed — show processing, start non-blocking wait */
         if (s_button_pressed) {
-            ESP_LOGI(TAG, "Manual button flag seen -> show processing");
-            s_button_pressed = false;
+            ESP_LOGI(TAG, "Manual button flag seen -> waiting for master board command");
+            s_button_pressed    = false;
+            s_waiting_for_board = true;
+            s_button_wait_start = xTaskGetTickCount();
             toms_ui_show_processing();  /* "Waiting for master..." */
-            
-            /* Wait up to 5 seconds for Master response, checking for s_board_cmd_pending */
-            int wait_ms = 0;
-            bool got_response = false;
-            while (wait_ms < 5000) {
-                if (s_board_cmd_pending) {
-                    got_response = true;
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(50));
-                wait_ms += 50;
-            }
+        }
 
-            if (!got_response) {
-                /* Timeout */
+        /* Priority 2.5: Issue 1 fixed — non-blocking board response timeout check.
+         * Instead of spinning in a while-loop for 5s (which blocked s_release_requested
+         * and other state), we check elapsed ticks on every 50ms main loop iteration. */
+        if (s_waiting_for_board) {
+            TickType_t elapsed = xTaskGetTickCount() - s_button_wait_start;
+            if (elapsed > BUTTON_BOARD_WAIT_TICKS) {
+                /* Timeout: master never sent a board command */
+                s_waiting_for_board = false;
                 ESP_LOGW(TAG, "Master timeout waiting for board command");
                 toms_ui_show_error("Master Timeout");
-                vTaskDelay(pdMS_TO_TICKS(3000));
+                /* Use a short non-blocking delay via vTaskDelay — only 2s not 5s */
+                vTaskDelay(BUTTON_ERROR_SHOW_TICKS);
                 toms_ui_show_welcome();
-            } else {
-                /* Process the response immediately without going to welcome screen */
-                ESP_LOGI(TAG, "Master response received -> execute_boarding");
-                s_board_cmd_pending = false;
-                execute_boarding(&s_pending_cmd);
             }
+            /* If s_board_cmd_pending arrives before timeout, Priority 1 above
+             * will clear s_waiting_for_board and call execute_boarding. */
         }
 
         /* Deep sleep on idle timeout */
@@ -652,6 +664,10 @@ void app_main(void)
 
     /* ── Step 2: Slave UID (eFuse MAC) ──────────────────────────────── */
     uid_init();
+
+    /* ── Step 2b: FreeRTOS synchronization primitives ───────────────── */
+    s_evt_group = xEventGroupCreate();
+    configASSERT(s_evt_group != NULL);
 
     /* ── Step 3: Crypto ─────────────────────────────────────────────── */
     toms_crypto_init();

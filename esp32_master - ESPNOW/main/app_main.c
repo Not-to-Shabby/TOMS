@@ -37,9 +37,11 @@ static const char *TAG = "toms_master";
 /* Slave MAC — updated when a Slave authenticates via UART UID handshake */
 static uint8_t s_slave_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-/* Last button press MAC and pending board command flag (Demo Mode) */
-static uint8_t s_last_button_mac[6] = {0};
-static bool s_board_pending_from_button = false;
+/* Last button press MAC, pending flag, and timestamp for 30s expiry (Demo Mode) */
+static uint8_t  s_last_button_mac[6]       = {0};
+static bool     s_board_pending_from_button = false;
+static int64_t  s_last_button_time_us       = 0;
+#define BUTTON_BOARD_TIMEOUT_US  (30LL * 1000000LL)  /* 30 seconds */
 
 /* ESP-NOW LMK for native encryption (16 bytes) */
 static const uint8_t s_espnow_lmk[16] = {
@@ -223,8 +225,9 @@ static void on_usb_message(const char *data, size_t len)
                  base_fare, per_km);
         toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"sync_config\"}");
 
-    } else if (strstr(data, "\"cmd\":\"board\"") || strstr(data, "\"board\"")) {
-        /* Parse: {"cmd":"board","uid":"AABBCCDDEEFF","fare":1300,"seat":1,"route":1,"vehicle_id":"VEH001"} */
+    } else if (strstr(data, "\"cmd\":\"board\"")) {
+        /* Issue 6 fixed: match only the explicit cmd key, not any JSON containing "board".
+         * Parse: {"cmd":"board","uid":"AABBCCDDEEFF","fare":1300,"seat":1,"route":1,"vehicle_id":"VEH001"} */
         uint8_t target_mac[6] = {0};
         uint16_t fare = 1300;
         uint8_t seat = 0;
@@ -272,16 +275,27 @@ static void on_usb_message(const char *data, size_t len)
         }
 
         if (uid_start) {
+            /* Issue 3 fixed: check if s_last_button_mac request has expired (30s window) */
+            if (s_board_pending_from_button) {
+                int64_t age_us = esp_timer_get_time() - s_last_button_time_us;
+                if (age_us > BUTTON_BOARD_TIMEOUT_US) {
+                    ESP_LOGW(TAG, "Button board request expired (age=%llds) — clearing stale MAC",
+                             (long long)(age_us / 1000000LL));
+                    s_board_pending_from_button = false;
+                }
+            }
+
             /* Add peer dynamically */
             toms_espnow_add_peer(target_mac, NULL, TOMS_ESPNOW_CHANNEL);
 
-            /* Dispatch board command to target slave via ESP-NOW */
+            /* Issue 2 fixed: set boarding_type=BUTTON so slave logs the correct trigger */
             toms_board_command_t cmd = {0};
             memcpy(cmd.target_uid, target_mac, 6);
             cmd.timestamp     = (uint32_t)(esp_timer_get_time() / 1000000ULL);
             cmd.fare_centavos = fare;
             cmd.seat_number   = seat;
             cmd.route_id      = route;
+            cmd.boarding_type = TOMS_BOARD_BUTTON;  /* Demo Mode: triggered by slave button press */
             memcpy(cmd.vehicle_id, veh_id, 16);
 
             toms_packet_t pkt;
@@ -289,8 +303,9 @@ static void on_usb_message(const char *data, size_t len)
                               (const uint8_t *)&cmd, sizeof(cmd));
 
             if (toms_espnow_send(target_mac, &pkt)) {
-                ESP_LOGI(TAG, "BOARD_COMMAND sent via ESP-NOW to " MACSTR " fare=%d seat=%d",
+                ESP_LOGI(TAG, "BOARD_COMMAND sent via ESP-NOW to " MACSTR " fare=%d seat=%d type=BUTTON",
                           MAC2STR(target_mac), fare, seat);
+                s_board_pending_from_button = false;  /* Consumed — clear the flag */
                 toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"board\"}");
             } else {
                 ESP_LOGE(TAG, "Failed to send BOARD_COMMAND via ESP-NOW");
@@ -387,8 +402,9 @@ static void espnow_handler_task(void *arg)
             case TOMS_MSG_BUTTON_PRESS:
                 ESP_LOGI(TAG, "Button press from slave " MACSTR, MAC2STR(event.src_mac));
 
-                /* Store requesting slave's MAC and set pending flag */
+                /* Store requesting slave's MAC, timestamp, and set pending flag */
                 memcpy(s_last_button_mac, event.src_mac, 6);
+                s_last_button_time_us       = esp_timer_get_time();
                 s_board_pending_from_button = true;
 
                 /* Notify phone */
