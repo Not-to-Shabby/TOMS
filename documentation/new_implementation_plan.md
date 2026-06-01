@@ -829,49 +829,685 @@ Slave response: Flash screen red → "Please Pay — 2 min to stop"
 ## XIII. Build Phases
 
 ### Phase 1 — NFC + Occupancy Foundation (Flutter only)
-- [ ] Update `DeviceStatus`: `uartState` → `nfcState`
-- [ ] Add `PassengerType`, `TransitStop`, `PassengerSession`, `PendingPassenger` to models
-- [ ] Add `SeatState`, `SeatRecord`, `OccupancySnapshot` to models
-- [ ] Add `NfcTapEvent` model
-- [ ] Database v2 migration (add columns)
-- [ ] `OccupancyService` — seat state table, update from NFC tap + button_press + proximity
-- [ ] `SessionService` (sessions + queue + fare calc + discounts)
-- [ ] `UsbService` NFC event handlers (replace dock with nfc/nfc_tap)
-- [ ] `AppState` wired to OccupancyService + SessionService + button_press → markPaid
+- [x] Update `DeviceStatus`: `uartState` → `nfcState`
+- [x] Add `PassengerType`, `TransitStop`, `PassengerSession`, `PendingPassenger` to models
+- [x] Add `SeatState`, `SeatRecord`, `OccupancySnapshot` to models
+- [x] Add `NfcTapEvent` model
+- [x] Database v2 migration (add columns)
+- [x] `OccupancyService` — seat state table, update from NFC tap + button_press + proximity
+- [x] `SessionService` (sessions + queue + fare calc + discounts)
+- [x] `UsbService` NFC event handlers (replace dock with nfc/nfc_tap)
+- [x] `AppState` wired to OccupancyService + SessionService + button_press → markPaid
 
 ### Phase 2 — Occupancy Panel + Boarding UI
-- [ ] `assets/vehicles.json` — max capacity per bus ID (simple: `{"CDB-001": 20, ...}`)
-- [ ] `assets/stops.json` (named stops + GPS coords)
-- [ ] `StopService` (load + find nearest stop)
-- [ ] **`OccupancyPanel`** — capacity bar + `PassengerSlot` card list, embedded in Dashboard
-- [ ] Slot number auto-increment logic in `SessionService` (resets each trip)
-- [ ] [Release Slave] action → frees slot, slave returned to pool
-- [ ] `BoardingSheet` — Quick tab (GPS auto-boarding + stop picker + discount selector)
-- [ ] `BoardingSheet` — Queue tab (multi-passenger queue)
-- [ ] `ShiftSummaryScreen` with occupancy stats (peak occupancy, avg load, etc.)
-- [ ] NFC tap → BOARD_COMMAND with `slot_number` (reused `seat_number` field) + fare + type
 
-### Phase 3 — GPS + Proximity Alarm
-- [ ] `GpsService` with `geolocator`
-- [ ] `ProximityService` — 200m geofence, updates seat state to ALARMING
-- [ ] Seat map tile pulses red when ALARMING
-- [ ] `ProximityAlarmBanner` with [Mark Paid] action
-- [ ] Vibration + local notification
-- [ ] Android permissions: `ACCESS_FINE_LOCATION`, `VIBRATE`, `POST_NOTIFICATIONS`
+> [!NOTE]
+> Phase 2a, 2b and 2c are now implemented.
+
+
+#### 2a — Assets
+- [x] `assets/vehicles.json` — created with capacity per bus ID
+- [x] `assets/stops.json` ✓ — coordinates confirmed in file
+
+#### 2b — Dashboard UI Changes (dashboard_screen.dart)
+- [x] Replace `_StatsRow` with a 3-card row: **Revenue · Passengers · Occupancy %**
+- [x] Replace `_DeviceStatusCard` "DOCKED" badge with "NFC ACTIVE / NFC IDLE" badge
+- [x] Replace "UART" status item label with "NFC"
+- [x] Add `_OccupancyPanel` widget above the transaction list
+  - Capacity bar with occupancy rate + color coding (green/orange/red)
+  - Unpaid count sub-label
+  - Scrollable list of `_PassengerSlotCard` tiles
+- [x] `_PassengerSlotCard` — slot badge, destination, fare, type, state chip
+  - Tap to expand: boarding stop, boarded time, fare breakdown
+  - [Collect Payment] → inline change calculator → [Confirm Paid]
+  - [Mark Paid] (skip calculator) + [Release Slave] buttons
+  - ALARMING state: pulsing red glow via `AnimationController`
+- [x] Replace FAB with **`+ New Passenger`** → opens `BoardingSheet`
+  - USB connect/disconnect moved to AppBar overflow menu (⋮)
+
+#### 2c — New Screens / Widgets
+- [x] **`boarding_sheet.dart`** (modal bottom sheet, 2 tabs):
+  - **Quick tab**: Boarding stop dropdown (GPS hint placeholder for Phase 3) + destination + 4 type chips → live fare preview → [Queue Passenger]
+  - **Queue tab**: pending list + per-item [Assign →] manual target + [+ Add Another]
+  - [↗ Expand] button → opens `QueueManagerScreen` (full-screen)
+- [x] **`queue_manager_screen.dart`** (full-screen queue view):
+  - Full pending queue list with slot badges and assign targeting
+- [x] **`shift_summary_screen.dart`** (accessible from overflow ⋮ menu):
+  - Total revenue, passengers, discounts, peak occupancy
+  - Breakdown by passenger type (count + revenue per type)
+  - Recent trip log with sync status badges
+- [x] **`proximity_alarm_banner.dart`** — blinking overlay, [Mark Paid] + [✕ Dismiss] with confirm dialog, auto-collapses
+
+#### 2d — Session & Occupancy Logic
+- [x] Slot number auto-increment in `OccupancyService` — resets to 1 when all sessions clear
+- [x] `_PassengerSlotCard` [Release Slave] → `AppState.releaseSlotManual(uid)` — implemented
+- [x] `OccupancyService.maxCapacity` loaded from `vehicles.json` via `AppState._init()`
+
+---
+
+#### 2e — POS (Point of Sale) UI
+
+> [!IMPORTANT]
+> The full transaction backend is implemented — `SessionService`, `OccupancyService`,
+> and `AppState` can calculate fares, assign types, and record logs. However, there is
+> **no UI yet** that lets the conductor interact with these. This section tracks those screens.
+
+##### What the Backend Already Supports (ready to wire up)
+| Backend capability | Source |
+|---|---|
+| Fare calculation: `₱13 base + ₱1.80/km` | `SessionService.calculateBaseFare()` |
+| Passenger type discounts (Regular / Student / PWD / Senior) | `SessionService.calculateFare()` |
+| Stop-pair lookup from `stops.json` | `TransitStop` model — 5 stops loaded |
+| Active session list with slot numbers | `OccupancyService.getPassengerSlots()` |
+| Mark Paid on a session | `SessionService.markPaid()` / `AppState.markPaidManual()` |
+| Release slot (passenger alights) | `SessionService.releaseSlot()` / `AppState.releaseSlotManual()` |
+| Pending queue (pre-fill before slave assignment) | `SessionService.pendingQueue` |
+
+##### Design Decisions — Confirmed Answers
+
+> ✅ **Q2 — Boarding stop: CONFIRMED → Option C (auto-GPS with manual override)**
+>
+> **Expounding on the conductor's role:**
+> In a typical minibus (jeepney) operation, the **driver** focuses exclusively on driving and
+> route navigation. The **conductor** (konduktor) is the one standing or moving through the
+> cabin who:
+> - Signals the driver where to stop when a passenger flags the vehicle
+> - Physically collects fares and issues tickets/receipts
+> - Decides which passengers board and at what stop
+>
+> Because the conductor is the one who knows the exact boarding location (they just waved
+> the driver to stop there), the **auto-GPS is a hint, not a command**. The flow should be:
+> 1. GPS silently detects the nearest official stop and pre-fills it (e.g. "DPWH Terminal")
+> 2. Conductor glances at the pre-filled stop — if correct, proceeds without touching it
+> 3. If the passenger boarded mid-route (not at an official stop), conductor taps the field
+>    and manually selects the nearest stop from the dropdown
+> 4. The selected stop is what gets logged to the session and sync queue
+>
+> This keeps boarding fast (1 tap to open form → fare auto-fills → queue) while remaining
+> accurate when boarding happens between official stops.
+
+> ✅ **Q3 — Passenger type: CONFIRMED → Option A (button chips, 4 in a row)**
+>
+> Implementation: `Regular | Student | PWD | Senior` displayed as a segmented button row.
+> - Default pre-selected: **Regular**
+> - Active chip highlighted with accent color
+> - Fare and discount recalculate instantly on chip tap (ties in with Q4)
+
+> ✅ **Q4 — Fare preview: CONFIRMED → Option A (live preview)**
+>
+> As soon as boarding stop + destination are both selected, fare is computed in real time
+> using `SessionService.calculateBaseFare()` and displayed. Changing the passenger type
+> chip also instantly updates the displayed fare and discount amount.
+
+> ✅ **Q5 — Change calculator: CONFIRMED → Include now**
+>
+> A `ChangeCalculatorWidget` will be included in the `ActivePassengerCard` (not the boarding
+> form — the conductor collects payment after the passenger is seated, not at boarding).
+> - Conductor taps [Collect Payment] on the slot card
+> - A number pad / input appears: "Tendered: ₱ ___"
+> - App shows: Change = tendered − final fare
+> - Confirms [Mark Paid] after conductor enters the amount
+
+> ✅ **Q6 — Assignment mode: CONFIRMED → Both (automatic FIFO + manual override)**
+>
+> **Default (automatic):** When a slave sends a `button_press` or `nfc_tap` event, the
+> app automatically assigns it to the **first item in the pending queue** (FIFO).
+> This is the fast path for a single boarding.
+>
+> **Override (manual):** When there are multiple items in the queue (e.g. 3 passengers
+> boarded at once), the conductor can tap a specific queue item in the Queue tab and then
+> press [Assign →] — the next slave tap/press is matched to *that* specific queue item
+> instead of the FIFO default.
+>
+> Implementation: `AppState` tracks an `_manualAssignTarget` — if set, the next hardware
+> event assigns to that queue item. If null, falls back to FIFO.
+
+> ✅ **Q1 — Where does the POS form live? CONFIRMED → Both**
+>
+> Both forms will exist and are triggered differently:
+>
+> | Trigger | Form | Why |
+> |---|---|---|
+> | FAB **`+ New Passenger`** (single boarding) | **Modal bottom sheet** | Fast, dismissable, dashboard stays visible |
+> | Queue tab **`[Expand Queue]`** button | **Full-screen page** | More space to manage multiple pending passengers at once |
+>
+> **Bottom sheet** (quick/single boarding):
+> - Opens from FAB, slides up to ~85% screen height, draggable
+> - Conductor fills boarding stop, destination, type → fares preview → [Queue]
+> - Swiping down cancels instantly — no navigation needed
+> - Dashboard occupancy panel still partially visible behind the sheet
+>
+> **Full-screen page** (queue management / multi-passenger):
+> - Opened via an [Expand ↗] icon on the Queue tab header
+> - Shows the full pending queue list + form to add new entries
+> - Conductor uses this when multiple passengers board at the same stop
+> - Back button / gesture returns to dashboard
+> - Better keyboard handling for typing stop names if search is added later
+
+> ✅ **Q7 — Receipt layout on slave screen: CONFIRMED**
+>
+> **Display specs: 1.8" TFT ST7735 — 128 × 160 px (portrait)**
+>
+> At typical firmware font sizes on an ST7735:
+> - **Small** (`Font6x8`): ~21 chars × 20 rows available
+> - **Medium** (`Font8x12`): ~16 chars × 13 rows available
+> - **Large** (`Font16x26`): ~8 chars × 6 rows available
+>
+> Proposed receipt layout (portrait, 128 × 160):
+> ```
+> ┌────────────────────┐  ← row 0  (y=0)
+> │      T O M S       │  large font, centered, accent color
+> │  ── Slot  #3 ──    │  medium, centered, white
+> ├────────────────────┤  ← divider line  (y≈36)
+> │ FROM               │  small, gray label
+> │ DPWH-Tambo         │  small, white (truncated to 16 chars)
+> │ TO                 │  small, gray label
+> │ Country Hills      │  small, white
+> ├────────────────────┤  ← divider line  (y≈80)
+> │     ₱10.40         │  large font, green/accent
+> │  Senior  -₱2.60    │  small, yellow (type + discount)
+> ├────────────────────┤  ← divider line  (y≈116)
+> │   3 / 20 riders    │  small, gray (occupancy)
+> │  [PRESS TO PAY]    │  small, blinking white or accent
+> └────────────────────┘  ← y=160
+> ```
+>
+> **Layout rules for firmware:**
+> - Total 5 zones: header / route / fare / occupancy / action prompt
+> - Stop names truncated to 14 chars max (fits `Font6x8` on 128px width with padding)
+> - Fare displayed large — the passenger must be able to read it clearly
+> - `[PRESS TO PAY]` blinks at 1Hz to prompt the passenger to press the button
+> - Colors: accent/cyan for header, green for fare, yellow for discount, gray for labels
+> - After payment confirmed: swap bottom zone to **`✓ PAID  Thank you`** in green
+
+##### Planned POS UI Screens
+
+- [x] **`BoardingSheet` / `BoardingFormScreen`** — implemented as `boarding_sheet.dart`
+- [x] **`ActivePassengerCard`** — implemented as `_PassengerSlotCard` in `dashboard_screen.dart`
+- [x] **`ChangeCalculatorWidget`** — implemented inline in `_PassengerSlotCard`
+- [x] **Queue Panel** — implemented in `BoardingSheet` tab 2 and `queue_manager_screen.dart`
+
+### Phase 2f — UI Revamp (Navigation + Layout) ✅
+
+> **Goal**: Reorient the app around the conductor's primary task — boarding passengers.
+> The boarding form becomes the home screen; the dashboard is a swipe-right panel.
+
+#### Navigation Architecture
+- [x] Replace the single `DashboardScreen` root with `HomeShell` → `PageView` (2 pages, `initialPage: 0`)
+  - **Page 0** (default home): `BoardingScreen` — full-screen boarding form (`lib/screens/boarding_screen.dart`)
+  - **Page 1** (swipe right): `DashboardScreen` — occupancy panel and stats
+- [x] Page dot indicator at the bottom — animated pill grows when active page (teal)
+- [x] Swipe hint on Boarding page: `"Swipe for Dashboard"` label — auto-dismisses after first swipe
+- [x] `PageControllerService` shared via `ChangeNotifierProvider` (`lib/services/page_controller_service.dart`) — `goToBoarding()` / `goToDashboard()` methods available app-wide
+
+#### BoardingScreen (`lib/screens/boarding_screen.dart`) ✅
+- [x] Promoted `_QuickTab` content into a full-screen `Scaffold`
+- [x] Top header: TOMS logo, USB status pill, "Dashboard →" tap chip, overflow menu
+- [x] Full-width boarding form — stop dropdowns with teal left-border when GPS auto-filled
+- [x] Pending queue section inline below form (shows top 3 + count, "Manage →" link)
+- [x] **[Queue Passenger]** button pinned at bottom with shadow shadow separator
+- [x] Dashboard FAB removed — `BoardingSheet` modal no longer used from this path
+- [x] `QueueManagerScreen` accessible via overflow menu
+
+#### DashboardScreen (refactored) ✅
+- [x] FAB removed
+- [x] `← Boarding` chip added in app bar — taps `pageController.goToBoarding()`
+- [x] `PageControllerService` imported and wired
+- [x] All existing occupancy panel, stats row, slot cards, and transaction list preserved
+
+#### Visual Design Tokens ✅
+- [x] Boarding stop dropdown: teal left-border `BorderSide` when GPS auto-filled
+- [x] Type chips: uniform `Expanded` height — all 4 chips identical size
+- [x] Fare preview: large `₱XX.XX` (36px w800) center-aligned + discount breakdown below divider
+- [x] `ClampingScrollPhysics` on `PageView` for crisp card-like swipe
+
+### Phase 3 — GPS + Proximity Alarm ✅
+
+
+#### 3a — Android Permissions
+- [x] `ACCESS_FINE_LOCATION` + `ACCESS_COARSE_LOCATION` + `ACCESS_BACKGROUND_LOCATION`
+- [x] `VIBRATE`
+- [x] `POST_NOTIFICATIONS` + `RECEIVE_BOOT_COMPLETED` + `SCHEDULE_EXACT_ALARM`
+
+#### 3b — GpsService (`lib/services/gps_service.dart`)
+- [x] Continuous position stream via `Geolocator.getPositionStream` (20m distance filter, high accuracy)
+- [x] Runtime permission request with descriptive error state if denied
+- [x] `_updateNearestStop()` — iterates all stops, picks closest by Haversine distance
+- [x] `distanceTo(stop)` helper — used by `ProximityService`
+- [x] Exposed via `AppState`: `nearestStop`, `gpsTracking`, `gpsPermissionGranted`, `gpsError`
+
+#### 3c — Boarding Stop Auto-fill (`boarding_screen.dart`) ✅
+- [x] GPS pill button next to boarding stop accordion — accent-colored when tracking, grey when off
+- [x] Tapping the GPS pill manually applies the current nearest stop (conductor must confirm — no auto-fill)
+- [x] Sub-label shows `"GPS nearest: X (tap to use)"` or error/acquiring state
+- [x] **GPS auto-fill removed** from `build()` — accordion stays open for conductor confirmation
+
+#### 3d — ProximityService (`lib/services/proximity_service.dart`)
+- [x] Listens to `GpsService` updates and scans all active sessions
+- [x] Flags `session.alarmTriggered = true` when within 200m of destination
+- [x] 1.5× hysteresis radius — clears alarm if bus moves away (missed stop recovery)
+- [x] `onAlarmTriggered` callback — fires once per slot per trip (tracked via `_alreadyAlarmed` set)
+- [x] `clearAlarm(uid)` — called by `AppState.markPaidManual()` to reset after payment
+
+#### 3e — Alarm UX (`app_state.dart`)
+- [x] `_onProximityAlarm(session)` — SOS vibration pattern `[400, 200, 400, 200, 800]ms`
+- [x] `flutter_local_notifications` high-priority channel `toms_proximity_alarm`
+- [x] Per-slot notification (slot number as notification ID) — title + fare + destination
+- [x] `ProximityAlarmBanner` (built Phase 2c) surfaces in-app automatically on ALARMING state
 
 ### Phase 4 — Company Dashboard + Sync
-- [ ] `SyncService` — export `OccupancySnapshot` + `ShiftReport` JSON
-- [ ] Company dashboard (HTML/JS)
-  - Fleet overview with live occupancy bars per bus
-  - Per-bus seat map view (mirrors conductor's phone)
-  - Transaction audit log (searchable)
-  - Revenue analytics (per day/week, passenger type breakdown)
-  - Reconciliation report (auto-flags discrepancy)
-  - Dispute resolution search by UID / timestamp
-- [ ] `share_plus` — conductor shares shift JSON at terminal
 
-### Phase 5 — Slave Alarm (Firmware, Optional)
-- [ ] `TOMS_MSG_ALARM_CMD` in `protocol.h`
-- [ ] Slave: alarm cmd → red screen + "Please Pay" UI
-- [ ] Master: `send_alarm` USB cmd → ESP-NOW to target slave
-- [ ] Flutter `ProximityService` triggers slave alarm alongside phone alarm
+#### 4a — Sync Infrastructure + Mobile Onboarding (Mobile Side)
+
+##### Onboarding & Account
+- [x] **`LoginScreen` / `OnboardingScreen`** — first launch requires internet to create/log in to a company account
+  - Account creation links the device to a company + vehicle assignment
+  - Auth token stored in `flutter_secure_storage` (not plain SharedPreferences)
+  - App is locked behind login (`AuthWrapper` in `main.dart`); no boarding UI until account is confirmed
+- [x] **`VehicleAssignmentScreen`** — conductor selects which bus they are operating at shift start
+  - Dropdown of vehicles from `assets/vehicles.json` (API fetch deferred to 4d)
+  - Sets `OccupancyService.vehicleId` and `maxCapacity` for the session
+  - Can be changed between shifts via [End Shift] → returns to this screen
+
+##### Sync & Shift Flow
+- [x] `SyncService` finalization — `tokenGetter` callback injects live `AuthService` token; no hardcoded credentials
+- [x] `share_plus` — conductor can share shift JSON at terminal (offline fallback) — `shift_summary_screen.dart` + `shift_history_screen.dart`
+- [x] Retry queue drain confirmation — `_SyncStatusBar` widget in dashboard shows pending event count; clears when synced
+- [x] **Shift end flow**: [End Shift] in ⋮ menu → confirm dialog → `AppState.endShift()` + `AuthService.assignVehicle('')` → returns to `VehicleAssignmentScreen`
+- [x] **`ShiftHistoryScreen`** — browse and export logs from previous shifts (`lib/screens/shift_history_screen.dart`)
+  - Lists past shifts from local SQLite grouped by calendar date
+  - Per-day: passenger count, revenue, synced/pending badge
+  - [Export JSON] / [Share] actions per shift via `share_plus`
+  - Accessible from Dashboard ⋮ → Shift History
+
+
+#### Phase 4 Web Architecture (APPROVED)
+
+**1. Frontend (Company Dashboard)**
+* **Framework**: **Vite + React (TypeScript)**. This provides a lightning-fast build environment for a Single Page Application (SPA), which is perfect for a dashboard with live-updating maps.
+* **Design Philosophy**: **Ultra-Intuitive UI**. Since terminal employees and dispatchers may not be tech-literate, the UI will be large, clear, and focused on essential tasks without cluttered menus. We will use a custom glassmorphism design system with modern typography (e.g., Inter/Outfit) and dark mode.
+* **Map Engine**: **MapLibre GL JS** (`react-map-gl` using `maplibre-gl`). MapLibre offers a high "wow" factor with highly customizable, sleek dark-mode base maps (like CartoDB Dark Matter) while being 100% free with no API keys required.
+
+**2. Backend API**
+* **Framework**: **Node.js + Express (TypeScript)**. Lightweight, highly compatible with WebSockets, and rapid to develop.
+* **Database**: **PostgreSQL**. Ideal for structured relational data (Routes, Stops, Passenger Logs, Vehicles, and Companies).
+* **Real-time**: **Socket.IO**. Essential for Phase 4c to stream live `OccupancySnapshot` data from the mobile app directly to the web dashboard in real-time.
+* **Deployment**: **Docker & Docker Compose**. The entire backend (Node server + Postgres DB) will be containerized. This means it can be spun up with a single command (`docker-compose up`) on either a local company computer at the terminal or a remote Cloud VPS.
+
+---
+
+#### 4b — Route Builder (Company Dashboard)
+> **New Feature**: The company admin defines official route stops directly on a map UI
+> instead of manually editing `stops.json`. Stops are saved to the backend and pushed
+> to conductors' phones on next sync.
+
+**1. Backend Database Schema (PostgreSQL)**
+We will create two tables to manage this data:
+* `routes` table: `id` (PK), `name` (e.g., "Buru-un to City Proper"), `company_id`.
+* `route_stops` table: `id` (PK), `route_id` (FK), `name`, `lat`, `lon`, `stop_order` (integer used for sequencing).
+
+**2. Backend API Endpoints**
+* `GET /api/routes/:id/stops`: Returns the ordered list of stops for the mobile app and dashboard.
+* `POST /api/routes/:id/stops`: Accepts a JSON array of stops from the Web Dashboard and overwrites the existing stops for that route.
+
+**3. Web Dashboard UI (`toms_web/src/pages/RouteBuilder.tsx`)**
+* **Map View**: Integrated with `react-map-gl` and MapLibre. Clicking anywhere on the map drops a new draggable `Marker`.
+* **Polyline**: A GeoJSON `Source` and `Layer` will draw a line connecting the markers in their sequential order.
+* **Sidebar Panel**: A reorderable list of stops. Admin can rename stops or delete them. It includes a **[Save Route]** button that POSTs to the backend.
+
+**4. Mobile Sync (Flutter)**
+* `SyncService` (or a new `RouteService`) will fetch `GET /api/routes/:id/stops` upon successful login.
+* The fetched stops will be cached in SQLite or `path_provider` local JSON.
+* `AppState.stops` will load from this cache instead of the bundled `assets/stops.json`, allowing the company to remotely update routes!
+
+**Remaining Phase 4b Checklist Items:**
+- [x] **Backend DB Schema** — `routes` and `route_stops` tables created in `initDb()` in `index.ts`.
+- [x] **`GET /api/routes/:id/stops`** — Implemented, returns ordered stop list for mobile and dashboard.
+- [x] **`POST /api/routes/:id/stops`** — Implemented, replaces all stops for a route.
+- [x] **`RouteBuilder.tsx`** — MapLibre map with click-to-drop `Marker`, GeoJSON polyline `Source`/`Layer`, sortable sidebar via `dnd-kit`, and Save button.
+- [x] **Mobile Sync** — `app_state.dart` fetches `/api/routes/1/stops` on boot, caches to `SharedPreferences`, falls back to `assets/stops.json`.
+
+#### 4b.1 — Route Builder Enhancements (Proposed)
+> **Open Question**: You requested adding Route Builder enhancements to the plan. I have proposed three powerful features below. Please let me know which of these you would like to prioritize or if you had something else in mind!
+
+- [x] **Road-Snapped Routing**: Currently, the polyline draws a straight line between stops. We can integrate the free OSRM (Open Source Routing Machine) API to automatically snap the blue route line to actual city streets.
+- [x] **Custom Geo-fence Radius**: Allow the admin to visually adjust a circle around each stop on the map (e.g., 50m vs 100m) to customize exactly when the conductor's proximity alarm triggers.
+- [x] **Fare Matrix Editor**: A panel that allows the admin to set the Base Fare (₱) and Per-KM Fare directly on the route, which syncs to the mobile app instead of hardcoding `17.00` and `2.30` in the Dart code.
+
+#### 4b.3 — Branching Routes / Multi-Path (Simultaneously Valid Paths)
+
+> **Feature Description**: A single route (e.g. "Route 1") can have TWO (or more) simultaneously-valid path variants — a **Primary Path** (blue) and an **Alternative Path** (green). Both are saved to the backend. The mobile app loads all paths and the `ProximityService` fires alarms correctly regardless of which street the vehicle takes.
+
+> [!IMPORTANT]
+> This is a database schema change. A new `route_paths` table is introduced. Existing routes will automatically be migrated to a single "Primary" path entry.
+
+---
+
+**1. Backend Schema (`toms_backend/src/index.ts`)**
+
+New table: `route_paths`
+```sql
+CREATE TABLE IF NOT EXISTS route_paths (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  route_id  INTEGER NOT NULL,
+  name      TEXT NOT NULL DEFAULT 'Primary',  -- e.g. 'Primary', 'Alternative'
+  color     TEXT NOT NULL DEFAULT '#00d2ff',  -- '#00d2ff' blue or '#2ed573' green
+  FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+);
+```
+
+Modify `route_stops` to link to a `path_id` instead of directly to `route_id`:
+```sql
+ALTER TABLE route_stops ADD COLUMN path_id INTEGER;
+```
+*(Existing rows will keep their `route_id`; we'll migrate them to a default path_id in the same transaction.)*
+
+New API Endpoints:
+- `GET  /api/routes/:id/paths` — Returns all paths for a route with their stops
+- `POST /api/routes/:id/paths` — Creates a new path (e.g. "Alternative") for a route
+- `POST /api/routes/:id/paths/:pathId/stops` — Saves the stop list for one specific path
+- `DELETE /api/routes/:id/paths/:pathId` — Removes a path
+
+---
+
+**2. Web Dashboard (`toms_web/src/pages/RouteBuilder.tsx`)**
+
+- **Sidebar Path Switcher**: A tab-style toggle above the stops list:
+  `[ 🔵 Primary ] [ 🟢 Alternative ] [ + Add Path ]`
+  - Clicking a tab loads that path's stop list into the editor.
+  - Clicking `+ Add Path` creates a new named path on the backend.
+- **Map Rendering**: Each path rendered as a separate GeoJSON `<Source>`/`<Layer>` in its own color (blue, green, orange...). The currently *active* path (being edited) is shown at full opacity; others are shown at 40% opacity in the background.
+- **Edit Mode**: Only the active path's stops are draggable/editable. The other paths are read-only overlays.
+
+---
+
+**3. Mobile App (`toms_mobile`)**
+
+- **`TransitStop` model**: Add `path_id` field.
+- **API fetch**: `AppState` fetches `GET /api/routes/:id/paths` which returns ALL paths and ALL their stops in a single call.
+- **`ProximityService` update**: Instead of iterating `AppState.stops` (a single flat list), iterate over **all stops from all paths** for the current route. This guarantees the alarm triggers whether the vehicle is on the Primary or Alternative street.
+- **No conductor UI change needed**: The conductor doesn't need to manually switch paths — the system automatically knows which stops are valid for any active path.
+
+---
+
+**Phase 4b.3 Checklist:**
+- [x] Add `route_paths` table to backend `initDb()`
+- [x] Add `path_id` column to `route_stops` with migration logic for existing data
+- [x] Implement `GET/POST/DELETE /api/routes/:id/paths` endpoints
+- [x] Update `RouteBuilder.tsx` with Path Switcher tabs and multi-path rendering
+- [x] Update `AppState.dart` to fetch and store all paths
+- [x] Update `ProximityService.dart` to check stops from all paths
+
+
+#### 4c — Company Dashboard UI (Live Fleet Tracking)
+> **New Feature**: The dashboard provides a real-time overview of the entire fleet.
+> As conductors sync their data (boarding/alighting), the dashboard updates live
+> using WebSockets, showing occupancy, revenue, and location.
+
+**1. Backend Real-time Engine (`toms_backend`)**
+* Create an `events` table in SQLite to store all transaction payloads from the mobile app.
+* Add a `POST /api/events` endpoint. The mobile `SyncService` will push all offline and online events here.
+* Upon receiving a new event, the backend saves it and instantly broadcasts a `fleet_update` event via **Socket.IO** to all connected web clients.
+
+**2. Web Dashboard UI (`toms_web/src/pages/DashboardHome.tsx`)**
+* **Fleet Overview Grid**: A responsive grid of "Bus Cards". Each card displays:
+  - Vehicle ID & Assigned Route
+  - Live Occupancy Progress Bar (e.g., 24/30 seats full)
+  - Daily Revenue (calculated from synced events)
+* **Live Socket Connection**: Connects to the backend via `socket.io-client` to listen for `fleet_update` events and instantly animate the UI changes without reloading the page.
+* **Seat Map Modal**: Clicking a Bus Card opens a glassmorphism modal showing the exact seat layout and which specific seats are currently occupied, perfectly mirroring the conductor's phone.
+
+**3. Mobile Sync Integration (`toms_mobile`)**
+* Update `SyncService.dart` to point to `http://10.0.2.2:3000/api/events` instead of the placeholder URL.
+* Ensure the sync payload includes the exact array of occupied seats so the dashboard can render the seat map perfectly.
+
+**Phase 4c Checklist:**
+- [x] **`events` table** — Created in SQLite `initDb()` with full schema.
+- [x] **`POST /api/events`** — Accepts batched event arrays from mobile `SyncService`.
+- [x] **Socket.IO `fleet_update`** — Emitted after every successful `POST /api/events` COMMIT, including real-time daily revenue.
+- [x] **`SyncService.dart` URL** — Updated to `http://10.0.2.2:3000/api/events`.
+- [x] **Seat map in sync payload** — `app_state.dart` serializes `getPassengerSlots()` as JSON and passes `seatMap` parameter.
+- [x] **`DashboardHome.tsx` Bus Cards** — Fleet grid with live occupancy progress bar and daily revenue per bus.
+- [x] **Socket.IO client** — `socket.on('fleet_update', ...)` listener with live UI state update.
+- [x] **Seat Map Modal** — Glassmorphism modal with per-slot color coding (Empty / Unpaid / Paid / ALARM).
+
+#### 4d — Historical Analytics & Audit Logs (Company Dashboard)
+> **New Feature**: While Phase 4c provided a live view of the fleet, Phase 4d builds the historical reporting suite. Admins can view past transactions, dispute fares, and analyze daily/weekly revenue trends.
+
+**1. Backend Analytics API (`toms_backend`)**
+- [x] `GET /api/analytics/revenue` — Aggregates `events` table by date, passenger type, and calculates total sales/trips.
+- [x] `GET /api/audit/logs` — Paginated and searchable transaction logs with full metadata filters.
+- [x] `GET /api/conductors` — Dynamically queries SQLite to compile active conductor shifts, contact details, and today's sales sums.
+
+**2. Web Dashboard UI (`toms_web/src/pages`)**
+- [x] **Analytics Page (`/analytics`)** — Premium visual charts showing revenue trend, passenger demographics, and operational insights.
+- [x] **Audit Logs Page (`/audit`)** — Searchable data table with date-range filters, custom event tags, pagination, and details modal.
+- [x] **Conductors Directory Page (`/conductors`)** — Dynamic staff tracking table displaying on-shift/offline statuses, dynamic collections, and linkages to corresponding bus logs.
+
+> [!IMPORTANT]
+> **User Review Required**: Do you approve this execution plan for Phase 4d (Transaction Audit Logs & Revenue Analytics)? Are there any specific charts or metrics you want prioritized?
+
+#### 4e — Conductor Account Management & Revenue Export (✅ DONE)
+> **New Feature**: Replaces the hardcoded mock login (`password123`) with a proper backend authentication system, allowing admins to create specific accounts for conductors. Additionally, provides the ability to export revenue and audit data to spreadsheet formats (CSV).
+
+**1. Backend Conductor Authentication (`toms_backend`)**
+* **Database Schema**: Added a `conductors` table (`id`, `username`, `password_hash`, `name`, `company_id`).
+* **Auth APIs**: 
+  - `POST /api/conductors/login`: Authenticates mobile app users and returns a token.
+  - `POST /api/conductors`: Creates a new conductor account (admin only).
+  - `GET /api/conductors`: Lists all conductors.
+  - `DELETE /api/conductors/:id`: Removes a conductor account.
+
+**2. Web Dashboard UI (`toms_web`)**
+* **Staff Management Page**: Updated the `ConductorsList.tsx` page to fetch from the DB, add an "Add Staff" modal, and support account revocation.
+* **Spreadsheet Export**: Added an "Export to CSV" button to the existing **Analytics** and **Audit Logs** pages.
+
+**3. Mobile App Integration (`toms_mobile`)**
+* **AuthService Update**: Modified `auth_service.dart` to securely send credentials to `POST /api/conductors/login`.
+
+---
+
+#### 4f — Conductor Event Tracking (✅ DONE)
+> **New Feature**: Attaches the specific Conductor's ID and Name permanently to every event/transaction log. This allows admins to audit offline conductors, track individual sales performance across different vehicles, and filter logs directly by staff member.
+
+**1. Backend Database Schema (`toms_backend`)**
+* **Schema Update**: Alter the `events` table to add `conductor_id` and `conductor_name` columns. Additionally, alter the `conductors` table to add `contact_number` and `address` columns.
+* **API Update**: Update `POST /api/events` to ingest the new conductor metadata alongside the existing vehicle/fare data. Update `POST /api/conductors` to save contact information.
+* **Search Expansion**: Update `GET /api/audit/logs` so the text search field can match against `conductor_name`.
+
+**2. Mobile App Syncing (`toms_mobile`)**
+* **Sync Payload**: Modify `sync_service.dart` and `app_state.dart` to inject `AuthService.companyId` and `AuthService.conductorName` directly into the JSON payload of every generated `boarding`, `payment`, and `release` event.
+
+**3. Web Dashboard Updates (`toms_web`)**
+* **Audit Logs UI**: Add a new "Conductor" column to the data table in `AuditLogs.tsx`.
+* **Conductor Directory**: Modify the "Logs" link in `ConductorsList.tsx` to search by `conductor.name` instead of `assigned_vehicle`. Make the button permanently visible, allowing admins to view historical shift data even when the staff member is offline.
+
+---
+
+#### 4g — Vehicle Management & Fleet Dashboard Upgrades (✅ DONE)
+> **New Feature**: Migrates vehicle definitions from a hardcoded mobile JSON file to a dynamic backend database. Additionally, heavily upgrades the Live Fleet Dashboard with a MapLibre real-time map, an activity ticker, and hardware battery monitoring.
+
+**1. Vehicle Management Base (`toms_backend` & `toms_web`)**
+* **Database Schema**: Add a `vehicles` table (`id`, `max_capacity`, `plate_number`, `status`).
+* **Backend APIs**: Create `GET/POST/DELETE /api/vehicles` to manage the fleet.
+* **Web UI**: Create a new `FleetManager.tsx` page where admins can add new buses to the system and define their passenger capacities dynamically.
+* **Mobile App Integration**: Deprecate `assets/vehicles.json`. The Flutter app will fetch the live list of vehicles from `/api/vehicles` during startup.
+
+**2. Live GPS & Sync Updates (`toms_mobile` & `toms_backend`)**
+* **GPS Injection**: Update `sync_service.dart` so that every synced event payload securely includes the phone's `current_lat` and `current_lon`.
+* **Database Alteration**: Add `current_lat` and `current_lon` to the `events` table in the backend.
+
+**3. Advanced Fleet Dashboard (`toms_web/src/pages/DashboardHome.tsx`)**
+* **Live Map Tracking**: Implement a `MapLibre` viewer at the top of the dashboard. Using the injected coordinates from the events payload, the backend will broadcast the bus's position via WebSockets, bouncing the vehicle icon across the live map.
+* **Activity Ticker**: Add a scrolling sidebar feed that translates real-time Socket.IO events into human-readable logs (e.g., "🚌 BUS-101: 3 Boarded at Main St.").
+* **Conductor & Battery Display**: Update the "Bus Cards" to display the active Conductor's Name (from Phase 4f) and a dynamic Hardware Battery indicator.
+
+---
+
+#### 4h — Time-Based Route Scheduling (✅ DONE)
+> **New Feature**: Allows administrators to define schedules for when specific routes or paths are active based on the time of day and day of the week. This enables dynamic routing (e.g., a "Morning Express" path that only runs from 6 AM to 9 AM on weekdays).
+
+**1. Backend Database Schema (`toms_backend`)**
+* **Schema Update**: Create a new `route_schedules` table linking a `route_id` or `path_id` to active days (e.g., `mon`, `tue`) and active hours (`start_time`, `end_time`).
+* **API Update**: Create CRUD endpoints for these schedules (`/api/routes/:id/schedules`). Update the `GET /api/routes` logic to calculate and return the currently "Active" path based on the server time.
+
+**2. Web Dashboard UI (`toms_web`)**
+* **Route Builder Updates**: Add a "Schedule" configuration panel to the Route Builder where admins can set the days and times a path is active.
+* **Visual Indicators**: Display which paths are currently active vs inactive based on the schedule.
+
+**3. Mobile App Integration (`toms_mobile`)**
+* **Dynamic Active Path**: The mobile app will sync the schedule and automatically switch the active path/waypoints on the `BoardingSheet` if the time-based rules trigger a path change mid-shift.
+
+#### 4i — Advanced Dispatch & Assignment System (✅ DONE)
+> **New Feature**: Introduces a fully integrated dispatching workflow. Instead of hardcoded text, the Fleet Manager can now dynamically assign specific Routes (created in the Route Builder) and Conductors to specific Vehicles. This creates a bidirectional assignment system that updates in real-time on the dashboard.
+
+**1. Database & Backend API (`toms_backend`)**
+* **Schema Upgrade**: Update the `vehicles` table to include `assigned_route_id` and `assigned_conductor_id`. 
+* **API Relationships**: Update the `GET /api/vehicles` and `/api/fleet/status` endpoints to explicitly join with the `routes` and `conductors` tables so the exact route name and staff name are always accurate and synchronized.
+* **Bi-directional Assignment APIs**: Build endpoints to link/unlink conductors and routes to vehicles. If a conductor is assigned to Bus A, any previous assignment they had to Bus B is automatically cleared.
+
+**2. Web Dashboard UI (`toms_web`)**
+* **Dynamic Fleet Terminology**: Remove the hardcoded word "Bus" from the `DashboardHome.tsx` cards so it gracefully supports Vans, Jeeps, or Trains just by their Vehicle ID.
+* **Fleet Manager Editing**: Upgrade `FleetManager.tsx` with an "Edit Vehicle" modal. Add dropdown menus populated with live data from the Route Builder and Conductor Directory to allow admins to assign routes and staff directly to a vehicle.
+* **Conductor Directory Editing**: Add a similar dropdown in the Conductor Directory to allow assigning a vehicle from the staff's profile (two-way editing).
+* **Real-time Dispatch Updates**: Ensure that when a dispatch assignment is changed in the Fleet Manager, the Live Dashboard (`DashboardHome.tsx`) reflects the new route/conductor instantly via WebSocket or reactive state without requiring a page reload.
+
+#### 4j — Path Schedule UI Redesign & Dashboard Fixes (✅ DONE)
+> **New Feature**: Improves the UX for managing Time-Based Route Schedules in the Route Builder and fixes a bug where the Live Dashboard counts inactive vehicles as "Active".
+
+**1. Dashboard Fixes (`toms_web/src/pages/DashboardHome.tsx`)**
+*   **Active Vehicle Logic**: Ensure `totalActive` properly filters the fleet by `bus.status === 'Active'` rather than counting all registered vehicles.
+*   **UI Filtering**: Visually distinguish offline or maintenance vehicles in the grid (e.g., lower opacity) and optionally hide them from the map if they are not actively transmitting GPS.
+
+**2. Route Builder Redesign (`toms_web/src/pages/RouteBuilder.tsx`)**
+*   **Day Selector component**: Replace the raw comma-separated text input (`mon,tue,wed`) with a row of interactive pill buttons for each day of the week (M, T, W, T, F, S, S) for much better user experience.
+*   **Time Selector Improvements**: Refine the visual layout of the "Start Time" and "End Time" inputs to match a modern, cohesive panel.
+*   **State Management**: Update the internal React state to manage an array of selected days (`['mon', 'tue']`) and convert it to a comma-separated string just before saving to the backend.
+
+**3. System Rebranding (`toms_web`)**
+*   **App.tsx Sidebar**: Rename the subtitle from "Transit Operations & Management" to "Transportation Occupancy Management System".
+*   **index.html**: Update the document `<title>` to "Transportation Occupancy Management System".
+---
+
+#### 4k — Route Builder UX Polish & Cross-Browser Bug Fixes (✅ DONE)
+> **New Feature**: A series of targeted UX improvements and cross-browser reliability fixes for the Route Builder page.
+
+**1. Custom iOS Toggle Switches (`RouteBuilder.tsx`)**
+*   **Removed Native Checkboxes**: Retired all native HTML `<input type="checkbox">` controls in the Route Builder sidebar.
+*   **Custom Slider Switch**: Implemented custom inline iOS-style toggle switch components for both **Schedule Restrictions (Limit)** and **Road Snapping (Snap)** controls, styled with a glowing cyan accent track and animated white thumb that slides with `transform: translateX` transitions.
+
+**2. Cross-Browser Glassmorphic Dialog Modals (`RouteBuilder.tsx`)**
+*   **Root Cause**: Chrome/Chromium silently blocks native `window.prompt()` and `window.confirm()` dialogs when called inside async closures, sandboxed iframes, or under user-activation security policies. Firefox permits these dialogs freely — causing features to work in Firefox but completely fail in Chrome without any console error.
+*   **Custom Modal System**: Designed a React-state driven modal system using `dialogOpen`, `dialogType`, `dialogTitle`, `dialogValue`, and `dialogOnConfirm` state variables with `openPromptDialog()` and `openConfirmDialog()` helper functions.
+*   **Modal UI**: Rendered as a `position: fixed` full-screen overlay with `backdropFilter: blur(8px)` frosted glassmorphic blur, a dark-themed `rgba(20,24,33,0.95)` card, custom dark input, and glowing cyan **Confirm** button. Keyboard-accessible via `Enter` to submit and `Escape` to cancel.
+*   **Scope**: Covers all four Route Builder destructive/input dialogs — **Add Path**, **Delete Path**, **Create Route**, and **Delete Route**.
+
+**3. Backend Route Creation Response Fix (`toms_backend/src/index.ts`)**
+*   **Root Cause**: The `POST /api/routes` endpoint was inserting the record into SQLite but omitting the `res.json(...)` response call. The route was saved to the database, but the frontend received an empty/undefined body, causing `activeRouteId` to be set to `undefined` and disconnecting the dropdown.
+*   **Fix**: Updated the endpoint to return `{ id: this.lastID, name, company_id, base_fare: 15.0, per_km_fare: 2.5 }` after successful insertion.
+
+**4. Empty Path Switcher Visibility Fix (`RouteBuilder.tsx`)**
+*   **Root Cause**: The Path Switcher Tabs panel was conditionally rendered with `{paths.length > 0 && (...)}`. For a newly created route with zero paths, the entire panel — including the **+ Add Path** button — was hidden, making it impossible to add the first path and causing the Schedule Restrictions panel to also vanish.
+*   **Fix**: Changed the visibility condition to `{activeRouteId && (...)}` so the tab row (and the **+ Add Path** button) is always visible when a route is selected.
+
+**5. Auto Primary Path on Route Creation (`RouteBuilder.tsx`)**
+*   **Root Cause**: Creating a new route left it with zero paths, forcing the admin to manually click **+ Add Path** and type "Primary" before any configuration was possible.
+*   **Fix**: Updated `handleCreateRoute` to perform a two-step atomic creation — first `POST /api/routes` to create the route, then immediately `POST /api/routes/:id/paths` with `{ name: 'Primary', color: '#00d4ff' }` — and auto-switching to the new Primary path, so the Schedule Restrictions, Dynamic Fare Matrix, and Waypoints panels are all immediately accessible.
+
+---
+
+
+### Phase 5 — Hardware Config & Slave Alarm (Firmware, Optional) (✅ DONE)
+- [x] `TOMS_MSG_ALARM_CMD` in `protocol.h`
+- [x] Slave: alarm cmd → red screen + "Please Pay" UI
+- [x] Master: `send_alarm` USB cmd → ESP-NOW to target slave
+- [x] Flutter `ProximityService` triggers slave alarm alongside phone alarm
+- [x] **Fare dictionary push to Master** — phone sends updated fare table to Master via USB `config` command
+  - [x] Triggered from vehicle assignment or a [Sync Config] action in the overflow menu
+  - [x] Master stores the fare dict in NVS (used by Slave on next board command via `fare_id` lookup)
+  - [x] Matches §3.5.1 step 6: "fare dictionary loading from NVS via `toms_fare_dict_load`"
+
+---
+
+### Phase 6 — Security, Analytics, and Hardware Polish (Upcoming)
+
+> [!NOTE]
+> This phase incorporates the remaining optional features (O1-O8) referenced in the TOMS paper into actionable development tasks.
+
+#### 6a — Hardware Status & Warnings (O1)
+- [x] **Slave Battery Telemetry (O1)**
+  - [x] Firmware: Added `battery_read()` to slave `app_main.c` — reads LiPo ADC on GPIO 1 (ADC1 CH0) using `esp_adc/adc_oneshot` with curve-fitting calibration.
+  - [x] Protocol: Added `toms_heartbeat_payload_t` struct to `protocol.h` — carries `uid[6]`, `battery_mv`, `battery_pct`.
+  - [x] Firmware: `send_heartbeat()` now embeds battery telemetry into every heartbeat packet.
+  - [x] Firmware: Master `espnow_handler_task` decodes heartbeat payload → forwards as `{"evt":"slave_battery",...}` USB JSON event.
+  - [x] Mobile: Added `SlaveBatteryEvent` class and `slaveBatteryStream` to `UsbService`.
+  - [x] Mobile: `AppState` subscribes to `slaveBatteryStream`, maintains `_slaveBatteryMap` (uid → pct).
+  - [x] Mobile: Added `batteryPct` field to `PassengerSlot` model (default -1 = no telemetry).
+  - [x] Mobile: `OccupancyService.getPassengerSlots()` accepts optional `batteryMap` and threads it into each slot.
+  - [x] Mobile: `_BatteryBadge` widget renders on `_PassengerSlotCard` header — 🔴 ≤20%, 🟡 21–50%, 🟢 >50%. Hidden until first heartbeat received.
+
+#### 6b — Security & Dispute Resolution (O4, O5) (✅ DONE)
+- [x] **Database Encryption (O5)**
+  - [x] Mobile: Swap `sqflite` for `sqflite_sqlcipher` in `pubspec.yaml` (fully integrated and verified compatible).
+  - [x] Mobile: Injected secure, randomly generated passphrase from `FlutterSecureStorage` into `DatabaseService` to enable full database encryption of passenger logs and sync queue.
+- [x] **QR Receipt Scanner (O4)**
+  - [x] Mobile: Added `mobile_scanner` dependency for camera-based QR reading.
+  - [x] Mobile: Built a Dispute Resolution screen featuring a camera scanner, validation of scanned QR code (`TOMS,VEH_ID,TIMESTAMP,FARE,UID`), and local SQLite lookup.
+  - [x] Mobile: Embedded direct lookup (`lookupDisputedLog`) in `DatabaseService` to check scanned tickets against cached records and display detailed verification state cards (Verified / Not Found / Invalid).
+
+#### 6c — Advanced Configuration & Sync (O6, O8) (✅ DONE)
+- [x] **Dynamic Configuration Push (O6)**
+  - [x] Mobile: Extend the USB `syncFareTable` payload (or create a new `sync_config` command) to push `maxCapacity` and full route waypoint lists.
+  - [x] Firmware: Update Master `app_main.c` to parse the new configuration and store it in NVS.
+- [x] **Sync Reconciliation View (O8)**
+  - [x] Mobile: Create an End-to-End Reconciliation screen comparing the Master's SPIFFS log count (`status.pendingLogs`) with the mobile SQLite database's pending queue (`sync.pendingSyncCount`).
+
+---
+
+### 🔍 Codebase Audit Verification
+
+*   **O1 — Slave Battery Level Display on `_PassengerSlotCard`** (🟢 **DONE**)
+    *   *Verification:* Fully implemented. The `PassengerSlot` model in [models.dart](file:///d:/TOMS/toms_mobile/lib/models/models.dart) includes a `batteryPct` field. The `AppState` listens for relayed battery messages via `UsbService` and updates a local cache. The `_PassengerSlotCard` in [dashboard_screen.dart](file:///d:/TOMS/toms_mobile/lib/screens/dashboard_screen.dart) renders a dynamic, color-coded battery badge showing the telemetry value.
+    *   *Next Steps:* None. Covered in Phase 6a.
+
+*   **O2 — SPIFFS Unsynced File Count Badge on Device Status Card** (🟢 **DONE**)
+    *   *Verification:* Fully supported and implemented. The `DeviceStatus` class in [models.dart](file:///d:/TOMS/toms_mobile/lib/models/models.dart#L288-L320) parses `pendingLogs` directly from the Master's status payloads. This is rendered beautifully as the **"Pending" status item** card under `_DeviceStatusCard` inside [dashboard_screen.dart](file:///d:/TOMS/toms_mobile/lib/screens/dashboard_screen.dart#L195).
+
+*   **O3 — Low Master Battery Warning UI** (⚫ **OBSOLETE**)
+    *   *Verification:* The Master device is powered directly from the mobile phone via USB OTG. It does not possess an independent internal battery. Therefore, battery warnings for the Master are structurally irrelevant and will be removed from the UI.
+
+*   **O4 — QR Receipt Scanner (Dispute Resolution)** (🟢 **DONE**)
+    *   *Verification:* Camera scanner implemented via `mobile_scanner` in [dispute_resolution_screen.dart](file:///d:/TOMS/toms_mobile/lib/screens/dispute_resolution_screen.dart) with format parsing and database query logic.
+    *   *Next Steps:* None. Covered in Phase 6b.
+
+*   **O5 — SQLite Local DB Encryption (SQLCipher)** (🟢 **DONE**)
+    *   *Verification:* The local database is implemented using plain SQLite via the standard `sqflite` interface, but backed by `sqflite_sqlcipher` database wrapper in [pubspec.yaml](file:///d:/TOMS/toms_mobile/pubspec.yaml#L45) and initialized with secure database passphrase in [database_service.dart](file:///d:/TOMS/toms_mobile/lib/services/database_service.dart).
+    *   *Next Steps:* None. Covered in Phase 6b.
+
+*   **O6 — Dynamic Config Push to Master over USB** (🟢 **DONE**)
+    *   *Verification:* Handled beautifully via `syncFareConfigToMaster()` in [app_state.dart](file:///d:/TOMS/toms_mobile/lib/services/app_state.dart#L539-L555). It transmits route fare tables (`base_fare` and `per_km`), capacity (`maxCapacity`), and route-stop lists (`waypoints`) over USB CDC inside `sync_fare_table`, which the Master commits to its NVS partition and broadcasts to Slaves.
+
+*   **O7 — Shift History Screen (Past Shifts)** (🟢 **DONE**)
+    *   *Verification:* 100% complete and verified. Implemented in [shift_history_screen.dart](file:///d:/TOMS/toms_mobile/lib/screens/shift_history_screen.dart). It aggregates transactions grouped by calendar dates, displays sync/pending status badges, and supports CSV/JSON dynamic exports via `share_plus`.
+
+*   **O8 — End-to-End Sync Reconciliation View** (🟢 **DONE**)
+    *   *Verification:* Implemented as a dedicated, beautiful `SyncReconciliationScreen` (`sync_reconciliation_screen.dart`), comparing SQLite pending count with Master SPIFFS file records, with refresh capability and a list of unsynced logs.
+
+---
+
+### Summary Verification Table
+
+
+| # | Feature | Status | Notes / Code Audit Verification |
+|---|---|---|---|
+| O1 | **Slave battery level display** on `_PassengerSlotCard` | 🟢 **DONE** | Heartbeats carry battery data via ESP-NOW → Master → USB serial. UI displays color-coded battery indicator on slot cards. |
+| O2 | **SPIFFS unsynced file count badge** on device status card | 🟢 **DONE** | Fully supported. Rendered as the **"Pending" status item** (`status.pendingLogs`) on `_DeviceStatusCard` inside `dashboard_screen.dart`. |
+| O3 | **Low Master battery warning UI** | ⚫ **OBSOLETE** | Master is powered by USB OTG from the phone and has no internal battery. Feature is structurally irrelevant. |
+| O4 | **QR receipt scanner** (dispute resolution) | 🟢 **DONE** | Camera-based dispute resolution screen scans receipt QR and matches details in SQLite database. |
+| O5 | **SQLite local DB encryption** (SQLCipher) | 🟢 **DONE** | Local database is encrypted using SQLCipher with a secure password stored in FlutterSecureStorage. |
+| O6 | **Dynamic config push to Master over USB** | 🟢 **DONE** | Syncing base fare, per-km, maximum capacity, and route waypoints is fully supported, saved to NVS, and broadcast to Slaves. |
+| O7 | **Shift history screen** (past shifts) | 🟢 **DONE** | Fully realized as `ShiftHistoryScreen` (`shift_history_screen.dart`), providing date-grouped stats, sync status badges, and JSON shift exports. |
+| O8 | **End-to-end sync reconciliation view** | 🟢 **DONE** | Integrated reconciliation screen comparing local SQLite queues side-by-side with Master hardware SPIFFS logs. |
+
+
+

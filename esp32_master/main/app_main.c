@@ -52,6 +52,7 @@ static uint8_t s_vehicle_id[16] = "VEH001";
 /* Active fare/route config (updated from phone via USB sync) */
 static uint16_t s_fare_centavos  = 1300;  /* Default: P13.00 */
 static uint8_t  s_route_id       = 1;
+static uint32_t s_max_capacity   = 20;
 
 /* Fare dictionary (shared with Slaves, synced via ESP-NOW CONFIG_SYNC) */
 static toms_fare_dict_t s_fare_dict;
@@ -106,16 +107,24 @@ static void on_usb_message(const char *data, size_t len)
         size_t total = 0, used = 0;
         toms_storage_get_stats(&total, &used);
 
-        char resp[256];
+        char loaded_wp[512] = {0};
+        toms_config_get_str("waypoints", loaded_wp, sizeof(loaded_wp));
+        if (loaded_wp[0] != '[') {
+            strcpy(loaded_wp, "[]");
+        }
+
+        char resp[1024];
         snprintf(resp, sizeof(resp),
                  "{\"evt\":\"status\",\"battery_mv\":%lu,\"battery_pct\":%d,"
                  "\"storage_total\":%u,\"storage_used\":%u,"
                  "\"pending_logs\":%d,"
-                 "\"nfc_state\":%d}",
+                 "\"nfc_state\":%d,\"max_capacity\":%lu,\"waypoints\":%s}",
                  (unsigned long)batt_mv, batt_pct,
                  (unsigned)total, (unsigned)used,
                  toms_storage_get_pending_count(),
-                 (int)toms_nfc_sync_get_state());
+                 (int)toms_nfc_sync_get_state(),
+                 (unsigned long)s_max_capacity,
+                 loaded_wp);
         toms_usb_cdc_send(resp);
 
     } else if (strstr(data, "\"send_alarm\"")) {
@@ -150,15 +159,39 @@ static void on_usb_message(const char *data, size_t len)
             toms_usb_cdc_send("{\"evt\":\"error\",\"msg\":\"send_alarm: missing uid\"}");
         }
 
-    } else if (strstr(data, "\"sync_fare_table\"")) {
+    } else if (strstr(data, "\"sync_fare_table\"") || strstr(data, "\"sync_config\"")) {
         /* Parse: {"cmd":"sync_fare_table","base_fare":1300,"per_km":200,"stop_count":5,
-         *          "entries":[{"fare_id":1,"fare_centavos":1300},...]} */
+         *          "entries":[{"fare_id":1,"fare_centavos":1300},...], "max_capacity":20, "waypoints":["..."]} */
         const char *bf = strstr(data, "\"base_fare\":");
         const char *pk = strstr(data, "\"per_km\":");
         uint16_t base_fare  = bf ? (uint16_t)atoi(bf + 12) : s_fare_centavos;
         uint16_t per_km     = pk ? (uint16_t)atoi(pk + 9)  : 200;
 
         s_fare_centavos = base_fare;
+
+        const char *cap = strstr(data, "\"max_capacity\":");
+        if (cap) {
+            s_max_capacity = (uint32_t)atoi(cap + 15);
+            toms_config_set_u32("max_capacity", s_max_capacity);
+            ESP_LOGI(TAG, "Saved max_capacity to NVS: %lu", (unsigned long)s_max_capacity);
+        }
+
+        const char *wp_start = strstr(data, "\"waypoints\":");
+        if (wp_start) {
+            const char *open_bracket = strchr(wp_start, '[');
+            if (open_bracket) {
+                const char *close_bracket = strchr(open_bracket, ']');
+                if (close_bracket) {
+                    size_t wp_len = close_bracket - open_bracket + 1;
+                    if (wp_len < 500) {
+                        char wp_buf[512] = {0};
+                        strncpy(wp_buf, open_bracket, wp_len);
+                        toms_config_set_str("waypoints", wp_buf);
+                        ESP_LOGI(TAG, "Saved waypoints to NVS: %s", wp_buf);
+                    }
+                }
+            }
+        }
 
         /* Build a fare dict with a single default entry (extend for full stop matrix) */
         toms_fare_dict_t new_dict = {0};
@@ -184,7 +217,7 @@ static void on_usb_message(const char *data, size_t len)
 
         ESP_LOGI(TAG, "Fare table synced: base=%d per_km=%d, broadcast to slaves",
                  base_fare, per_km);
-        toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"sync_fare_table\"}");
+        toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"sync_config\"}");
 
     } else {
         ESP_LOGW(TAG, "Unknown USB command");
@@ -297,6 +330,22 @@ static void espnow_handler_task(void *arg)
 
             case TOMS_MSG_HEARTBEAT:
                 ESP_LOGD(TAG, "Heartbeat from slave");
+                /* If the heartbeat carries the battery telemetry payload, relay it */
+                if (event.packet.length >= (uint8_t)sizeof(toms_heartbeat_payload_t)) {
+                    const toms_heartbeat_payload_t *hb =
+                        (const toms_heartbeat_payload_t *)event.packet.payload;
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                             "{\"evt\":\"slave_battery\","
+                             "\"uid\":\"%02X%02X%02X%02X%02X%02X\","
+                             "\"battery_mv\":%u,"
+                             "\"battery_pct\":%u}",
+                             hb->uid[0], hb->uid[1], hb->uid[2],
+                             hb->uid[3], hb->uid[4], hb->uid[5],
+                             (unsigned)hb->battery_mv,
+                             (unsigned)hb->battery_pct);
+                    toms_usb_cdc_send(msg);
+                }
                 break;
 
             default:
@@ -482,6 +531,19 @@ void app_main(void)
     ESP_LOGI(TAG, "[6/8] Loading fare dictionary...");
     toms_fare_dict_load(&s_fare_dict);
     ESP_LOGI(TAG, "Fare dictionary: %d entries loaded", s_fare_dict.count);
+
+    if (toms_config_get_u32("max_capacity", &s_max_capacity)) {
+        ESP_LOGI(TAG, "NVS: Loaded max_capacity = %ld", (long)s_max_capacity);
+    } else {
+        ESP_LOGI(TAG, "NVS: No max_capacity stored, using default 20");
+    }
+
+    char loaded_wp[512] = {0};
+    if (toms_config_get_str("waypoints", loaded_wp, sizeof(loaded_wp))) {
+        ESP_LOGI(TAG, "NVS: Loaded waypoints = %s", loaded_wp);
+    } else {
+        ESP_LOGI(TAG, "NVS: No waypoints stored");
+    }
 
     /* Set active fare for NFC tap */
     toms_nfc_sync_set_fare(1, 0);  /* Default: fare_id=1, seat=0 */

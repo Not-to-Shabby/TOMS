@@ -122,6 +122,9 @@ class PassengerSlot {
   final int fareCentavos;
   final PassengerType passengerType;
   final DateTime boardedAt;
+  /// Battery state-of-charge from the last heartbeat, 0–100.
+  /// -1 means no telemetry received yet.
+  final int batteryPct;
 
   PassengerSlot({
     required this.slotNumber,
@@ -131,6 +134,7 @@ class PassengerSlot {
     required this.fareCentavos,
     required this.passengerType,
     required this.boardedAt,
+    this.batteryPct = -1,
   });
 
   Map<String, dynamic> toJson() {
@@ -140,6 +144,7 @@ class PassengerSlot {
       'state': state.name,
       'dest': destination,
       'type': passengerType.name,
+      'battery_pct': batteryPct,
     };
   }
 }
@@ -293,6 +298,8 @@ class DeviceStatus {
   final int storageUsed;
   final int pendingLogs;
   final int nfcState;
+  final int maxCapacity;
+  final List<String> waypoints;
 
   int get uartState => nfcState;
 
@@ -304,9 +311,16 @@ class DeviceStatus {
     required this.storageUsed,
     required this.pendingLogs,
     required this.nfcState,
+    required this.maxCapacity,
+    required this.waypoints,
   });
 
   factory DeviceStatus.fromJson(Map<String, dynamic> json) {
+    final rawWps = json['waypoints'];
+    List<String> wpsList = [];
+    if (rawWps is List) {
+      wpsList = rawWps.map((e) => e.toString()).toList();
+    }
     return DeviceStatus(
       mac: json['mac'] as String? ?? '',
       batteryMv: json['battery_mv'] as int? ?? 0,
@@ -315,6 +329,8 @@ class DeviceStatus {
       storageUsed: json['storage_used'] as int? ?? 0,
       pendingLogs: json['pending_logs'] as int? ?? 0,
       nfcState: json['nfc_state'] as int? ?? json['uart_state'] as int? ?? 0,
+      maxCapacity: json['max_capacity'] as int? ?? 20,
+      waypoints: wpsList,
     );
   }
 }

@@ -178,6 +178,23 @@ typedef struct __attribute__((packed)) {
     uint8_t status;             /**< TOMS_NFC_ACK_* status code */
 } toms_nfc_ack_t;
 
+/* ── Heartbeat Payload (Slave → Master, optional) ─────────────────────── */
+
+/**
+ * @brief Optional payload for TOMS_MSG_HEARTBEAT packets.
+ *
+ * The Slave embeds its LiPo battery level (read via ADC on GPIO 1) so the
+ * Master can relay it to the phone for display on the Passenger Slot Card.
+ *
+ * A zero-length heartbeat (legacy) is still valid — consumers must check
+ * pkt.length >= sizeof(toms_heartbeat_payload_t) before casting.
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  uid[6];         /**< Slave eFuse MAC (first 6 bytes), for routing */
+    uint16_t battery_mv;     /**< LiPo voltage in millivolts (e.g. 3700) */
+    uint8_t  battery_pct;    /**< State-of-charge estimate 0–100% */
+} toms_heartbeat_payload_t;
+
 /* ── CRC Functions ────────────────────────────────────────────────────── */
 
 /**

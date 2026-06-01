@@ -26,6 +26,9 @@
 #include "esp_mac.h"
 #include "esp_random.h"
 #include "nvs_flash.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 
 /* TOMS modules */
 #include "display.h"
@@ -355,14 +358,101 @@ static void execute_boarding(const toms_board_command_t *cmd)
     toms_ui_show_welcome();
 }
 
+/* ── Battery ADC Helpers ───────────────────────────────────────────────── */
+
+/**
+ * Read the LiPo battery voltage from ADC1 channel 0 (GPIO 1).
+ *
+ * Uses the ESP-IDF oneshot ADC driver to take a single reading.
+ * Calibration via the curve-fitting scheme (eFuse Vref) is attempted;
+ * falls back to a linear approximation (raw × 3300 / 4095) if not available.
+ *
+ * @param[out] mv   Voltage in millivolts.
+ * @param[out] pct  State-of-charge (0–100%), linear between 3200 mV and 4200 mV.
+ */
+static void battery_read(uint16_t *mv, uint8_t *pct)
+{
+    /* Configure oneshot ADC handle */
+    adc_oneshot_unit_handle_t adc_handle;
+    adc_oneshot_unit_init_cfg_t unit_cfg = {
+        .unit_id  = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    if (adc_oneshot_new_unit(&unit_cfg, &adc_handle) != ESP_OK) {
+        *mv  = 0;
+        *pct = 0;
+        return;
+    }
+
+    adc_oneshot_chan_cfg_t chan_cfg = {
+        .atten    = ADC_ATTEN_DB_12,   /* Full 0–3.3 V range (ADC_ATTEN_11db alias) */
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_0, &chan_cfg);
+
+    /* Try curve-fitting calibration (uses eFuse Vref burned at factory) */
+    adc_cali_handle_t cali_handle = NULL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id  = ADC_UNIT_1,
+        .chan     = ADC_CHANNEL_0,
+        .atten    = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+    };
+    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &cali_handle) == ESP_OK) {
+        calibrated = true;
+    }
+#endif
+
+    /* Take a reading */
+    int raw = 0;
+    adc_oneshot_read(adc_handle, ADC_CHANNEL_0, &raw);
+
+    int voltage_mv = 0;
+    if (calibrated && cali_handle) {
+        adc_cali_raw_to_voltage(cali_handle, raw, &voltage_mv);
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+        adc_cali_delete_scheme_curve_fitting(cali_handle);
+#endif
+    } else {
+        /* Linear fallback: 12-bit ADC at 3.3 V reference */
+        voltage_mv = (raw * 3300) / 4095;
+    }
+    adc_oneshot_del_unit(adc_handle);
+
+    /* Map to state-of-charge: 3200 mV = 0%, 4200 mV = 100% */
+    const int MV_MIN = 3200;
+    const int MV_MAX = 4200;
+    int pct_raw = ((voltage_mv - MV_MIN) * 100) / (MV_MAX - MV_MIN);
+    if (pct_raw < 0)   pct_raw = 0;
+    if (pct_raw > 100) pct_raw = 100;
+
+    *mv  = (uint16_t)voltage_mv;
+    *pct = (uint8_t)pct_raw;
+
+    ESP_LOGD(TAG, "Battery: raw=%d mv=%d pct=%d", raw, voltage_mv, pct_raw);
+}
+
 /* ── Heartbeat ────────────────────────────────────────────────────────── */
 
 static void send_heartbeat(void)
 {
+    uint16_t batt_mv  = 0;
+    uint8_t  batt_pct = 0;
+    battery_read(&batt_mv, &batt_pct);
+
+    toms_heartbeat_payload_t hb = {0};
+    memcpy(hb.uid, s_slave_uid, 6);
+    hb.battery_mv  = batt_mv;
+    hb.battery_pct = batt_pct;
+
     toms_packet_t pkt;
-    toms_packet_build(&pkt, TOMS_MSG_HEARTBEAT, s_seq++, NULL, 0);
+    toms_packet_build(&pkt, TOMS_MSG_HEARTBEAT, s_seq++,
+                      (const uint8_t *)&hb, sizeof(hb));
     toms_espnow_send(s_master_mac, &pkt);
-    ESP_LOGD(TAG, "Heartbeat sent");
+    ESP_LOGD(TAG, "Heartbeat sent — battery %d mV (%d%%)", batt_mv, batt_pct);
 }
 
 /* ── LVGL Timer Task ─────────────────────────────────────────────────── */

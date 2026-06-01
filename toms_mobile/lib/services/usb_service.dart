@@ -5,6 +5,19 @@ import 'package:usb_serial/usb_serial.dart';
 import 'package:usb_serial/transaction.dart';
 import '../models/models.dart';
 
+/// Slave battery telemetry received via the Master's heartbeat relay.
+class SlaveBatteryEvent {
+  final String slaveUid;    // eFuse MAC hex string (no colons, uppercase)
+  final int batteryMv;
+  final int batteryPct;
+
+  const SlaveBatteryEvent({
+    required this.slaveUid,
+    required this.batteryMv,
+    required this.batteryPct,
+  });
+}
+
 /// Manages USB CDC-ACM communication with the ESP32 Master.
 ///
 /// Protocol: newline-delimited JSON over virtual serial port.
@@ -49,6 +62,12 @@ class UsbService extends ChangeNotifier {
   final StreamController<bool> _dockController =
       StreamController<bool>.broadcast();
   Stream<bool> get dockStream => _dockController.stream;
+
+  // Event stream for slave battery telemetry (relayed via Master heartbeat)
+  final StreamController<SlaveBatteryEvent> _slaveBatteryController =
+      StreamController<SlaveBatteryEvent>.broadcast();
+  Stream<SlaveBatteryEvent> get slaveBatteryStream =>
+      _slaveBatteryController.stream;
 
   bool get isConnected => _connected;
   String get deviceName => _deviceName;
@@ -194,12 +213,32 @@ class UsbService extends ChangeNotifier {
   Future<void> syncFareTable({
     required int baseFareCentavos,
     required int perKmCentavos,
+    int? maxCapacity,
+    List<String>? waypoints,
   }) async {
     await sendCommand('sync_fare_table', {
       'base_fare': baseFareCentavos,
       'per_km': perKmCentavos,
+      if (maxCapacity != null) 'max_capacity': maxCapacity,
+      if (waypoints != null) 'waypoints': waypoints,
     });
-    debugPrint('USB TX: sync_fare_table base=$baseFareCentavos per_km=$perKmCentavos');
+    debugPrint('USB TX: sync_fare_table base=$baseFareCentavos per_km=$perKmCentavos cap=$maxCapacity');
+  }
+
+  /// Explicitly sync full device configuration to the Master.
+  Future<void> syncConfig({
+    required int baseFareCentavos,
+    required int perKmCentavos,
+    required int maxCapacity,
+    required List<String> waypoints,
+  }) async {
+    await sendCommand('sync_config', {
+      'base_fare': baseFareCentavos,
+      'per_km': perKmCentavos,
+      'max_capacity': maxCapacity,
+      'waypoints': waypoints,
+    });
+    debugPrint('USB TX: sync_config base=$baseFareCentavos per=$perKmCentavos cap=$maxCapacity');
   }
 
   /// Process incoming JSON line from the Master.
@@ -255,6 +294,15 @@ class UsbService extends ChangeNotifier {
           _dockController.add(state == 'connected');
           break;
 
+        case 'slave_battery':
+          final uid = (json['uid'] as String? ?? '').replaceAll(':', '').toUpperCase();
+          _slaveBatteryController.add(SlaveBatteryEvent(
+            slaveUid: uid,
+            batteryMv: json['battery_mv'] as int? ?? 0,
+            batteryPct: json['battery_pct'] as int? ?? 0,
+          ));
+          break;
+
         case 'slave_docked':
           debugPrint('Slave docked: UID=${json['uid']}, seat=${json['seat']}');
           break;
@@ -295,6 +343,7 @@ class UsbService extends ChangeNotifier {
     _buttonPressController.close();
     _releaseController.close();
     _dockController.close();
+    _slaveBatteryController.close();
     super.dispose();
   }
 }

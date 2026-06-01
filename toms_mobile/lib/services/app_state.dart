@@ -37,6 +37,10 @@ class AppState extends ChangeNotifier {
   StreamSubscription<String>? _buttonPressSub;
   StreamSubscription<String>? _releaseSub;
   StreamSubscription<bool>? _connectivitySub;
+  StreamSubscription<SlaveBatteryEvent>? _slaveBatterySub;
+
+  /// uid (hex, no colons, uppercase) → last-known battery %, or -1 if unknown.
+  final Map<String, int> _slaveBatteryMap = {};
 
   List<PassengerLog> _recentLogs = [];
   int _todayRevenue = 0;
@@ -65,7 +69,9 @@ class AppState extends ChangeNotifier {
   int get totalLogs => _totalLogs;
 
   // Occupancy delegation
-  List<PassengerSlot> get activeSlots => occupancyService.getPassengerSlots();
+  List<PassengerSlot> get activeSlots => occupancyService.getPassengerSlots(
+        batteryMap: _slaveBatteryMap,
+      );
   int get slavesDeployed => occupancyService.slavesDeployed;
   int get maxCapacity => occupancyService.maxCapacity;
   double get occupancyRate => occupancyService.occupancyRate;
@@ -223,6 +229,10 @@ class AppState extends ChangeNotifier {
     _buttonPressSub =
         usbService.buttonPressStream.listen(_onButtonPressReceived);
     _releaseSub = usbService.releaseStream.listen(_onReleaseReceived);
+    _slaveBatterySub = usbService.slaveBatteryStream.listen((event) {
+      _slaveBatteryMap[event.slaveUid] = event.batteryPct;
+      notifyListeners();
+    });
 
     // Listen to connectivity state changes
     _connectivitySub = connectivityService.onConnectivityChanged.listen((online) {
@@ -544,14 +554,18 @@ class AppState extends ChangeNotifier {
 
     final baseFare = (sessionService.baseFareCentavos).round();
     final perKm = (sessionService.perKmCentavos).round();
+    final cap = occupancyService.maxCapacity;
+    final waypoints = _stops.map((s) => s.name).toList();
 
     await usbService.syncFareTable(
       baseFareCentavos: baseFare,
       perKmCentavos: perKm,
+      maxCapacity: cap,
+      waypoints: waypoints,
     );
 
-    debugPrint('syncFareConfigToMaster: sent base=\u20b1${baseFare / 100} '
-        'per_km=\u20b1${perKm / 100}');
+    debugPrint('syncFareConfigToMaster: sent base=₱${baseFare / 100} '
+        'per_km=₱${perKm / 100} cap=$cap waypoints=$waypoints');
   }
 
   @override
@@ -561,7 +575,12 @@ class AppState extends ChangeNotifier {
     _buttonPressSub?.cancel();
     _releaseSub?.cancel();
     _connectivitySub?.cancel();
+    _slaveBatterySub?.cancel();
     _statusTimer?.cancel();
+    _scheduleTimer?.cancel();
+    sessionService.removeListener(notifyListeners);
+    occupancyService.removeListener(notifyListeners);
+    gpsService.removeListener(notifyListeners);
     connectivityService.dispose();
     syncService.dispose();
     gpsService.dispose();

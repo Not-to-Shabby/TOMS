@@ -46,7 +46,9 @@ class OccupancyService extends ChangeNotifier {
 
   double get occupancyRate => maxCapacity > 0 ? slavesDeployed / maxCapacity : 0.0;
 
-  List<PassengerSlot> getPassengerSlots() {
+  List<PassengerSlot> getPassengerSlots({
+    Map<String, int>? batteryMap,
+  }) {
     return sessionService.activeSessions.map((session) {
       final slotNum = getSlotNumber(session.slaveUid);
       PassengerSlotState state = PassengerSlotState.active;
@@ -56,6 +58,10 @@ class OccupancyService extends ChangeNotifier {
         state = PassengerSlotState.alarming;
       }
 
+      // Normalise UID key to match the format stored by AppState's battery map
+      final uidKey = session.slaveUid.replaceAll(':', '').toUpperCase();
+      final batt = batteryMap?[uidKey] ?? -1;
+
       return PassengerSlot(
         slotNumber: slotNum,
         slaveUid: session.slaveUid,
@@ -64,6 +70,7 @@ class OccupancyService extends ChangeNotifier {
         fareCentavos: session.finalFareCentavos,
         passengerType: session.type,
         boardedAt: session.boardedAt,
+        batteryPct: batt,
       );
     }).toList()
       ..sort((a, b) => a.slotNumber.compareTo(b.slotNumber));

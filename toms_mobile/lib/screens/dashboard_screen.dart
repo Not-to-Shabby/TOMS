@@ -12,6 +12,8 @@ import '../models/models.dart';
 import 'debug_screen.dart';
 import 'shift_summary_screen.dart';
 import 'shift_history_screen.dart';
+import 'dispute_resolution_screen.dart';
+import 'sync_reconciliation_screen.dart';
 import '../widgets/proximity_alarm_banner.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -65,6 +67,10 @@ class DashboardScreen extends StatelessWidget {
                 usb.isConnected ? usb.disconnect() : context.read<AppState>().connectUsb();
               } else if (v == 'history') {
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const ShiftHistoryScreen()));
+              } else if (v == 'dispute') {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const DisputeResolutionScreen()));
+              } else if (v == 'reconciliation') {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncReconciliationScreen()));
               } else if (v == 'end_shift') {
                 _confirmEndShift(context);
               } else if (v == 'debug') {
@@ -81,6 +87,16 @@ class DashboardScreen extends StatelessWidget {
                 Icon(LucideIcons.history, size: 16, color: TomsTheme.textSecondary),
                 SizedBox(width: 10),
                 Text('Shift History', style: TextStyle(color: TomsTheme.textPrimary)),
+              ])),
+              const PopupMenuItem(value: 'dispute', child: Row(children: [
+                Icon(LucideIcons.scan, size: 16, color: TomsTheme.textSecondary),
+                SizedBox(width: 10),
+                Text('Dispute Resolution', style: TextStyle(color: TomsTheme.textPrimary)),
+              ])),
+              const PopupMenuItem(value: 'reconciliation', child: Row(children: [
+                Icon(LucideIcons.refreshCw, size: 16, color: TomsTheme.textSecondary),
+                SizedBox(width: 10),
+                Text('Sync Reconciliation', style: TextStyle(color: TomsTheme.textPrimary)),
               ])),
               const PopupMenuItem(value: 'debug', child: Row(children: [
                 Icon(LucideIcons.terminal, size: 16, color: TomsTheme.textSecondary),
@@ -438,6 +454,11 @@ class _PassengerSlotCardState extends State<_PassengerSlotCard>
                     Text('${slot.passengerType.label} · ${_formatFare(slot.fareCentavos)}',
                         style: const TextStyle(color: TomsTheme.textSecondary, fontSize: 12)),
                   ])),
+                  // Battery badge (visible once telemetry received)
+                  if (slot.batteryPct >= 0) ...[
+                    const SizedBox(width: 6),
+                    _BatteryBadge(pct: slot.batteryPct),
+                  ],
                   // State badge
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -563,6 +584,35 @@ class _ActionBtn extends StatelessWidget {
           Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
         ]),
       ),
+    );
+  }
+}
+
+// ── Battery Badge ─────────────────────────────────────────────────────────────
+class _BatteryBadge extends StatelessWidget {
+  final int pct;
+  const _BatteryBadge({required this.pct});
+
+  Color get _color {
+    if (pct <= 20) return TomsTheme.danger;
+    if (pct <= 50) return TomsTheme.warning;
+    return TomsTheme.success;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: _color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: _color.withValues(alpha: 0.35), width: 0.8),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(LucideIcons.battery, size: 11, color: _color),
+        const SizedBox(width: 3),
+        Text('$pct%', style: TextStyle(color: _color, fontSize: 10, fontWeight: FontWeight.w700)),
+      ]),
     );
   }
 }

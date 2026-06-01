@@ -1,5 +1,7 @@
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:uuid/uuid.dart';
 import '../models/models.dart';
 
 /// Local SQLite database for offline-first transaction caching.
@@ -16,8 +18,16 @@ class DatabaseService {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'toms.db');
 
+    const secureStorage = FlutterSecureStorage();
+    String? passphrase = await secureStorage.read(key: 'db_passphrase');
+    if (passphrase == null) {
+      passphrase = const Uuid().v4() + const Uuid().v4();
+      await secureStorage.write(key: 'db_passphrase', value: passphrase);
+    }
+
     return openDatabase(
       path,
+      password: passphrase,
       version: 2,
       onCreate: (db, version) async {
         await db.execute('''
@@ -85,6 +95,39 @@ class DatabaseService {
       'payload': payload,
       'synced': 0,
     });
+  }
+
+  /// Look up a passenger log by the passenger ID (slave UID) and/or timestamp/fare.
+  Future<PassengerLog?> lookupDisputedLog(String uid, int fareCentavos) async {
+    final db = await database;
+    final cleanUid = uid.replaceAll(':', '').toUpperCase();
+    
+    // First try: exact match on UID and fare
+    final maps = await db.query(
+      'passenger_logs',
+      where: 'passenger_id = ? AND fare_centavos = ?',
+      whereArgs: [cleanUid, fareCentavos],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+    
+    if (maps.isNotEmpty) {
+      return PassengerLog.fromMap(maps.first);
+    }
+    
+    // Fallback: search just by UID since fare/timestamp could differ slightly
+    final fallbackMaps = await db.query(
+      'passenger_logs',
+      where: 'passenger_id = ?',
+      whereArgs: [cleanUid],
+      orderBy: 'timestamp DESC',
+      limit: 1,
+    );
+    
+    if (fallbackMaps.isNotEmpty) {
+      return PassengerLog.fromMap(fallbackMaps.first);
+    }
+    return null;
   }
 
   /// Get all logs, newest first.
