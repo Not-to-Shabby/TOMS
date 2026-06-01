@@ -41,6 +41,7 @@
 #include "espnow_comm.h"
 #include "protocol.h"
 #include "nfc_sync.h"
+#include "debug_serial.h"
 #include "lvgl.h"
 
 static const char *TAG = "toms_slave";
@@ -192,6 +193,7 @@ static void on_button_event(toms_button_event_t event)
     toms_ui_screen_t curr = toms_ui_get_current();
 
     if (event == TOMS_BTN_LONG_PRESS) {
+        debug_serial_send_button(event);
         if (curr == TOMS_UI_WELCOME) {
             ESP_LOGI(TAG, "Debug long press detected -> show receipt");
             s_debug_active = true;
@@ -203,6 +205,7 @@ static void on_button_event(toms_button_event_t event)
     }
 
     if (event == TOMS_BTN_HOLD_1S) {
+        debug_serial_send_button(event);
         if (curr == TOMS_UI_FARE || curr == TOMS_UI_QR) {
             s_held_screen_before_progress = curr;
             toms_ui_show_error("Release in 2s...");
@@ -212,6 +215,7 @@ static void on_button_event(toms_button_event_t event)
     }
 
     if (event == TOMS_BTN_HOLD_2S) {
+        debug_serial_send_button(event);
         if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
             toms_ui_show_error("Release in 1s...");
             toms_sleep_reset_idle();
@@ -220,6 +224,7 @@ static void on_button_event(toms_button_event_t event)
     }
 
     if (event == TOMS_BTN_HOLD_3S) {
+        debug_serial_send_button(event);
         if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
             ESP_LOGI(TAG, "Hold 3s reached -> request release");
             s_release_requested = true;
@@ -256,6 +261,7 @@ static void on_button_event(toms_button_event_t event)
     }
 
     if (event == TOMS_BTN_PRESS) {
+        debug_serial_send_button(event);
         ESP_LOGI(TAG, "=> Physical Master/Dock connection detected! (GPIO 4 LOW)");
         ESP_LOGI(TAG, "Button event: PRESS (flagging s_button_pressed)");
         s_button_pressed = true;
@@ -309,6 +315,9 @@ static void espnow_handler_task(void *arg)
                 if (uid_matches(cmd->target_uid)) {
                     ESP_LOGI(TAG, "ESP-NOW board command validated — fare=%d",
                              cmd->fare_centavos);
+                    debug_serial_send_espnow_rx(event.packet.msg_type,
+                                                cmd->fare_centavos,
+                                                cmd->seat_number);
                     memcpy(&s_pending_cmd, cmd, sizeof(toms_board_command_t));
                     s_board_cmd_pending = true;
 
@@ -381,6 +390,7 @@ static void espnow_handler_task(void *arg)
 
         case TOMS_MSG_ACK_MASTER:
             ESP_LOGI(TAG, "ACK received from master");
+            debug_serial_send_espnow_rx(event.packet.msg_type, 0, 0);
             /* Issue 5 fixed: set EventGroup bit (atomic cross-core signal) */
             xEventGroupSetBits(s_evt_group, EVT_ACK_RECEIVED);
             break;
@@ -444,8 +454,10 @@ static void execute_boarding(const toms_board_command_t *cmd)
     toms_packet_build(&pkt, TOMS_MSG_PASSENGER_BOARD, s_seq++,
                       (const uint8_t *)&pe, sizeof(pe));
     toms_espnow_send(s_master_mac, &pkt);
+    debug_serial_send_espnow_tx(TOMS_MSG_PASSENGER_BOARD, s_seq - 1);
 
     toms_ui_show_welcome();
+    debug_serial_send_state("welcome", 0, 0, s_master_mac, s_seq);
 }
 
 /* ── Battery ADC Helpers ───────────────────────────────────────────────── */
@@ -542,7 +554,8 @@ static void send_heartbeat(void)
     toms_packet_build(&pkt, TOMS_MSG_HEARTBEAT, s_seq++,
                       (const uint8_t *)&hb, sizeof(hb));
     toms_espnow_send(s_master_mac, &pkt);
-    ESP_LOGD(TAG, "Heartbeat sent — battery %d mV (%d%%)", batt_mv, batt_pct);
+    ESP_LOGI(TAG, "Heartbeat sent — battery %d mV (%d%%)", batt_mv, batt_pct);
+    debug_serial_send_batt(batt_mv, batt_pct);
 }
 
 /* ── LVGL Timer Task ─────────────────────────────────────────────────── */
@@ -589,6 +602,7 @@ static void main_logic_task(void *arg)
              * pick up a stale ACK from a previous operation. */
             xEventGroupClearBits(s_evt_group, EVT_ACK_RECEIVED);
             toms_espnow_send(s_master_mac, &pkt);
+            debug_serial_send_espnow_tx(TOMS_MSG_RELEASE, s_seq - 1);
 
             toms_ui_show_processing();
 
@@ -603,8 +617,10 @@ static void main_logic_task(void *arg)
                 ESP_LOGI(TAG, "Release ACKed by master");
             } else {
                 ESP_LOGW(TAG, "Release ACK timeout");
+                debug_serial_send_timeout("release_ack");
             }
             toms_ui_show_welcome();
+            debug_serial_send_state("welcome", 0, 0, s_master_mac, s_seq);
         }
 
         /* Priority 2: Button pressed — show processing, start non-blocking wait */
@@ -625,6 +641,7 @@ static void main_logic_task(void *arg)
                 /* Timeout: master never sent a board command */
                 s_waiting_for_board = false;
                 ESP_LOGW(TAG, "Master timeout waiting for board command");
+                debug_serial_send_timeout("board_wait");
                 toms_ui_show_error("Master Timeout");
                 /* Use a short non-blocking delay via vTaskDelay — only 2s not 5s */
                 vTaskDelay(BUTTON_ERROR_SHOW_TICKS);
@@ -668,6 +685,9 @@ void app_main(void)
     /* ── Step 2b: FreeRTOS synchronization primitives ───────────────── */
     s_evt_group = xEventGroupCreate();
     configASSERT(s_evt_group != NULL);
+
+    /* ── Step 2c: Debug UART (GPIO17 TX → STM32 PA3 RX) ─────────────── */
+    debug_serial_init();
 
     /* ── Step 3: Crypto ─────────────────────────────────────────────── */
     toms_crypto_init();
