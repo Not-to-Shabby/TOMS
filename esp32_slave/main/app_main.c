@@ -69,13 +69,8 @@ static toms_board_command_t s_pending_cmd;          /* Latest board command payl
 static volatile bool s_debug_active      = false;  /* Debug mode active */
 static bool          s_debug_qr_shown    = false;
 static toms_debug_receipt_t s_debug_receipt;
-static volatile bool s_ack_received      = false;
-static volatile bool s_release_requested = false;
-static volatile toms_ui_screen_t s_held_screen_before_progress = TOMS_UI_WELCOME;
 
 /* ── Forward Declarations ─────────────────────────────────────────────── */
-
-static void restore_passenger_screen(void);
 
 static void on_button_event(toms_button_event_t event);
 static void on_nfc_board_command(const toms_board_command_t *cmd);
@@ -150,82 +145,19 @@ static void build_debug_qr(const toms_debug_receipt_t *receipt, char *out, size_
 
 /* ── Button Handler ───────────────────────────────────────────────────── */
 
-static void restore_passenger_screen(void)
-{
-    if (s_held_screen_before_progress == TOMS_UI_FARE) {
-        char route_str[16];
-        snprintf(route_str, sizeof(route_str), "Route %d", s_pending_cmd.route_id);
-        toms_ui_show_fare(route_str, s_pending_cmd.fare_centavos, s_pending_cmd.seat_number);
-    } else if (s_held_screen_before_progress == TOMS_UI_QR) {
-        char qr_buf[160];
-        char uid_hex[13];
-        snprintf(uid_hex, sizeof(uid_hex), "%02X%02X%02X%02X%02X%02X",
-                 s_slave_uid[0], s_slave_uid[1], s_slave_uid[2],
-                 s_slave_uid[3], s_slave_uid[4], s_slave_uid[5]);
-        if (toms_qr_build_receipt(
-                (const char *)s_pending_cmd.vehicle_id,
-                s_pending_cmd.timestamp,
-                s_pending_cmd.fare_centavos,
-                uid_hex,
-                qr_buf, sizeof(qr_buf))) {
-            toms_ui_show_qr(qr_buf);
-        }
-    }
-}
-
 static void on_button_event(toms_button_event_t event)
 {
-    toms_ui_screen_t curr = toms_ui_get_current();
-
     if (event == TOMS_BTN_LONG_PRESS) {
-        if (curr == TOMS_UI_WELCOME) {
-            ESP_LOGI(TAG, "Debug long press detected -> show receipt");
-            s_debug_active = true;
-            s_debug_qr_shown = false;
-            build_debug_receipt(&s_debug_receipt);
-            toms_ui_show_debug_receipt(&s_debug_receipt);
-        }
-        return;
-    }
-
-    if (event == TOMS_BTN_HOLD_1S) {
-        if (curr == TOMS_UI_FARE || curr == TOMS_UI_QR) {
-            s_held_screen_before_progress = curr;
-            toms_ui_show_error("Release in 2s...");
-            toms_sleep_reset_idle();
-        }
-        return;
-    }
-
-    if (event == TOMS_BTN_HOLD_2S) {
-        if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
-            toms_ui_show_error("Release in 1s...");
-            toms_sleep_reset_idle();
-        }
-        return;
-    }
-
-    if (event == TOMS_BTN_HOLD_3S) {
-        if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
-            ESP_LOGI(TAG, "Hold 3s reached -> request release");
-            s_release_requested = true;
-            toms_sleep_reset_idle();
-        }
-        return;
-    }
-
-    if (event == TOMS_BTN_RELEASE) {
-        if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
-            if (!s_release_requested) {
-                ESP_LOGI(TAG, "Button released early -> restore screen");
-                restore_passenger_screen();
-            }
-            s_held_screen_before_progress = TOMS_UI_WELCOME;
-        }
+        ESP_LOGI(TAG, "Debug long press detected -> show receipt");
+        s_debug_active = true;
+        s_debug_qr_shown = false;
+        build_debug_receipt(&s_debug_receipt);
+        toms_ui_show_debug_receipt(&s_debug_receipt);
         return;
     }
 
     if (event == TOMS_BTN_PRESS && s_debug_active) {
+        toms_ui_screen_t curr = toms_ui_get_current();
         if (curr == TOMS_UI_DEBUG_RECEIPT) {
             ESP_LOGI(TAG, "Debug mode: receipt -> QR");
             char qr_buf[200];
@@ -363,11 +295,6 @@ static void espnow_handler_task(void *arg)
 
         case TOMS_MSG_HEARTBEAT:
             ESP_LOGD(TAG, "Heartbeat from master");
-            break;
-
-        case TOMS_MSG_ACK_MASTER:
-            ESP_LOGI(TAG, "ACK received from master");
-            s_ack_received = true;
             break;
 
         default:
@@ -556,38 +483,6 @@ static void main_logic_task(void *arg)
             s_board_cmd_pending = false;
             s_button_pressed    = false;  /* Clear manual flag too */
             execute_boarding(&s_pending_cmd);
-        }
-
-        /* Priority 1.5: Manual release request */
-        if (s_release_requested) {
-            ESP_LOGI(TAG, "Release flag seen -> sending RELEASE to master");
-            s_release_requested = false;
-
-            toms_packet_t pkt;
-            toms_packet_build(&pkt, TOMS_MSG_RELEASE, s_seq++,
-                              s_slave_uid, 6);
-            s_ack_received = false;
-            toms_espnow_send(s_master_mac, &pkt);
-
-            toms_ui_show_processing();
-
-            int wait_ms = 0;
-            bool got_ack = false;
-            while (wait_ms < 3000) {
-                if (s_ack_received) {
-                    got_ack = true;
-                    break;
-                }
-                vTaskDelay(pdMS_TO_TICKS(50));
-                wait_ms += 50;
-            }
-
-            if (got_ack) {
-                ESP_LOGI(TAG, "Release ACKed by master");
-            } else {
-                ESP_LOGW(TAG, "Release ACK timeout");
-            }
-            toms_ui_show_welcome();
         }
 
         /* Priority 2: Manual button — just notify master, don't self-board */

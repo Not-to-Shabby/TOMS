@@ -29,9 +29,6 @@ typedef enum {
     TOMS_BTN_PRESS,         /**< Short press detected */
     TOMS_BTN_LONG_PRESS,    /**< Long press detected */
     TOMS_BTN_RELEASE,       /**< Button released */
-    TOMS_BTN_HOLD_1S,       /**< Held for 1 second */
-    TOMS_BTN_HOLD_2S,       /**< Held for 2 seconds */
-    TOMS_BTN_HOLD_3S,       /**< Held for 3 seconds */
 } toms_button_event_t;
 
 /**

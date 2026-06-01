@@ -84,9 +84,6 @@ void toms_button_task(void *arg)
     bool     was_pressed = false;
     int64_t  press_time  = 0;
     bool     long_fired  = false;
-    bool     hold_1s_fired = false;
-    bool     hold_2s_fired = false;
-    bool     hold_3s_fired = false;
 
     while (1) {
         if (s_irq_flag) {
@@ -98,9 +95,6 @@ void toms_button_task(void *arg)
             if (toms_button_is_pressed() && !was_pressed) {
                 was_pressed = true;
                 long_fired  = false;
-                hold_1s_fired = false;
-                hold_2s_fired = false;
-                hold_3s_fired = false;
                 press_time  = esp_timer_get_time();
                 ESP_LOGI(TAG, "Button pressed");
             }
@@ -119,31 +113,13 @@ void toms_button_task(void *arg)
 
                 if (s_callback) s_callback(TOMS_BTN_RELEASE);
 
-            } else {
+            } else if (!long_fired) {
+                /* Still pressed — check for long press */
                 int64_t duration = (esp_timer_get_time() - press_time) / 1000;
-
-                if (!long_fired && duration >= TOMS_BUTTON_LONG_PRESS_MS) {
+                if (duration >= TOMS_BUTTON_LONG_PRESS_MS) {
                     long_fired = true;
                     ESP_LOGI(TAG, "Long press detected");
                     if (s_callback) s_callback(TOMS_BTN_LONG_PRESS);
-                }
-
-                if (!hold_1s_fired && duration >= 1000) {
-                    hold_1s_fired = true;
-                    ESP_LOGI(TAG, "Hold 1s detected");
-                    if (s_callback) s_callback(TOMS_BTN_HOLD_1S);
-                }
-
-                if (!hold_2s_fired && duration >= 2000) {
-                    hold_2s_fired = true;
-                    ESP_LOGI(TAG, "Hold 2s detected");
-                    if (s_callback) s_callback(TOMS_BTN_HOLD_2S);
-                }
-
-                if (!hold_3s_fired && duration >= 3000) {
-                    hold_3s_fired = true;
-                    ESP_LOGI(TAG, "Hold 3s detected");
-                    if (s_callback) s_callback(TOMS_BTN_HOLD_3S);
                 }
             }
         }
