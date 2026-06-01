@@ -30,6 +30,21 @@ class UsbService extends ChangeNotifier {
       StreamController<PassengerLog>.broadcast();
   Stream<PassengerLog> get passengerStream => _passengerController.stream;
 
+  // Event stream for NFC tap events
+  final StreamController<NfcTapEvent> _nfcTapController =
+      StreamController<NfcTapEvent>.broadcast();
+  Stream<NfcTapEvent> get nfcTapStream => _nfcTapController.stream;
+
+  // Event stream for button press notifications
+  final StreamController<String> _buttonPressController =
+      StreamController<String>.broadcast();
+  Stream<String> get buttonPressStream => _buttonPressController.stream;
+
+  // Event stream for slot release notifications
+  final StreamController<String> _releaseController =
+      StreamController<String>.broadcast();
+  Stream<String> get releaseStream => _releaseController.stream;
+
   // Event stream for dock state changes
   final StreamController<bool> _dockController =
       StreamController<bool>.broadcast();
@@ -181,6 +196,23 @@ class UsbService extends ChangeNotifier {
           _passengerController.add(log);
           break;
 
+        case 'nfc_tap':
+          final tap = NfcTapEvent.fromJson(json);
+          _nfcTapController.add(tap);
+          break;
+
+        case 'button_press':
+          final mac = json['mac'] as String? ?? json['uid'] as String? ?? '';
+          final formattedMac = mac.replaceAll(':', '');
+          _buttonPressController.add(formattedMac);
+          break;
+
+        case 'release':
+          final mac = json['mac'] as String? ?? json['uid'] as String? ?? '';
+          final formattedMac = mac.replaceAll(':', '');
+          _releaseController.add(formattedMac);
+          break;
+
         case 'dock':
           final state = json['state'] as String?;
           _dockController.add(state == 'connected');
@@ -222,6 +254,9 @@ class UsbService extends ChangeNotifier {
   void dispose() {
     disconnect();
     _passengerController.close();
+    _nfcTapController.close();
+    _buttonPressController.close();
+    _releaseController.close();
     _dockController.close();
     super.dispose();
   }

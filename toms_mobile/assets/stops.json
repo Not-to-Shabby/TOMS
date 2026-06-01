@@ -1,0 +1,11 @@
+[
+  {"id": 1, "name": "Buru-un (Start)", "lat": 8.1947, "lon": 124.1706},
+  {"id": 2, "name": "Fuentes", "lat": 8.2033, "lon": 124.1798},
+  {"id": 3, "name": "Nunucan", "lat": 8.2078, "lon": 124.1855},
+  {"id": 4, "name": "Tominobo", "lat": 8.2144, "lon": 124.2033},
+  {"id": 5, "name": "Camague", "lat": 8.2211, "lon": 124.2215},
+  {"id": 6, "name": "Suarez", "lat": 8.2230, "lon": 124.2300},
+  {"id": 7, "name": "Tubod", "lat": 8.2255, "lon": 124.2365},
+  {"id": 8, "name": "Mahayahay", "lat": 8.2272, "lon": 124.2400},
+  {"id": 9, "name": "City Proper / Post Office", "lat": 8.2285, "lon": 124.2430}
+]

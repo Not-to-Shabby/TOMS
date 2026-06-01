@@ -1,0 +1,5 @@
+{
+  "CDB-001": { "name": "CDB-001", "capacity": 20, "route": "Dalipuga" },
+  "CDB-002": { "name": "CDB-002", "capacity": 20, "route": "Dalipuga" },
+  "CDB-003": { "name": "CDB-003", "capacity": 20, "route": "Buru-un" }
+}

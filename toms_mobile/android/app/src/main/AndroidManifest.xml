@@ -2,6 +2,19 @@
     <!-- USB Host permission for ESP32 OTG -->
     <uses-feature android:name="android.hardware.usb.host" android:required="true" />
 
+    <!-- Phase 3: GPS location permissions -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+
+    <!-- Phase 3: Vibration -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- Phase 3: Local notifications -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application
         android:label="TOMS"
         android:name="${applicationName}"

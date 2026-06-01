@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: toms_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: toms_user
+      POSTGRES_PASSWORD: toms_password
+      POSTGRES_DB: toms_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: toms_api
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://toms_user:toms_password@db:5432/toms_db
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:
