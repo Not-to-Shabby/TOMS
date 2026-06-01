@@ -329,7 +329,13 @@ void loop()
         if (c == '\n' || c == '\r') {
             if (g_rxIdx > 0) {
                 g_rxBuf[g_rxIdx] = '\0';
-                parsePacket(g_rxBuf);
+                if (g_rxBuf[0] == '{') {
+                    parsePacket(g_rxBuf);
+                } else {
+                    /* It is a regular console log statement from ESP32 */
+                    Serial.print("[LOG] ");
+                    Serial.println(g_rxBuf);
+                }
                 g_rxIdx = 0;
             }
         } else {

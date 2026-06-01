@@ -63,6 +63,12 @@ static void dbg_send(const char *line)
 
 void debug_serial_init(void)
 {
+    if (uart_is_driver_installed(TOMS_DBG_UART_PORT)) {
+        ESP_LOGI(TAG, "Debug serial: using already installed UART%d driver", TOMS_DBG_UART_PORT);
+        dbg_send("{\"dbg\":\"boot\",\"msg\":\"TOMS Slave debug UART ready (Shared)\"}");
+        return;
+    }
+
     uart_config_t cfg = {
         .baud_rate  = TOMS_DBG_BAUD_RATE,
         .data_bits  = UART_DATA_8_BITS,
