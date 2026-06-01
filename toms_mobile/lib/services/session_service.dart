@@ -13,6 +13,12 @@ class SessionService extends ChangeNotifier {
   double routeBaseFare = 15.0;
   double routePerKmFare = 2.5;
 
+  /// Base fare in centavos (for USB fare-dict sync to Master hardware).
+  int get baseFareCentavos => (routeBaseFare * 100).round();
+
+  /// Per-km rate in centavos (for USB fare-dict sync to Master hardware).
+  int get perKmCentavos => (routePerKmFare * 100).round();
+
   static const _uuid = Uuid();
 
   void updateFareMatrix(double base, double perKm) {

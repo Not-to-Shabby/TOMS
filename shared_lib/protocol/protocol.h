@@ -48,6 +48,9 @@ typedef enum {
     TOMS_MSG_NFC_ACK            = 0x22,  /**< Compact NFC acknowledgment */
     TOMS_MSG_NACK               = 0x2F,  /**< Negative acknowledgment */
 
+    /* Master → Slave (Alarm) */
+    TOMS_MSG_ALARM_CMD          = 0x30,  /**< Proximity alarm command to slave */
+
     /* Utility */
     TOMS_MSG_HEARTBEAT          = 0xF0,  /**< Heartbeat / ping */
     TOMS_MSG_TIME_SYNC          = 0xF1,  /**< Epoch timestamp sync */
@@ -130,6 +133,24 @@ typedef struct __attribute__((packed)) {
     uint8_t  route_id;              /**< Route identifier */
     uint8_t  vehicle_id[16];        /**< Vehicle UUID for QR receipt */
 } toms_board_command_t;
+
+/* ── Alarm Command Payload (Master → Slave) ──────────────────────────────── */
+
+/**
+ * @brief Proximity alarm command sent by Master to a specific Slave.
+ *
+ * Slave MUST validate target_uid against its own UID before processing.
+ * On match, the Slave shows a red alarm screen prompting the passenger to pay.
+ *
+ * alarm_type values:
+ *   0 = Proximity warning  (approaching destination, N minutes away)
+ *   1 = Final stop         (vehicle is at/past the destination stop)
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t  target_uid[16];   /**< UID of the intended slave (anti-fraud) */
+    uint8_t  alarm_type;       /**< 0 = proximity warning, 1 = final stop */
+    uint8_t  minutes_left;     /**< Estimated minutes to destination (0 if final) */
+} toms_alarm_cmd_t;
 
 /* ── NFC Compact Board Command (dictionary-based, 6 bytes) ────────────── */
 

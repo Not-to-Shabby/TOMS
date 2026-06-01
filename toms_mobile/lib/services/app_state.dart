@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
@@ -300,6 +301,27 @@ class AppState extends ChangeNotifier {
     );
 
     notifyListeners(); // refresh banner
+
+    // ── Phase 5: Hardware alarm ──────────────────────────────────────────────
+    // Also trigger the slave's physical display alarm via Master's ESP-NOW relay.
+    // Estimate remaining minutes from current GPS distance at ~30 km/h average.
+    if (usbService.isConnected) {
+      final pos = gpsService.currentPosition;
+      int estimatedMinutes = 2; // safe default
+      if (pos != null) {
+        final distanceM = Geolocator.distanceBetween(
+          pos.latitude,
+          pos.longitude,
+          session.destination.lat,
+          session.destination.lon,
+        );
+        // 30 km/h = 500 m/min → convert distance to minutes, floor at 1
+        estimatedMinutes = (distanceM / 500).ceil().clamp(1, 99);
+      }
+
+      // alarm_type 0 = approaching (show minutes countdown on slave screen)
+      await usbService.sendAlarmCommand(session.slaveUid, 0, estimatedMinutes);
+    }
   }
 
   // ── USB Event Handlers ───────────────────────────────────────
@@ -508,6 +530,29 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> connectUsb() async => usbService.connect();
+
+  /// Push the active route fare configuration to the Master hardware.
+  ///
+  /// Should be called after vehicle assignment or whenever the route changes.
+  /// The Master saves the fare dict to NVS and broadcasts it to all slaves
+  /// via `TOMS_MSG_FARE_TABLE_UPDATE` over ESP-NOW.
+  Future<void> syncFareConfigToMaster() async {
+    if (!usbService.isConnected) {
+      debugPrint('syncFareConfigToMaster: USB not connected, skipping');
+      return;
+    }
+
+    final baseFare = (sessionService.baseFareCentavos).round();
+    final perKm = (sessionService.perKmCentavos).round();
+
+    await usbService.syncFareTable(
+      baseFareCentavos: baseFare,
+      perKmCentavos: perKm,
+    );
+
+    debugPrint('syncFareConfigToMaster: sent base=\u20b1${baseFare / 100} '
+        'per_km=\u20b1${perKm / 100}');
+  }
 
   @override
   void dispose() {

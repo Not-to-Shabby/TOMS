@@ -65,6 +65,8 @@ static void espnow_handler_task(void *arg);
 static void storage_flush_task(void *arg);
 static void forward_passenger_to_phone(const toms_passenger_event_t *event);
 static void dispatch_board_command_espnow(const uint8_t *slave_mac);
+static void dispatch_alarm_command_espnow(const uint8_t *slave_mac,
+                                          uint8_t alarm_type, uint8_t minutes_left);
 
 /* ── USB Message Handler ──────────────────────────────────────────────── */
 
@@ -116,10 +118,72 @@ static void on_usb_message(const char *data, size_t len)
                  (int)toms_nfc_sync_get_state());
         toms_usb_cdc_send(resp);
 
+    } else if (strstr(data, "\"send_alarm\"")) {
+        /* Parse: {"cmd":"send_alarm","uid":"AABBCCDDEEFF","alarm_type":0,"minutes":2} */
+        uint8_t target_mac[6] = {0};
+        int alarm_type = 0;
+        int minutes_left = 0;
+
+        /* Simple hex UID parse (12 chars = 6 bytes) */
+        const char *uid_start = strstr(data, "\"uid\":\"");
+        if (uid_start) {
+            uid_start += 8; /* skip "uid":" */
+            for (int i = 0; i < 6; i++) {
+                char byte_str[3] = {uid_start[i*2], uid_start[i*2+1], '\0'};
+                target_mac[i] = (uint8_t)strtol(byte_str, NULL, 16);
+            }
+        }
+
+        const char *atype = strstr(data, "\"alarm_type\":");
+        if (atype) alarm_type = atoi(atype + 13);
+
+        const char *mins = strstr(data, "\"minutes\":");
+        if (mins) minutes_left = atoi(mins + 10);
+
+        if (uid_start) {
+            toms_espnow_add_peer(target_mac, NULL, TOMS_ESPNOW_CHANNEL);
+            dispatch_alarm_command_espnow(target_mac, (uint8_t)alarm_type, (uint8_t)minutes_left);
+            ESP_LOGI(TAG, "Alarm dispatched to " MACSTR " type=%d min=%d",
+                     MAC2STR(target_mac), alarm_type, minutes_left);
+            toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"send_alarm\"}");
+        } else {
+            toms_usb_cdc_send("{\"evt\":\"error\",\"msg\":\"send_alarm: missing uid\"}");
+        }
+
     } else if (strstr(data, "\"sync_fare_table\"")) {
-        /* Forward fare table to slave via ESP-NOW */
-        /* TODO: Parse fare data and build config payload */
-        ESP_LOGI(TAG, "Fare table sync requested (not yet implemented)");
+        /* Parse: {"cmd":"sync_fare_table","base_fare":1300,"per_km":200,"stop_count":5,
+         *          "entries":[{"fare_id":1,"fare_centavos":1300},...]} */
+        const char *bf = strstr(data, "\"base_fare\":");
+        const char *pk = strstr(data, "\"per_km\":");
+        uint16_t base_fare  = bf ? (uint16_t)atoi(bf + 12) : s_fare_centavos;
+        uint16_t per_km     = pk ? (uint16_t)atoi(pk + 9)  : 200;
+
+        s_fare_centavos = base_fare;
+
+        /* Build a fare dict with a single default entry (extend for full stop matrix) */
+        toms_fare_dict_t new_dict = {0};
+        new_dict.count = 1;
+        new_dict.entries[0].fare_id        = 1;
+        new_dict.entries[0].fare_centavos  = base_fare;
+        new_dict.entries[0].per_km_centavos = per_km;
+        memcpy(&s_fare_dict, &new_dict, sizeof(toms_fare_dict_t));
+        toms_fare_dict_save(&s_fare_dict);
+
+        /* Broadcast FARE_TABLE_UPDATE to all known slaves via ESP-NOW */
+        toms_config_payload_t cfg = {0};
+        memcpy(cfg.vehicle_id, s_vehicle_id, 16);
+        cfg.route_id          = s_route_id;
+        cfg.base_fare_centavos = base_fare;
+        cfg.per_km_centavos    = per_km;
+        cfg.epoch_time         = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+
+        toms_packet_t pkt;
+        toms_packet_build(&pkt, TOMS_MSG_FARE_TABLE_UPDATE, s_espnow_seq++,
+                          (const uint8_t *)&cfg, sizeof(cfg));
+        toms_espnow_send(s_slave_mac, &pkt);
+
+        ESP_LOGI(TAG, "Fare table synced: base=%d per_km=%d, broadcast to slaves",
+                 base_fare, per_km);
         toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"sync_fare_table\"}");
 
     } else {
@@ -271,6 +335,38 @@ static void dispatch_board_command_espnow(const uint8_t *slave_mac)
                  MAC2STR(slave_mac));
     } else {
         ESP_LOGE(TAG, "Failed to send BOARD_COMMAND via ESP-NOW");
+    }
+}
+
+/* ── ESP-NOW Alarm Command Dispatch ──────────────────────────────────── */
+
+/**
+ * Send a TOMS_MSG_ALARM_CMD via ESP-NOW to alert a specific Slave passenger
+ * that they are approaching their destination and need to pay.
+ *
+ * @param slave_mac   6-byte MAC of the target slave.
+ * @param alarm_type  0 = approaching (show minutes), 1 = final stop.
+ * @param minutes_left Estimated minutes remaining (0 for final stop).
+ */
+static void dispatch_alarm_command_espnow(
+        const uint8_t *slave_mac, uint8_t alarm_type, uint8_t minutes_left)
+{
+    toms_alarm_cmd_t alarm = {0};
+
+    /* Use the Slave's MAC as the target_uid (first 6 bytes, zero-padded) */
+    memcpy(alarm.target_uid, slave_mac, 6);
+    alarm.alarm_type   = alarm_type;
+    alarm.minutes_left = minutes_left;
+
+    toms_packet_t pkt;
+    toms_packet_build(&pkt, TOMS_MSG_ALARM_CMD, s_espnow_seq++,
+                      (const uint8_t *)&alarm, sizeof(alarm));
+
+    if (toms_espnow_send(slave_mac, &pkt)) {
+        ESP_LOGI(TAG, "ALARM_CMD sent to " MACSTR " (type=%d, min=%d)",
+                 MAC2STR(slave_mac), alarm_type, minutes_left);
+    } else {
+        ESP_LOGE(TAG, "Failed to send ALARM_CMD via ESP-NOW");
     }
 }
 

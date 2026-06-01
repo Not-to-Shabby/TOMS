@@ -260,6 +260,64 @@ void toms_ui_show_sleep(void)
     UI_UNLOCK();
 }
 
+void toms_ui_show_alarm(uint8_t alarm_type, uint8_t minutes_left)
+{
+    UI_LOCK();
+    s_current = TOMS_UI_ALARM;
+    ui_clear_screen();
+
+    /* Red background — maximum urgency signal */
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, 0);
+
+    /* Header */
+    ui_create_header(LV_SYMBOL_WARNING " ALARM", lv_color_hex(0xB71C1C)); /* dark red */
+
+    /* Central alarm icon */
+    lv_obj_t *icon = lv_label_create(lv_scr_act());
+    lv_label_set_text(icon, LV_SYMBOL_WARNING);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(icon, lv_color_white(), 0);
+    lv_obj_align(icon, LV_ALIGN_TOP_MID, 0, 38);
+
+    /* Main message */
+    lv_obj_t *lbl_main = lv_label_create(lv_scr_act());
+    lv_label_set_text(lbl_main, "PLEASE PAY");
+    lv_obj_set_style_text_align(lbl_main, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl_main, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl_main, &lv_font_montserrat_18, 0);
+    lv_obj_align(lbl_main, LV_ALIGN_CENTER, 0, -8);
+
+    /* Subtitle — minutes remaining or "PAY NOW!" */
+    lv_obj_t *lbl_sub = lv_label_create(lv_scr_act());
+    if (alarm_type == 0 && minutes_left > 0) {
+        lv_label_set_text_fmt(lbl_sub, "~%d min to stop", (int)minutes_left);
+    } else {
+        lv_label_set_text(lbl_sub, "Approaching stop!");
+    }
+    lv_obj_set_style_text_align(lbl_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl_sub, lv_color_white(), 0);
+    lv_obj_set_style_text_font(lbl_sub, &lv_font_montserrat_14, 0);
+    lv_obj_align(lbl_sub, LV_ALIGN_CENTER, 0, 18);
+
+    /* Flashing "PRESS BUTTON" footer */
+    ui_create_footer("PRESS BUTTON TO PAY", lv_color_hex(0xB71C1C));
+
+    /* Opacity blink animation on main label to draw attention */
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, lbl_main);
+    lv_anim_set_exec_cb(&anim, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+    lv_anim_set_values(&anim, LV_OPA_COVER, LV_OPA_30);
+    lv_anim_set_time(&anim, 500);
+    lv_anim_set_playback_time(&anim, 500);
+    lv_anim_set_repeat_count(&anim, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&anim);
+
+    UI_UNLOCK();
+    ESP_LOGI(TAG, "Alarm screen shown: type=%d, minutes=%d", alarm_type, minutes_left);
+}
+
 void toms_ui_show_debug_receipt(const toms_debug_receipt_t *receipt)
 {
     UI_LOCK();

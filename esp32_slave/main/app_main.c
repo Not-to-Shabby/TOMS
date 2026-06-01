@@ -264,6 +264,32 @@ static void espnow_handler_task(void *arg)
             }
             break;
 
+        case TOMS_MSG_ALARM_CMD:
+            if (event.packet.length >= sizeof(toms_alarm_cmd_t)) {
+                const toms_alarm_cmd_t *alarm =
+                    (const toms_alarm_cmd_t *)event.packet.payload;
+
+                /* Anti-fraud UID check — same pattern as BOARD_COMMAND */
+                if (uid_matches(alarm->target_uid)) {
+                    ESP_LOGI(TAG, "Alarm command validated: type=%d, minutes=%d",
+                             alarm->alarm_type, alarm->minutes_left);
+
+                    /* Show alarm screen on the slave display */
+                    toms_ui_show_alarm(alarm->alarm_type, alarm->minutes_left);
+
+                    /* Keep slave awake while alarm is active */
+                    toms_sleep_reset_idle();
+
+                    /* ACK back to master */
+                    toms_packet_t ack;
+                    toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
+                    toms_espnow_send(event.src_mac, &ack);
+                } else {
+                    ESP_LOGW(TAG, "Alarm command UID mismatch — dropped");
+                }
+            }
+            break;
+
         case TOMS_MSG_HEARTBEAT:
             ESP_LOGD(TAG, "Heartbeat from master");
             break;

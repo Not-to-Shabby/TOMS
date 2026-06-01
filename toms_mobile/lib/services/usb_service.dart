@@ -165,6 +165,43 @@ class UsbService extends ChangeNotifier {
     await sendCommand('get_status');
   }
 
+  /// Send a proximity alarm command to the Master for relay to a specific Slave.
+  ///
+  /// The Master will look up the Slave's MAC from [slaveUid] and send a
+  /// `TOMS_MSG_ALARM_CMD` via ESP-NOW, which triggers the red alarm screen.
+  ///
+  /// [alarmType]: 0 = approaching (show minutes), 1 = final stop ("PAY NOW!")
+  /// [minutesLeft]: Estimated minutes to destination (ignored for type=1).
+  Future<void> sendAlarmCommand(
+      String slaveUid, int alarmType, int minutesLeft) async {
+    // Normalize UID — strip colons, uppercase
+    final uid = slaveUid.replaceAll(':', '').toUpperCase();
+    await sendCommand('send_alarm', {
+      'uid': uid,
+      'alarm_type': alarmType,
+      'minutes': minutesLeft,
+    });
+    debugPrint('USB TX: send_alarm uid=$uid type=$alarmType min=$minutesLeft');
+  }
+
+  /// Push the current route fare configuration to the Master.
+  ///
+  /// The Master saves the fare dictionary to NVS and broadcasts
+  /// `TOMS_MSG_FARE_TABLE_UPDATE` to all known Slaves via ESP-NOW.
+  ///
+  /// [baseFareCentavos]: Base fare in centavos (e.g. 1300 = ₱13.00).
+  /// [perKmCentavos]: Per-km rate in centavos (e.g. 250 = ₱2.50/km).
+  Future<void> syncFareTable({
+    required int baseFareCentavos,
+    required int perKmCentavos,
+  }) async {
+    await sendCommand('sync_fare_table', {
+      'base_fare': baseFareCentavos,
+      'per_km': perKmCentavos,
+    });
+    debugPrint('USB TX: sync_fare_table base=$baseFareCentavos per_km=$perKmCentavos');
+  }
+
   /// Process incoming JSON line from the Master.
   void _onData(String data) {
     final trimmed = data.trim();

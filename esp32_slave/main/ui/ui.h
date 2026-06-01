@@ -23,6 +23,7 @@ typedef enum {
     TOMS_UI_QR,             /**< QR receipt code */
     TOMS_UI_ERROR,          /**< Error: "Please try again" */
     TOMS_UI_SLEEP,          /**< Pre-sleep: screen off */
+    TOMS_UI_ALARM,          /**< Proximity alarm: red screen, "PLEASE PAY" */
     TOMS_UI_DEBUG_RECEIPT,  /**< Debug: Receipt information */
 } toms_ui_screen_t;
 
@@ -92,6 +93,17 @@ void toms_ui_show_sleep(void);
  * @brief Show the debug receipt screen with provided values.
  */
 void toms_ui_show_debug_receipt(const toms_debug_receipt_t *receipt);
+
+/**
+ * @brief Show the proximity alarm screen.
+ *
+ * Displays a red-background screen with a flashing "\u26a0 PLEASE PAY" message
+ * to urgently prompt the passenger to pay before reaching their destination.
+ *
+ * @param alarm_type   0 = approaching (show minutes), 1 = final stop ("PAY NOW!")
+ * @param minutes_left Estimated minutes to destination (ignored when alarm_type=1).
+ */
+void toms_ui_show_alarm(uint8_t alarm_type, uint8_t minutes_left);
 
 /**
  * @brief Thread-safe wrapper for LVGL timer handler.
