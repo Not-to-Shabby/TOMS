@@ -63,24 +63,10 @@ static void lv_tick_task(void *arg)
 
 static void backlight_init(void)
 {
-    ledc_timer_config_t timer_cfg = {
-        .speed_mode      = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num       = LEDC_TIMER_0,
-        .freq_hz         = 5000,
-        .clk_cfg         = LEDC_AUTO_CLK,
-    };
-    ledc_timer_config(&timer_cfg);
-
-    ledc_channel_config_t ch_cfg = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel    = LEDC_CHANNEL_0,
-        .timer_sel  = LEDC_TIMER_0,
-        .gpio_num   = TOMS_LCD_PIN_LED,
-        .duty       = 200,  /* ~80% brightness default */
-        .hpoint     = 0,
-    };
-    ledc_channel_config(&ch_cfg);
+    ESP_LOGI(TAG, "Initializing P-channel backlight GPIO%d (default OFF/HIGH)...", TOMS_LCD_PIN_LED);
+    gpio_reset_pin(TOMS_LCD_PIN_LED);
+    gpio_set_direction(TOMS_LCD_PIN_LED, GPIO_MODE_OUTPUT);
+    gpio_set_level(TOMS_LCD_PIN_LED, 1); /* HIGH = MOSFET OFF */
 }
 
 /* ── Public API ───────────────────────────────────────────────────────── */
@@ -171,13 +157,13 @@ int toms_display_init(void)
 
 void toms_display_set_backlight(uint8_t brightness)
 {
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, brightness);
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    /* brightness > 0 -> turn ON (LOW), otherwise turn OFF (HIGH) */
+    gpio_set_level(TOMS_LCD_PIN_LED, brightness > 0 ? 0 : 1);
 }
 
 void toms_display_backlight(bool on)
 {
-    toms_display_set_backlight(on ? 200 : 0);
+    toms_display_set_backlight(on ? 1 : 0);
 }
 
 void *toms_display_get_panel(void)
