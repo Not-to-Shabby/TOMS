@@ -31,7 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (mounted) {
       setState(() => _isLoading = false);
       if (!success) {
-        setState(() => _error = 'Invalid credentials. Use any username and "password123".');
+        setState(() => _error = 'Invalid credentials. Please Try Again.');
       }
     }
   }
@@ -76,7 +76,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
               ),
               const SizedBox(height: 48),
-              
+
               if (_error != null)
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -84,16 +84,25 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: BoxDecoration(
                     color: TomsTheme.danger.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: TomsTheme.danger.withValues(alpha: 0.5)),
+                    border: Border.all(
+                      color: TomsTheme.danger.withValues(alpha: 0.5),
+                    ),
                   ),
                   child: Row(
                     children: [
-                      const Icon(LucideIcons.alertCircle, color: TomsTheme.danger, size: 20),
+                      const Icon(
+                        LucideIcons.alertCircle,
+                        color: TomsTheme.danger,
+                        size: 20,
+                      ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
                           _error!,
-                          style: const TextStyle(color: TomsTheme.danger, fontSize: 13),
+                          style: const TextStyle(
+                            color: TomsTheme.danger,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ],
@@ -106,7 +115,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 decoration: InputDecoration(
                   labelText: 'Username (Conductor Name)',
                   labelStyle: const TextStyle(color: TomsTheme.textSecondary),
-                  prefixIcon: const Icon(LucideIcons.user, color: TomsTheme.textSecondary),
+                  prefixIcon: const Icon(
+                    LucideIcons.user,
+                    color: TomsTheme.textSecondary,
+                  ),
                   filled: true,
                   fillColor: TomsTheme.bgCard,
                   border: OutlineInputBorder(
@@ -127,7 +139,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 decoration: InputDecoration(
                   labelText: 'Password',
                   labelStyle: const TextStyle(color: TomsTheme.textSecondary),
-                  prefixIcon: const Icon(LucideIcons.lock, color: TomsTheme.textSecondary),
+                  prefixIcon: const Icon(
+                    LucideIcons.lock,
+                    color: TomsTheme.textSecondary,
+                  ),
                   filled: true,
                   fillColor: TomsTheme.bgCard,
                   border: OutlineInputBorder(
