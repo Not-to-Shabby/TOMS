@@ -1,0 +1,32 @@
+# =============================================================================
+# TOMS Slave - SDK Configuration Defaults
+# =============================================================================
+
+# --- Wi-Fi (required for ESP-NOW) ---
+CONFIG_ESP_WIFI_ENABLED=y
+
+# --- ESP-NOW ---
+CONFIG_ESP_WIFI_ESPNOW_MAX_ENCRYPT_NUM=2
+
+# --- NVS ---
+CONFIG_NVS_ENCRYPTION=n
+
+# --- mbedTLS (AES-256) ---
+CONFIG_MBEDTLS_AES_C=y
+CONFIG_MBEDTLS_CIPHER_MODE_CBC=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- Console output via UART ---
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+
+# --- Deep Sleep ---
+CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP=y
+
+# --- SPI LCD ---
+CONFIG_LCD_PANEL_IO_FORMAT_BUF_SIZE=32

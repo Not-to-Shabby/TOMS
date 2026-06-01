@@ -1,0 +1,8 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required: TinyUSB for USB CDC device mode
+  espressif/esp_tinyusb: "^1"
+  
+  ## ESP-IDF core components (auto-resolved, listed for clarity)
+  idf:
+    version: ">=5.0.0"

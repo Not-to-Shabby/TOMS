@@ -1,0 +1,32 @@
+idf_component_register(
+    SRC_DIRS
+        "."
+        "usb_cdc"
+        "nfc_sync"
+        "storage"
+        "power"
+        "../../shared_lib/pn532"
+        "../../shared_lib/protocol"
+        "../../shared_lib/crypto"
+        "../../shared_lib/espnow_comm"
+    INCLUDE_DIRS
+        "."
+        "usb_cdc"
+        "nfc_sync"
+        "storage"
+        "power"
+        "../../shared_lib/pn532"
+        "../../shared_lib/protocol"
+        "../../shared_lib/crypto"
+        "../../shared_lib/espnow_comm"
+    REQUIRES
+        driver
+        esp_wifi
+        nvs_flash
+        spiffs
+        esp_timer
+        mbedtls
+        tinyusb
+        esp_adc
+        vfs
+)

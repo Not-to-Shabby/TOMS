@@ -34,6 +34,7 @@ typedef enum {
     TOMS_MSG_PASSENGER_BOARD    = 0x01,  /**< Passenger boarding event */
     TOMS_MSG_BUTTON_PRESS       = 0x02,  /**< Button press notification */
     TOMS_MSG_UID_RESPONSE       = 0x03,  /**< Slave UID response to handshake */
+    TOMS_MSG_RELEASE            = 0x04,  /**< Passenger alighted, slot release request */
 
     /* Master → Slave */
     TOMS_MSG_FARE_TABLE_UPDATE  = 0x10,  /**< Fare table push */

@@ -37,6 +37,10 @@ static const char *TAG = "toms_master";
 /* Slave MAC — updated when a Slave authenticates via UART UID handshake */
 static uint8_t s_slave_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
+/* Last button press MAC and pending board command flag (Demo Mode) */
+static uint8_t s_last_button_mac[6] = {0};
+static bool s_board_pending_from_button = false;
+
 /* ESP-NOW LMK for native encryption (16 bytes) */
 static const uint8_t s_espnow_lmk[16] = {
     0x54, 0x4F, 0x4D, 0x53, 0x5F, 0x4C, 0x4D, 0x4B,
@@ -219,6 +223,84 @@ static void on_usb_message(const char *data, size_t len)
                  base_fare, per_km);
         toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"sync_config\"}");
 
+    } else if (strstr(data, "\"cmd\":\"board\"") || strstr(data, "\"board\"")) {
+        /* Parse: {"cmd":"board","uid":"AABBCCDDEEFF","fare":1300,"seat":1,"route":1,"vehicle_id":"VEH001"} */
+        uint8_t target_mac[6] = {0};
+        uint16_t fare = 1300;
+        uint8_t seat = 0;
+        uint8_t route = 1;
+        char veh_id[16] = "VEH001";
+
+        /* Parse UID */
+        const char *uid_start = strstr(data, "\"uid\":\"");
+        if (uid_start) {
+            uid_start += 7; /* skip "uid":" */
+            for (int i = 0; i < 6; i++) {
+                char byte_str[3] = {uid_start[i*2], uid_start[i*2+1], '\0'};
+                target_mac[i] = (uint8_t)strtol(byte_str, NULL, 16);
+            }
+        }
+
+        /* Parse fare */
+        const char *fare_ptr = strstr(data, "\"fare\":");
+        if (fare_ptr) {
+            fare = (uint16_t)atoi(fare_ptr + 7);
+        }
+
+        /* Parse seat */
+        const char *seat_ptr = strstr(data, "\"seat\":");
+        if (seat_ptr) {
+            seat = (uint8_t)atoi(seat_ptr + 7);
+        }
+
+        /* Parse route */
+        const char *route_ptr = strstr(data, "\"route\":");
+        if (route_ptr) {
+            route = (uint8_t)atoi(route_ptr + 8);
+        }
+
+        /* Parse vehicle_id */
+        const char *veh_ptr = strstr(data, "\"vehicle_id\":\"");
+        if (veh_ptr) {
+            veh_ptr += 14;
+            const char *end_veh = strchr(veh_ptr, '"');
+            if (end_veh) {
+                size_t len_veh = end_veh - veh_ptr;
+                if (len_veh > 15) len_veh = 15;
+                strncpy(veh_id, veh_ptr, len_veh);
+                veh_id[len_veh] = '\0';
+            }
+        }
+
+        ESP_LOGI(TAG, "USB BOARD parsing complete. dispatching command...");
+
+        /* Build and dispatch toms_board_command_t to slave via ESP-NOW */
+        toms_board_command_t cmd = {0};
+        memcpy(cmd.target_uid, target_mac, 6);
+        cmd.timestamp     = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+        cmd.fare_centavos = fare;
+        cmd.seat_number   = seat;
+        cmd.route_id      = route;
+        strncpy((char *)cmd.vehicle_id, veh_id, 16);
+
+        toms_packet_t pkt;
+        toms_packet_build(&pkt, TOMS_MSG_BOARD_COMMAND, s_espnow_seq++,
+                          (const uint8_t *)&cmd, sizeof(cmd));
+
+        toms_espnow_add_peer(target_mac, NULL, TOMS_ESPNOW_CHANNEL);
+        if (toms_espnow_send(target_mac, &pkt)) {
+            ESP_LOGI(TAG, "BOARD_COMMAND sent via ESP-NOW to " MACSTR, MAC2STR(target_mac));
+            toms_usb_cdc_send("{\"evt\":\"ack\",\"cmd\":\"board\"}");
+        } else {
+            ESP_LOGE(TAG, "Failed to send BOARD_COMMAND via ESP-NOW");
+            toms_usb_cdc_send("{\"evt\":\"error\",\"msg\":\"espnow_send failed\"}");
+        }
+
+        /* Clear board pending flag if this matches s_last_button_mac */
+        if (memcmp(target_mac, s_last_button_mac, 6) == 0) {
+            s_board_pending_from_button = false;
+        }
+
     } else {
         ESP_LOGW(TAG, "Unknown USB command");
         toms_usb_cdc_send("{\"evt\":\"error\",\"msg\":\"unknown command\"}");
@@ -306,6 +388,10 @@ static void espnow_handler_task(void *arg)
             case TOMS_MSG_BUTTON_PRESS:
                 ESP_LOGI(TAG, "Button press from slave " MACSTR, MAC2STR(event.src_mac));
 
+                /* Store requesting slave's MAC and set pending flag */
+                memcpy(s_last_button_mac, event.src_mac, 6);
+                s_board_pending_from_button = true;
+
                 /* Notify phone */
                 {
                     char msg[128];
@@ -323,9 +409,28 @@ static void espnow_handler_task(void *arg)
                     toms_packet_build(&ack, TOMS_MSG_ACK_MASTER, s_espnow_seq++, NULL, 0);
                     toms_espnow_send(event.src_mac, &ack);
                 }
+                break;
 
-                /* Dispatch BOARD_COMMAND back to the Slave via ESP-NOW */
-                dispatch_board_command_espnow(event.src_mac);
+            case TOMS_MSG_RELEASE:
+                ESP_LOGI(TAG, "Release request from slave " MACSTR, MAC2STR(event.src_mac));
+
+                /* Notify phone */
+                {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg),
+                             "{\"evt\":\"release\",\"source\":\"slave\","
+                             "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"}",
+                             event.src_mac[0], event.src_mac[1], event.src_mac[2],
+                             event.src_mac[3], event.src_mac[4], event.src_mac[5]);
+                    toms_usb_cdc_send(msg);
+                }
+
+                /* ACK the release request */
+                {
+                    toms_packet_t ack;
+                    toms_packet_build(&ack, TOMS_MSG_ACK_MASTER, s_espnow_seq++, NULL, 0);
+                    toms_espnow_send(event.src_mac, &ack);
+                }
                 break;
 
             case TOMS_MSG_HEARTBEAT:
@@ -424,157 +529,88 @@ static void dispatch_alarm_command_espnow(
 static void storage_flush_task(void *arg)
 {
     (void)arg;
-    ESP_LOGI(TAG, "Storage flush task started");
+    ESP_LOGI(TAG, "Storage flush task started on core %d", xPortGetCoreID());
 
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(60000)); /* Every 60 seconds */
-        toms_storage_cleanup();
-
-        /* Log stats */
-        size_t total = 0, used = 0;
-        toms_storage_get_stats(&total, &used);
-        ESP_LOGI(TAG, "Storage: %u/%u bytes (%d pending logs)",
-                 (unsigned)used, (unsigned)total,
-                 toms_storage_get_pending_count());
+        /* Sync to flash every 5 seconds if dirty */
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        toms_storage_flush();
     }
 }
 
-/* ── Utility ──────────────────────────────────────────────────────────── */
+/* ── Helpers ──────────────────────────────────────────────────────────── */
 
 static void forward_passenger_to_phone(const toms_passenger_event_t *event)
 {
-    if (!toms_usb_cdc_is_connected()) {
-        ESP_LOGD(TAG, "USB not connected, skipping phone forward");
-        return;
-    }
-
-    char json[384];
-    snprintf(json, sizeof(json),
-             "{\"evt\":\"passenger\","
-             "\"timestamp\":%lu,"
-             "\"boarding_type\":%d,"
-             "\"fare_centavos\":%d,"
-             "\"seat\":%d,"
-             "\"route\":%d,"
-             "\"passenger_id\":\"%02X%02X%02X%02X%02X%02X%02X%02X"
-             "%02X%02X%02X%02X%02X%02X%02X%02X\"}",
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "{\"evt\":\"passenger\",\"timestamp\":%lu,\"boarding_type\":%d,"
+             "\"fare_centavos\":%u,\"seat_number\":%d,\"route_id\":%d,"
+             "\"passenger_id\":\"%02X%02X%02X%02X%02X%02X\"}",
              (unsigned long)event->timestamp,
-             event->boarding_type,
+             (int)event->boarding_type,
              event->fare_centavos,
              event->seat_number,
              event->route_id,
-             event->passenger_id[0],  event->passenger_id[1],
-             event->passenger_id[2],  event->passenger_id[3],
-             event->passenger_id[4],  event->passenger_id[5],
-             event->passenger_id[6],  event->passenger_id[7],
-             event->passenger_id[8],  event->passenger_id[9],
-             event->passenger_id[10], event->passenger_id[11],
-             event->passenger_id[12], event->passenger_id[13],
-             event->passenger_id[14], event->passenger_id[15]);
+             event->passenger_id[0], event->passenger_id[1], event->passenger_id[2],
+             event->passenger_id[3], event->passenger_id[4], event->passenger_id[5]);
 
-    toms_usb_cdc_send(json);
+    toms_usb_cdc_send(msg);
 }
 
 /* ── Main Entry Point ─────────────────────────────────────────────────── */
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== TOMS Master Firmware ===");
-    ESP_LOGI(TAG, "Firmware version: 0.1.0");
-    ESP_LOGI(TAG, "Free heap: %lu bytes", (unsigned long)esp_get_free_heap_size());
+    ESP_LOGI(TAG, "=== TOMS Master Firmware v0.2.0 ===");
 
-    /* ── Step 1: Storage (NVS + SPIFFS) ─────────────────────────────── */
-    ESP_LOGI(TAG, "[1/7] Initializing storage...");
-    int err = toms_storage_init();
-    if (err != 0) {
-        ESP_LOGE(TAG, "Storage init failed (%d) — halting", err);
-        return;
+    /* Initialize NVS */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
     }
+    ESP_ERROR_CHECK(err);
 
-    /* ── Step 2: Crypto (AES-256 key from NVS) ──────────────────────── */
-    ESP_LOGI(TAG, "[2/7] Initializing crypto...");
-    err = toms_crypto_init();
-    if (err != 0) {
-        ESP_LOGE(TAG, "Crypto init failed (%d) — halting", err);
-        return;
-    }
+    /* Initialize Crypto */
+    toms_crypto_init();
 
-    /* ── Step 3: ESP-NOW ────────────────────────────────────────────── */
-    ESP_LOGI(TAG, "[3/7] Initializing ESP-NOW...");
-    err = toms_espnow_init(NULL);  /* Use default PMK */
-    if (err != 0) {
-        ESP_LOGE(TAG, "ESP-NOW init failed (%d) — halting", err);
-        return;
-    }
+    /* Initialize Storage (SPIFFS for offline logging) */
+    toms_storage_init();
 
-    /* Add slave peer (broadcast by default until configured) */
-    toms_espnow_add_peer(s_slave_mac, s_espnow_lmk, TOMS_ESPNOW_CHANNEL);
-
-    /* ── Step 4: USB CDC ────────────────────────────────────────────── */
-    ESP_LOGI(TAG, "[4/7] Initializing USB CDC...");
-    err = toms_usb_cdc_init();
-    if (err != 0) {
-        ESP_LOGE(TAG, "USB CDC init failed (%d) — continuing without USB", err);
-    }
-    toms_usb_cdc_set_recv_cb(on_usb_message);
-
-    /* ── Step 5: NFC Sync (PN532 Initiator) ──────────────────────────── */
-    ESP_LOGI(TAG, "[5/8] Initializing NFC sync...");
-    err = toms_nfc_sync_init();
-    if (err != 0) {
-        ESP_LOGE(TAG, "NFC sync init failed (%d) — continuing", err);
-    }
-    toms_nfc_sync_set_tap_cb(on_nfc_tap);
-    toms_nfc_sync_set_connect_cb(on_nfc_connect);
-
-    /* ── Step 6: Fare Dictionary ───────────────────────────────────── */
-    ESP_LOGI(TAG, "[6/8] Loading fare dictionary...");
-    toms_fare_dict_load(&s_fare_dict);
-    ESP_LOGI(TAG, "Fare dictionary: %d entries loaded", s_fare_dict.count);
-
-    if (toms_config_get_u32("max_capacity", &s_max_capacity)) {
-        ESP_LOGI(TAG, "NVS: Loaded max_capacity = %ld", (long)s_max_capacity);
-    } else {
-        ESP_LOGI(TAG, "NVS: No max_capacity stored, using default 20");
-    }
-
-    char loaded_wp[512] = {0};
-    if (toms_config_get_str("waypoints", loaded_wp, sizeof(loaded_wp))) {
-        ESP_LOGI(TAG, "NVS: Loaded waypoints = %s", loaded_wp);
-    } else {
-        ESP_LOGI(TAG, "NVS: No waypoints stored");
-    }
-
-    /* Set active fare for NFC tap */
-    toms_nfc_sync_set_fare(1, 0);  /* Default: fare_id=1, seat=0 */
-
-    /* ── Step 7: Power monitoring ───────────────────────────────────── */
-    ESP_LOGI(TAG, "[7/8] Initializing power monitoring...");
+    /* Initialize Power monitoring */
     toms_power_init();
-    ESP_LOGI(TAG, "Battery: %lu mV (%d%%)",
-             (unsigned long)toms_power_get_battery_mv(),
-             toms_power_get_battery_pct());
 
-    /* ── Step 8: Launch FreeRTOS tasks ──────────────────────────────── */
-    ESP_LOGI(TAG, "[8/8] Launching tasks...");
+    /* Initialize USB CDC (communication with mobile app) */
+    toms_usb_cdc_init(on_usb_message);
 
-    /* USB CDC task — Core 0, priority 5 */
-    xTaskCreatePinnedToCore(toms_usb_cdc_task, "usb_cdc",
-                            4096, NULL, 5, NULL, 0);
+    /* Initialize ESP-NOW (communication with passengers/slaves) */
+    toms_espnow_init(NULL);
 
-    /* ESP-NOW handler — Core 1, priority 6 (latency-sensitive) */
+    /* Initialize NFC Sync (PN532 P2P initiator) */
+    err = toms_master_nfc_init();
+    if (err != 0) {
+        ESP_LOGE(TAG, "NFC init failed (%d) — continuing without NFC P2P", err);
+    }
+    toms_master_nfc_set_tap_cb(on_nfc_tap);
+    toms_master_nfc_set_conn_cb(on_nfc_connect);
+
+    /* Create background tasks */
+    ESP_LOGI(TAG, "Launching background tasks...");
+
+    /* ESP-NOW incoming handler (pinned to Core 1) */
     xTaskCreatePinnedToCore(espnow_handler_task, "espnow_handler",
                             4096, NULL, 6, NULL, 1);
 
-    /* NFC sync (Initiator) — Core 0, priority 4 */
-    xTaskCreatePinnedToCore(toms_nfc_sync_task, "nfc_sync",
-                            4096, NULL, 4, NULL, 0);
-
-    /* Storage flush — Core 0, priority 3 */
+    /* Storage periodic flush (pinned to Core 0) */
     xTaskCreatePinnedToCore(storage_flush_task, "storage_flush",
-                            2048, NULL, 3, NULL, 0);
+                            3072, NULL, 3, NULL, 0);
 
-    ESP_LOGI(TAG, "=== TOMS Master ready ===");
-    ESP_LOGI(TAG, "Free heap after init: %lu bytes",
-             (unsigned long)esp_get_free_heap_size());
+    /* USB CDC rx/tx tasks are managed internally by usb_cdc.c */
+
+    /* NFC P2P initiator loop task (pinned to Core 0) */
+    xTaskCreatePinnedToCore(toms_master_nfc_task, "nfc_sync",
+                            4096, NULL, 5, NULL, 0);
+
+    ESP_LOGI(TAG, "=== TOMS Master Ready ===");
 }
