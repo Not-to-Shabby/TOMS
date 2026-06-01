@@ -198,7 +198,6 @@ static void on_usb_message(const char *data, size_t len)
         new_dict.count = 1;
         new_dict.entries[0].fare_id        = 1;
         new_dict.entries[0].fare_centavos  = base_fare;
-        new_dict.entries[0].per_km_centavos = per_km;
         memcpy(&s_fare_dict, &new_dict, sizeof(toms_fare_dict_t));
         toms_fare_dict_save(&s_fare_dict);
 
