@@ -31,6 +31,7 @@
 #include "power.h"
 #include "protocol.h"
 #include "fare_dict.h"
+#include "debug_serial.h"
 
 static const char *TAG = "toms_master";
 
@@ -143,6 +144,18 @@ static void dispatch_alarm_command_espnow(const uint8_t *slave_mac,
 static void on_usb_message(const char *data, size_t len)
 {
     ESP_LOGI(TAG, "USB RX: %.*s", (int)len, data);
+
+    char cmd_name[32] = "unknown";
+    const char *cmd_start = strstr(data, "\"cmd\":\"");
+    if (cmd_start) {
+        cmd_start += 7;
+        const char *cmd_end = strchr(cmd_start, '"');
+        if (cmd_end && (size_t)(cmd_end - cmd_start) < sizeof(cmd_name)) {
+            memcpy(cmd_name, cmd_start, cmd_end - cmd_start);
+            cmd_name[cmd_end - cmd_start] = '\0';
+        }
+    }
+    debug_serial_send_usb_rx(cmd_name);
 
     /* Simple command parsing (production should use cJSON) */
     if (strstr(data, "\"handshake\"")) {
@@ -272,7 +285,9 @@ static void on_usb_message(const char *data, size_t len)
         toms_packet_t pkt;
         toms_packet_build(&pkt, TOMS_MSG_FARE_TABLE_UPDATE, s_espnow_seq++,
                           (const uint8_t *)&cfg, sizeof(cfg));
-        toms_espnow_send(s_slave_mac, &pkt);
+        if (toms_espnow_send(s_slave_mac, &pkt)) {
+            debug_serial_send_espnow_tx(TOMS_MSG_FARE_TABLE_UPDATE, s_slave_mac, pkt.sequence);
+        }
 
         ESP_LOGI(TAG, "Fare table synced: base=%d per_km=%d, broadcast to slaves",
                  base_fare, per_km);
@@ -334,6 +349,7 @@ static void espnow_handler_task(void *arg)
     while (1) {
         if (toms_espnow_receive(&event, 1000)) {
             toms_led_blink();
+            debug_serial_send_espnow_rx(event.packet.msg_type, event.src_mac, event.packet.sequence);
             ESP_LOGI(TAG, "ESP-NOW RX from " MACSTR ": type=0x%02X",
                      MAC2STR(event.src_mac), event.packet.msg_type);
 
@@ -358,7 +374,9 @@ static void espnow_handler_task(void *arg)
                     /* Send ACK to slave */
                     toms_packet_t ack;
                     toms_packet_build(&ack, TOMS_MSG_ACK_MASTER, s_espnow_seq++, NULL, 0);
-                    toms_espnow_send(event.src_mac, &ack);
+                    if (toms_espnow_send(event.src_mac, &ack)) {
+                        debug_serial_send_espnow_tx(TOMS_MSG_ACK_MASTER, event.src_mac, ack.sequence);
+                    }
                 }
                 break;
             }
@@ -381,7 +399,9 @@ static void espnow_handler_task(void *arg)
                 {
                     toms_packet_t ack;
                     toms_packet_build(&ack, TOMS_MSG_ACK_MASTER, s_espnow_seq++, NULL, 0);
-                    toms_espnow_send(event.src_mac, &ack);
+                    if (toms_espnow_send(event.src_mac, &ack)) {
+                        debug_serial_send_espnow_tx(TOMS_MSG_ACK_MASTER, event.src_mac, ack.sequence);
+                    }
                 }
 
                 /* Dispatch BOARD_COMMAND back to the Slave via ESP-NOW */
@@ -442,6 +462,7 @@ static void dispatch_board_command_espnow(const uint8_t *slave_mac)
     if (toms_espnow_send(slave_mac, &pkt)) {
         ESP_LOGI(TAG, "BOARD_COMMAND sent via ESP-NOW to " MACSTR,
                  MAC2STR(slave_mac));
+        debug_serial_send_espnow_tx(TOMS_MSG_BOARD_COMMAND, slave_mac, pkt.sequence);
     } else {
         ESP_LOGE(TAG, "Failed to send BOARD_COMMAND via ESP-NOW");
     }
@@ -474,6 +495,7 @@ static void dispatch_alarm_command_espnow(
     if (toms_espnow_send(slave_mac, &pkt)) {
         ESP_LOGI(TAG, "ALARM_CMD sent to " MACSTR " (type=%d, min=%d)",
                  MAC2STR(slave_mac), alarm_type, minutes_left);
+        debug_serial_send_espnow_tx(TOMS_MSG_ALARM_CMD, slave_mac, pkt.sequence);
     } else {
         ESP_LOGE(TAG, "Failed to send ALARM_CMD via ESP-NOW");
     }
@@ -535,6 +557,25 @@ static void forward_passenger_to_phone(const toms_passenger_event_t *event)
     toms_usb_cdc_send(json);
 }
 
+/* ── Debug Serial Periodic Task ───────────────────────────────────────── */
+static void debug_serial_task(void *arg)
+{
+    (void)arg;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000)); /* Every 5 seconds */
+        
+        bool usb_connected = toms_usb_cdc_is_connected();
+        uint32_t batt_mv = toms_power_get_battery_mv();
+        uint8_t batt_pct = toms_power_get_battery_pct();
+        
+        /* Send state report (using s_slave_mac as target if active, else NULL) */
+        bool has_slave = (s_slave_mac[0] != 0xFF || s_slave_mac[1] != 0xFF);
+        debug_serial_send_state(usb_connected, 
+                                has_slave ? s_slave_mac : NULL,
+                                batt_mv, batt_pct, s_route_id);
+    }
+}
+
 /* ── Main Entry Point ─────────────────────────────────────────────────── */
 
 void app_main(void)
@@ -545,6 +586,9 @@ void app_main(void)
 
     /* Initialize Status LED */
     toms_led_init();
+
+    /* Initialize Debug Serial */
+    debug_serial_init();
 
     /* ── Step 1: Storage (NVS + SPIFFS) ─────────────────────────────── */
     ESP_LOGI(TAG, "[1/7] Initializing storage...");
@@ -629,13 +673,19 @@ void app_main(void)
     xTaskCreatePinnedToCore(espnow_handler_task, "espnow_handler",
                             4096, NULL, 6, NULL, 1);
 
+#if TOMS_USE_NFC
     /* NFC sync (Initiator) — Core 0, priority 4 */
     xTaskCreatePinnedToCore(toms_nfc_sync_task, "nfc_sync",
                             4096, NULL, 4, NULL, 0);
+#endif
 
     /* Storage flush — Core 0, priority 3 */
     xTaskCreatePinnedToCore(storage_flush_task, "storage_flush",
-                            2048, NULL, 3, NULL, 0);
+                            4096, NULL, 3, NULL, 0);
+
+    /* Debug serial task — Core 0, priority 2 */
+    xTaskCreatePinnedToCore(debug_serial_task, "dbg_serial",
+                            4096, NULL, 2, NULL, 0);
 
     ESP_LOGI(TAG, "=== TOMS Master ready ===");
     ESP_LOGI(TAG, "Free heap after init: %lu bytes",

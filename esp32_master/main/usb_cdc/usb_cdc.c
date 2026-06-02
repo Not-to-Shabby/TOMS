@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "tinyusb.h"
+#include "debug_serial.h"
 #include "tusb_cdc_acm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -105,6 +106,19 @@ int toms_usb_cdc_send(const char *json)
 
     size_t len = strlen(json);
     if (len == 0) return 0;
+
+    /* Report to debug serial */
+    char evt_name[32] = "unknown";
+    const char *evt_start = strstr(json, "\"evt\":\"");
+    if (evt_start) {
+        evt_start += 7;
+        const char *evt_end = strchr(evt_start, '"');
+        if (evt_end && (size_t)(evt_end - evt_start) < sizeof(evt_name)) {
+            memcpy(evt_name, evt_start, evt_end - evt_start);
+            evt_name[evt_end - evt_start] = '\0';
+        }
+    }
+    debug_serial_send_usb_tx(evt_name);
 
     /* Send JSON data */
     size_t written = 0;

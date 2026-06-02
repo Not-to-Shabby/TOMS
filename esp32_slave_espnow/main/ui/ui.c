@@ -129,7 +129,7 @@ void toms_ui_show_welcome(void)
     lv_label_set_text(label, "Swipe to Sync\n- or -\nPress Button");
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(label, lv_color_white(), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
     ui_create_footer("System Ready", lv_palette_main(LV_PALETTE_TEAL));
@@ -158,7 +158,7 @@ void toms_ui_show_processing(void)
     lv_label_set_text(label, LV_SYMBOL_REFRESH "\n\nProcessing...");
     lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(label, lv_palette_main(LV_PALETTE_TEAL), 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
     lv_obj_align(label, LV_ALIGN_CENTER, 0, 0);
 
     ui_create_footer("Please Wait", lv_palette_main(LV_PALETTE_ORANGE));
@@ -185,9 +185,12 @@ void toms_ui_show_fare(const char *route_name, uint16_t fare_centavos,
     lv_obj_set_style_radius(fare_cont, 8, 0);
 
     lv_obj_t *lbl_route = lv_label_create(fare_cont);
-    lv_label_set_text_fmt(lbl_route, "Route: %s", route_name ? route_name : "General");
+    lv_label_set_text_fmt(lbl_route, "%s", route_name ? route_name : "General");
+    lv_obj_set_width(lbl_route, lv_pct(95));
+    lv_label_set_long_mode(lbl_route, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    lv_obj_set_style_text_align(lbl_route, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_route, lv_color_white(), 0);
-    lv_obj_set_style_text_font(lbl_route, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_route, &lv_font_montserrat_12, 0);
     lv_obj_align(lbl_route, LV_ALIGN_TOP_MID, 0, 5);
 
     lv_obj_t *lbl_fare = lv_label_create(fare_cont);
@@ -200,7 +203,7 @@ void toms_ui_show_fare(const char *route_name, uint16_t fare_centavos,
         lv_obj_t *lbl_seat = lv_label_create(fare_cont);
         lv_label_set_text_fmt(lbl_seat, "Seat: %d", seat_number);
         lv_obj_set_style_text_color(lbl_seat, lv_color_white(), 0);
-        lv_obj_set_style_text_font(lbl_seat, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(lbl_seat, &lv_font_montserrat_12, 0);
         lv_obj_align(lbl_seat, LV_ALIGN_BOTTOM_MID, 0, -5);
     }
 

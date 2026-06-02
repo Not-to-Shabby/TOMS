@@ -234,6 +234,8 @@ esp_err_t pn532_init(pn532_handle_t *handle, const pn532_config_t *config)
         return err;
     }
 
+    /* Clean up previous driver instance if any to allow safe retry */
+    i2c_driver_delete(config->i2c_port);
     err = i2c_driver_install(config->i2c_port, I2C_MODE_MASTER, 0, 0, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "I2C driver install failed: %s", esp_err_to_name(err));
@@ -250,7 +252,8 @@ esp_err_t pn532_init(pn532_handle_t *handle, const pn532_config_t *config)
             .intr_type    = GPIO_INTR_NEGEDGE,
         };
         gpio_config(&irq_cfg);
-        gpio_install_isr_service(0);
+        gpio_install_isr_service(0); /* Ignore error if already installed */
+        gpio_isr_handler_remove(config->irq_pin);
         gpio_isr_handler_add(config->irq_pin, pn532_irq_isr, NULL);
         ESP_LOGI(TAG, "IRQ configured on GPIO %d", config->irq_pin);
     }

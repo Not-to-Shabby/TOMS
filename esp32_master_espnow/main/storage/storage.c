@@ -13,16 +13,23 @@
 #include "esp_spiffs.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "toms_storage";
 
 /* ── Internal State ───────────────────────────────────────────────────── */
 
-static bool   s_initialized = false;
-static int    s_file_index  = 0;
-static int    s_record_count = 0;
-static FILE  *s_current_file = NULL;
-static char   s_current_fname[TOMS_STORAGE_MAX_FNAME];
+static bool               s_initialized = false;
+static int                s_file_index  = 0;
+static int                s_record_count = 0;
+static FILE              *s_current_file = NULL;
+static char               s_current_fname[TOMS_STORAGE_MAX_FNAME];
+static SemaphoreHandle_t  s_storage_mutex = NULL;
+
+/* Helper macros — always call these as a matched pair */
+#define STORAGE_LOCK()   xSemaphoreTake(s_storage_mutex, portMAX_DELAY)
+#define STORAGE_UNLOCK() xSemaphoreGive(s_storage_mutex)
 
 /* ── SPIFFS Initialization ────────────────────────────────────────────── */
 
@@ -99,6 +106,13 @@ int toms_storage_init(void)
 {
     if (s_initialized) return ESP_OK;
 
+    /* Create mutex before any SPIFFS access */
+    s_storage_mutex = xSemaphoreCreateMutex();
+    if (!s_storage_mutex) {
+        ESP_LOGE(TAG, "Failed to create storage mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
     /* NVS */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -129,14 +143,20 @@ bool toms_storage_log_event(const toms_passenger_event_t *event)
 {
     if (!s_initialized || !event) return false;
 
+    STORAGE_LOCK();
+
     if (!s_current_file) {
         open_new_log_file();
-        if (!s_current_file) return false;
+        if (!s_current_file) {
+            STORAGE_UNLOCK();
+            return false;
+        }
     }
 
     size_t written = fwrite(event, sizeof(toms_passenger_event_t), 1, s_current_file);
     if (written != 1) {
         ESP_LOGE(TAG, "Failed to write event");
+        STORAGE_UNLOCK();
         return false;
     }
 
@@ -148,13 +168,17 @@ bool toms_storage_log_event(const toms_passenger_event_t *event)
         open_new_log_file();
     }
 
+    STORAGE_UNLOCK();
     return true;
 }
 
 int toms_storage_get_pending_count(void)
 {
+    if (!s_initialized) return 0;
+
+    STORAGE_LOCK();
     DIR *dir = opendir(TOMS_STORAGE_MOUNT);
-    if (!dir) return 0;
+    if (!dir) { STORAGE_UNLOCK(); return 0; }
 
     int count = 0;
     struct dirent *entry;
@@ -165,14 +189,18 @@ int toms_storage_get_pending_count(void)
         }
     }
     closedir(dir);
+    STORAGE_UNLOCK();
     return count;
 }
 
 bool toms_storage_read_pending(uint8_t *buf, size_t buf_size,
                                size_t *out_len, char *fname)
 {
+    if (!s_initialized) return false;
+
+    STORAGE_LOCK();
     DIR *dir = opendir(TOMS_STORAGE_MOUNT);
-    if (!dir) return false;
+    if (!dir) { STORAGE_UNLOCK(); return false; }
 
     struct dirent *entry;
     bool found = false;
@@ -196,6 +224,7 @@ bool toms_storage_read_pending(uint8_t *buf, size_t buf_size,
         }
     }
     closedir(dir);
+    STORAGE_UNLOCK();
     return found;
 }
 
@@ -211,6 +240,8 @@ bool toms_storage_mark_synced(const char *fname)
 
 void toms_storage_cleanup(void)
 {
+    if (!s_initialized) return;
+
     size_t total = 0, used = 0;
     esp_spiffs_info(TOMS_STORAGE_PARTITION, &total, &used);
 
@@ -219,8 +250,9 @@ void toms_storage_cleanup(void)
 
     ESP_LOGI(TAG, "Storage >80%% full, cleaning .done files");
 
+    STORAGE_LOCK();
     DIR *dir = opendir(TOMS_STORAGE_MOUNT);
-    if (!dir) return;
+    if (!dir) { STORAGE_UNLOCK(); return; }
 
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -232,6 +264,7 @@ void toms_storage_cleanup(void)
         }
     }
     closedir(dir);
+    STORAGE_UNLOCK();
 }
 
 void toms_storage_get_stats(size_t *total, size_t *used)

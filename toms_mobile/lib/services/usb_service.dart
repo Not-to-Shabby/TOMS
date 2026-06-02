@@ -112,24 +112,46 @@ class UsbService extends ChangeNotifier {
         UsbPort.PARITY_NONE,
       );
 
-      // Line-based transaction parser (newline-delimited JSON)
-      _transaction = Transaction.stringTerminated(
-        _port!.inputStream!,
-        Uint8List.fromList([10]), // \n
-      );
+      // Verify inputStream is available
+      final inputStream = _port!.inputStream;
+      if (inputStream == null) {
+        debugPrint('USB ERROR: inputStream is NULL — cannot receive data');
+        _lastError = 'USB inputStream is null';
+        notifyListeners();
+        // Still allow TX-only mode
+      } else {
+        debugPrint('USB: inputStream is available, setting up Transaction parser');
+      }
 
-      _subscription = _transaction!.stream.listen(
-        _onData,
-        onError: (e) {
-          debugPrint('USB stream error: $e');
-          _lastError = e.toString();
-          disconnect();
-        },
-        onDone: () {
-          debugPrint('USB stream closed');
-          disconnect();
-        },
-      );
+      if (inputStream != null) {
+        // Convert to broadcast stream so we can attach both a diagnostic listener and the parser
+        final broadcastStream = inputStream.asBroadcastStream();
+        
+        // Diagnostic raw byte stream listener
+        broadcastStream.listen((Uint8List data) {
+          debugPrint('USB RAW RX: ${data.length} bytes: ${String.fromCharCodes(data)}');
+        });
+
+        // Line-based transaction parser (newline-delimited JSON)
+        _transaction = Transaction.stringTerminated(
+          broadcastStream,
+          Uint8List.fromList([10]), // \n
+        );
+
+        _subscription = _transaction!.stream.listen(
+          _onData,
+          onError: (e) {
+            debugPrint('USB stream error: $e');
+            _lastError = e.toString();
+            disconnect();
+          },
+          onDone: () {
+            debugPrint('USB stream closed (onDone)');
+            disconnect();
+          },
+        );
+        debugPrint('USB: Transaction stream listener attached');
+      }
 
       _connected = true;
       notifyListeners();
@@ -201,6 +223,17 @@ class UsbService extends ChangeNotifier {
       'minutes': minutesLeft,
     });
     debugPrint('USB TX: send_alarm uid=$uid type=$alarmType min=$minutesLeft');
+  }
+
+  /// Send a force release command to the Master for relay to a specific Slave.
+  ///
+  /// This clears the persistent "Occupied" state on the Slave.
+  Future<void> sendForceReleaseCommand(String slaveUid) async {
+    final uid = slaveUid.replaceAll(':', '').toUpperCase();
+    await sendCommand('force_release', {
+      'uid': uid,
+    });
+    debugPrint('USB TX: force_release uid=$uid');
   }
 
   /// Push the current route fare configuration to the Master.

@@ -1,9 +1,9 @@
 /**
- * @file main.cpp
- * @brief TOMS — STM32 Blue Pill Master Monitor Firmware
+ * @file stm32_master_monitor.ino
+ * @brief TOMS — STM32 Blue Pill Master Monitor Firmware (Arduino IDE compatible)
  *
- * Receives JSON debug packets from the ESP32 Master via UART2
- * and drives status LEDs + forwards to USB CDC on the PC.
+ * Receives JSON debug packets from the ESP32 Master via UART2 (PA3 RX)
+ * and drives status LEDs + forwards to PC via USB CDC.
  *
  * Wiring (3.3 V logic — Blue Pill and ESP32-S3 are both 3.3 V):
  *
@@ -20,21 +20,20 @@
  *   PB1            →   YELLOW LED       Conductor link active (USB CDC connected to phone)
  *   PB12           →   RED LED          General Error / timeout state
  *
- * USB CDC:
- *   Connect Blue Pill USB (PA11/PA12) to PC — a COM port appears.
- *   Open at 115200 baud to see raw JSON lines from the Master
- *   plus human-readable state summaries.
+ * Arduino IDE Settings:
+ *   - Board: STM32F1xx / Generic STM32F103C series
+ *   - Uploader: Maple DFU Bootloader (or ST-Link / Serial depending on bootloader)
+ *   - USB Support: CDC (Generic Serial)
  */
 
-#include <Arduino.h>
-
 #if defined(ARDUINO_ARCH_STM32F1) && !defined(STM32_CORE_VERSION)
-// Maple Core: Serial2 is pre-defined on PA2 (TX) and PA3 (RX)
+// Maple Core (Roger Clark): Serial2 is pre-defined on PA2 (TX) and PA3 (RX)
 #define MasterSerial Serial2
 #else
 // Official ST Core:
 HardwareSerial MasterSerial(PA3, PA2);
 #endif
+
 #define MASTER_BAUD   115200
 
 /* ── Status LEDs ──────────────────────────────────────────────────────────

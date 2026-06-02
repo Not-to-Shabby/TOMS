@@ -23,6 +23,9 @@
 #include <stdbool.h>
 #include "protocol.h"
 
+/* Set to 1 to enable NFC (PN532), or 0 to completely disable NFC and use ESP-NOW only */
+#define TOMS_USE_NFC 0
+
 #ifdef __cplusplus
 extern "C" {
 #endif

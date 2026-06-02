@@ -25,6 +25,7 @@
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_mac.h"
+#include "esp_now.h"
 #include "esp_random.h"
 #include "nvs_flash.h"
 #include "esp_adc/adc_oneshot.h"
@@ -40,6 +41,7 @@
 #include "crypto.h"
 #include "espnow_comm.h"
 #include "protocol.h"
+#include "fare_dict.h"
 #include "nfc_sync.h"
 #include "debug_serial.h"
 #include "lvgl.h"
@@ -52,7 +54,7 @@ static const char *TAG = "toms_slave";
 static uint8_t s_master_mac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 /* ESP-NOW LMK — must match Master */
-static const uint8_t s_espnow_lmk[16] = {
+static const uint8_t s_espnow_lmk[16] __attribute__((unused)) = {
     0x54, 0x4F, 0x4D, 0x53, 0x5F, 0x4C, 0x4D, 0x4B,
     0x5F, 0x53, 0x4C, 0x41, 0x56, 0x45, 0x30, 0x31
 };
@@ -73,6 +75,7 @@ static bool          s_debug_qr_shown    = false;
 static toms_debug_receipt_t s_debug_receipt;
 static volatile bool s_release_requested = false;
 static volatile toms_ui_screen_t s_held_screen_before_progress = TOMS_UI_WELCOME;
+static bool          s_is_occupied       = false;  /* Survives deep sleep via NVS */
 
 /* Issue 5 fixed: use FreeRTOS EventGroup for cross-core ACK signal (atomic on ESP32-S3) */
 static EventGroupHandle_t s_evt_group;
@@ -116,6 +119,59 @@ static bool uid_matches(const uint8_t *target_uid)
      * Comparing 16 bytes worked by accident but breaks once RFID
      * card UIDs (full 16 bytes) are introduced. */
     return (memcmp(target_uid, s_slave_uid, 6) == 0);
+}
+
+static void update_master_mac(const uint8_t *new_mac)
+{
+    if (memcmp(s_master_mac, new_mac, 6) != 0) {
+        memcpy(s_master_mac, new_mac, 6);
+        if (!esp_now_is_peer_exist(s_master_mac)) {
+            toms_espnow_add_peer(s_master_mac, NULL, TOMS_ESPNOW_CHANNEL);
+            ESP_LOGI(TAG, "Master MAC updated and added as peer: %02X:%02X:%02X:%02X:%02X:%02X",
+                     s_master_mac[0], s_master_mac[1], s_master_mac[2],
+                     s_master_mac[3], s_master_mac[4], s_master_mac[5]);
+        }
+    }
+}
+
+/* ── NVS Persistence ──────────────────────────────────────────────────── */
+
+static void load_boarding_state(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("toms_state", NVS_READONLY, &handle) == ESP_OK) {
+        uint8_t occ = 0;
+        if (nvs_get_u8(handle, "occupied", &occ) == ESP_OK && occ == 1) {
+            size_t len = sizeof(s_pending_cmd);
+            if (nvs_get_blob(handle, "board_cmd", &s_pending_cmd, &len) == ESP_OK) {
+                s_is_occupied = true;
+                ESP_LOGI(TAG, "Loaded boarding state from NVS: fare=%d", s_pending_cmd.fare_centavos);
+            }
+        }
+        nvs_close(handle);
+    }
+}
+
+static void save_boarding_state(const toms_board_command_t *cmd)
+{
+    if (cmd) {
+        s_is_occupied = true;
+    } else {
+        s_is_occupied = false;
+    }
+
+    nvs_handle_t handle;
+    if (nvs_open("toms_state", NVS_READWRITE, &handle) == ESP_OK) {
+        if (cmd) {
+            nvs_set_u8(handle, "occupied", 1);
+            nvs_set_blob(handle, "board_cmd", cmd, sizeof(toms_board_command_t));
+        } else {
+            nvs_set_u8(handle, "occupied", 0);
+            nvs_erase_key(handle, "board_cmd");
+        }
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
 }
 
 /* ── Debug Receipt Helpers ───────────────────────────────────────────── */
@@ -167,9 +223,27 @@ static void build_debug_qr(const toms_debug_receipt_t *receipt, char *out, size_
 
 static void restore_passenger_screen(void)
 {
-    if (s_held_screen_before_progress == TOMS_UI_FARE) {
-        char route_str[16];
-        snprintf(route_str, sizeof(route_str), "Route %d", s_pending_cmd.route_id);
+    if (s_is_occupied) {
+        char qr_buf[160];
+        char uid_hex[13];
+        snprintf(uid_hex, sizeof(uid_hex), "%02X%02X%02X%02X%02X%02X",
+                 s_slave_uid[0], s_slave_uid[1], s_slave_uid[2],
+                 s_slave_uid[3], s_slave_uid[4], s_slave_uid[5]);
+        if (toms_qr_build_receipt(
+                (const char *)s_pending_cmd.vehicle_id,
+                s_pending_cmd.timestamp,
+                s_pending_cmd.fare_centavos,
+                uid_hex,
+                qr_buf, sizeof(qr_buf))) {
+            toms_ui_show_qr(qr_buf);
+        }
+    } else if (s_held_screen_before_progress == TOMS_UI_FARE) {
+        char route_str[32];
+        if (s_pending_cmd.origin[0] != '\0' && s_pending_cmd.destination[0] != '\0') {
+            snprintf(route_str, sizeof(route_str), "%.11s -> %.11s", s_pending_cmd.origin, s_pending_cmd.destination);
+        } else {
+            snprintf(route_str, sizeof(route_str), "Route %d", s_pending_cmd.route_id);
+        }
         toms_ui_show_fare(route_str, s_pending_cmd.fare_centavos, s_pending_cmd.seat_number);
     } else if (s_held_screen_before_progress == TOMS_UI_QR) {
         char qr_buf[160];
@@ -235,10 +309,8 @@ static void on_button_event(toms_button_event_t event)
 
     if (event == TOMS_BTN_RELEASE) {
         if (s_held_screen_before_progress == TOMS_UI_FARE || s_held_screen_before_progress == TOMS_UI_QR) {
-            if (!s_release_requested) {
-                ESP_LOGI(TAG, "Button released early -> restore screen");
-                restore_passenger_screen();
-            }
+            ESP_LOGI(TAG, "Button released early -> restore screen");
+            restore_passenger_screen();
             s_held_screen_before_progress = TOMS_UI_WELCOME;
         }
         return;
@@ -264,6 +336,32 @@ static void on_button_event(toms_button_event_t event)
         debug_serial_send_button(event);
         ESP_LOGI(TAG, "=> Physical Master/Dock connection detected! (GPIO 4 LOW)");
         ESP_LOGI(TAG, "Button event: PRESS (flagging s_button_pressed)");
+        
+        if (s_is_occupied) {
+            toms_ui_screen_t curr = toms_ui_get_current();
+            if (curr == TOMS_UI_QR) {
+                char route_str[32];
+                if (s_pending_cmd.origin[0] != '\0' && s_pending_cmd.destination[0] != '\0') {
+                    snprintf(route_str, sizeof(route_str), "%.11s -> %.11s", s_pending_cmd.origin, s_pending_cmd.destination);
+                } else {
+                    snprintf(route_str, sizeof(route_str), "Route %d", s_pending_cmd.route_id);
+                }
+                toms_ui_show_fare(route_str, s_pending_cmd.fare_centavos, s_pending_cmd.seat_number);
+            } else if (curr == TOMS_UI_FARE) {
+                char qr_buf[160];
+                char uid_hex[13];
+                snprintf(uid_hex, sizeof(uid_hex), "%02X%02X%02X%02X%02X%02X",
+                         s_slave_uid[0], s_slave_uid[1], s_slave_uid[2],
+                         s_slave_uid[3], s_slave_uid[4], s_slave_uid[5]);
+                if (toms_qr_build_receipt((const char *)s_pending_cmd.vehicle_id, s_pending_cmd.timestamp,
+                                          s_pending_cmd.fare_centavos, uid_hex, qr_buf, sizeof(qr_buf))) {
+                    toms_ui_show_qr(qr_buf);
+                }
+            }
+            toms_sleep_reset_idle();
+            return;
+        }
+
         s_button_pressed = true;
         toms_sleep_reset_idle();
 
@@ -322,7 +420,7 @@ static void espnow_handler_task(void *arg)
                     s_board_cmd_pending = true;
 
                     /* Save master MAC */
-                    memcpy(s_master_mac, event.src_mac, 6);
+                    update_master_mac(event.src_mac);
 
                     /* ACK */
                     toms_packet_t ack;
@@ -340,7 +438,7 @@ static void espnow_handler_task(void *arg)
                     (const toms_config_payload_t *)event.packet.payload;
                 ESP_LOGI(TAG, "Config sync: route=%d, base_fare=%d",
                          cfg->route_id, cfg->base_fare_centavos);
-                memcpy(s_master_mac, event.src_mac, 6);
+                update_master_mac(event.src_mac);
 
                 toms_packet_t ack;
                 toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
@@ -350,7 +448,25 @@ static void espnow_handler_task(void *arg)
 
         case TOMS_MSG_FARE_TABLE_UPDATE:
             ESP_LOGI(TAG, "Fare table update received");
-            /* TODO: persist to NVS */
+            if (event.packet.length >= sizeof(toms_config_payload_t)) {
+                const toms_config_payload_t *cfg =
+                    (const toms_config_payload_t *)event.packet.payload;
+
+                toms_fare_dict_t new_dict = {0};
+                new_dict.count = 1;
+                new_dict.entries[0].fare_id        = 1;
+                new_dict.entries[0].fare_centavos  = cfg->base_fare_centavos;
+                new_dict.entries[0].route_id       = cfg->route_id;
+                memcpy(new_dict.entries[0].vehicle_id, cfg->vehicle_id, 16);
+                snprintf(new_dict.entries[0].route_name, sizeof(new_dict.entries[0].route_name), "Route %d", cfg->route_id);
+
+                toms_fare_dict_save(&new_dict);
+                ESP_LOGI(TAG, "Fare dictionary updated: base_fare=%d, route_id=%d", cfg->base_fare_centavos, cfg->route_id);
+                
+                /* Notify NFC sync task to reload dictionary if possible */
+                toms_slave_nfc_reload_dict();
+            }
+            
             {
                 toms_packet_t ack;
                 toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
@@ -381,6 +497,20 @@ static void espnow_handler_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "Alarm command UID mismatch — dropped");
                 }
+            }
+            break;
+
+        case TOMS_MSG_FORCE_RELEASE:
+            ESP_LOGI(TAG, "Force release received from master");
+            save_boarding_state(NULL);
+            s_board_cmd_pending = false;
+            toms_ui_show_welcome();
+            toms_sleep_reset_idle();
+
+            {
+                toms_packet_t ack;
+                toms_packet_build(&ack, TOMS_MSG_ACK_SLAVE, s_seq++, NULL, 0);
+                toms_espnow_send(event.src_mac, &ack);
             }
             break;
 
@@ -417,8 +547,12 @@ static void execute_boarding(const toms_board_command_t *cmd)
     vTaskDelay(pdMS_TO_TICKS(500));
 
     /* Show fare screen */
-    char route_str[16];
-    snprintf(route_str, sizeof(route_str), "Route %d", cmd->route_id);
+    char route_str[32];
+    if (cmd->origin[0] != '\0' && cmd->destination[0] != '\0') {
+        snprintf(route_str, sizeof(route_str), "%.11s -> %.11s", cmd->origin, cmd->destination);
+    } else {
+        snprintf(route_str, sizeof(route_str), "Route %d", cmd->route_id);
+    }
     toms_ui_show_fare(route_str, cmd->fare_centavos, cmd->seat_number);
     vTaskDelay(pdMS_TO_TICKS(3000));
 
@@ -435,6 +569,7 @@ static void execute_boarding(const toms_board_command_t *cmd)
             cmd->fare_centavos,
             uid_hex,
             qr_buf, sizeof(qr_buf))) {
+        save_boarding_state(cmd);
         toms_ui_show_qr(qr_buf);
         vTaskDelay(pdMS_TO_TICKS(8000));
     }
@@ -455,9 +590,8 @@ static void execute_boarding(const toms_board_command_t *cmd)
                       (const uint8_t *)&pe, sizeof(pe));
     toms_espnow_send(s_master_mac, &pkt);
     debug_serial_send_espnow_tx(TOMS_MSG_PASSENGER_BOARD, s_seq - 1);
-
-    toms_ui_show_welcome();
-    debug_serial_send_state("welcome", 0, 0, s_master_mac, s_seq);
+    
+    // UI remains on QR Receipt until force release or manual long-press release
 }
 
 /* ── Battery ADC Helpers ───────────────────────────────────────────────── */
@@ -577,7 +711,12 @@ static void main_logic_task(void *arg)
     (void)arg;
     ESP_LOGI(TAG, "Main logic task started");
 
-    toms_ui_show_welcome();
+    if (s_is_occupied) {
+        ESP_LOGI(TAG, "Restoring occupied state from NVS");
+        restore_passenger_screen();
+    } else {
+        toms_ui_show_welcome();
+    }
 
     while (1) {
         /* Priority 1: Master board command (ESP-NOW or NFC) */
@@ -593,6 +732,14 @@ static void main_logic_task(void *arg)
         if (s_release_requested) {
             ESP_LOGI(TAG, "Release flag seen -> sending RELEASE to master");
             s_release_requested = false;
+            
+            /* Prevent button release event from restoring the screen */
+            s_held_screen_before_progress = TOMS_UI_WELCOME;
+
+            /* WIPE NVS STATE immediately upon local release so the button toggle 
+             * logic knows we are unoccupied even before the ACK arrives. */
+            save_boarding_state(NULL);
+            s_board_cmd_pending = false;
 
             toms_packet_t pkt;
             toms_packet_build(&pkt, TOMS_MSG_RELEASE, s_seq++,
@@ -678,6 +825,9 @@ void app_main(void)
         nvs_flash_erase();
         nvs_flash_init();
     }
+    
+    /* Load boarding state from NVS if previously occupied */
+    load_boarding_state();
 
     /* ── Step 2: Slave UID (eFuse MAC) ──────────────────────────────── */
     uid_init();
@@ -694,7 +844,7 @@ void app_main(void)
 
     /* ── Step 4: ESP-NOW ────────────────────────────────────────────── */
     toms_espnow_init(NULL);
-    toms_espnow_add_peer(s_master_mac, s_espnow_lmk, TOMS_ESPNOW_CHANNEL);
+    toms_espnow_add_peer(s_master_mac, NULL, TOMS_ESPNOW_CHANNEL);
 
     /* ── Step 5: NFC Sync (PN532 Target) ───────────────────────────── */
     err = toms_slave_nfc_init();

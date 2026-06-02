@@ -60,6 +60,14 @@ int toms_slave_nfc_init(void);
 void toms_slave_nfc_set_board_cb(toms_slave_nfc_board_cb_t cb);
 
 /**
+ * @brief Reload the local fare dictionary from NVS.
+ *
+ * This should be called when the Master broadcasts a FARE_TABLE_UPDATE
+ * so the PN532 target task can instantly use the new fare values without rebooting.
+ */
+void toms_slave_nfc_reload_dict(void);
+
+/**
  * @brief NFC Target listener task (FreeRTOS). Never returns.
  *
  * Waits passively for Master NFC tap using TgInitAsTarget,

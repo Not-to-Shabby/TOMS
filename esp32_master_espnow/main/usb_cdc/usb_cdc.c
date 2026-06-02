@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "tinyusb.h"
+#include "debug_serial.h"
 #include "tusb_cdc_acm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -106,15 +107,33 @@ int toms_usb_cdc_send(const char *json)
     size_t len = strlen(json);
     if (len == 0) return 0;
 
-    /* Send JSON data */
+    /* Report to debug serial */
+    char evt_name[32] = "unknown";
+    const char *evt_start = strstr(json, "\"evt\":\"");
+    if (evt_start) {
+        evt_start += 7;
+        const char *evt_end = strchr(evt_start, '"');
+        if (evt_end && (size_t)(evt_end - evt_start) < sizeof(evt_name)) {
+            memcpy(evt_name, evt_start, evt_end - evt_start);
+            evt_name[evt_end - evt_start] = '\0';
+        }
+    }
+    debug_serial_send_usb_tx(evt_name);
+
+    /* Combine JSON and newline into a single buffer to avoid dropped 1-byte packets */
+    char tx_buf[TOMS_USB_MAX_MSG_LEN];
+    if (len + 1 >= sizeof(tx_buf)) {
+        ESP_LOGE(TAG, "USB TX buffer overflow");
+        return -1;
+    }
+    memcpy(tx_buf, json, len);
+    tx_buf[len] = '\n';
+    
+    /* Send combined data */
     size_t written = 0;
     esp_err_t err = tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0,
-                                                (const uint8_t *)json, len);
+                                                (const uint8_t *)tx_buf, len + 1);
     if (err != ESP_OK) return -1;
-
-    /* Send newline delimiter */
-    const uint8_t newline = '\n';
-    tinyusb_cdcacm_write_queue(TINYUSB_CDC_ACM_0, &newline, 1);
 
     /* Flush */
     err = tinyusb_cdcacm_write_flush(TINYUSB_CDC_ACM_0, pdMS_TO_TICKS(100));

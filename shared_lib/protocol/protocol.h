@@ -41,6 +41,7 @@ typedef enum {
     TOMS_MSG_CONFIG_SYNC        = 0x11,  /**< Config: route, vehicle ID, etc. */
     TOMS_MSG_BOARD_COMMAND      = 0x12,  /**< Master-driven boarding command (fare + QR trigger) */
     TOMS_MSG_UID_REQUEST        = 0x13,  /**< Master requests slave UID (legacy, kept for reference) */
+    TOMS_MSG_FORCE_RELEASE      = 0x14,  /**< Remotely clear boarding state */
     TOMS_MSG_NFC_BOARD_CMD      = 0x15,  /**< Compact NFC boarding command (dictionary-based) */
 
     /* ACK/NACK */
@@ -134,6 +135,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  route_id;              /**< Route identifier */
     uint8_t  vehicle_id[16];        /**< Vehicle UUID for QR receipt */
     uint8_t  boarding_type;         /**< toms_boarding_type_t: CARD=0, BUTTON=1, QR=2 */
+    char     origin[12];            /**< Boarding stop name (max 11 chars + null) */
+    char     destination[12];       /**< Alighting stop name (max 11 chars + null) */
 } toms_board_command_t;
 
 /* ── Alarm Command Payload (Master → Slave) ──────────────────────────────── */

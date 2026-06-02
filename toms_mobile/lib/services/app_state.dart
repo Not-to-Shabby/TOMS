@@ -52,6 +52,7 @@ class AppState extends ChangeNotifier {
 
   List<dynamic> _paths = [];
   int? _activePathId;
+  int _activeRouteId = 1;
   String _activePathName = 'Primary';
 
   List<TransitStop> _stops = [];
@@ -137,7 +138,6 @@ class AppState extends ChangeNotifier {
     syncService.startRetryTimer();
 
     // 1. Fetch vehicle config first to determine its active assigned route ID
-    int activeRouteId = 1;
     try {
       if (connectivityService.isOnline) {
         final response = await http
@@ -152,8 +152,8 @@ class AppState extends ChangeNotifier {
           if (currentVehicle != null) {
             occupancyService.maxCapacity =
                 currentVehicle['max_capacity'] as int? ?? 20;
-            activeRouteId = currentVehicle['assigned_route_id'] as int? ?? 1;
-            debugPrint('Loaded vehicle config. Route ID: $activeRouteId, Max Capacity: ${occupancyService.maxCapacity}');
+            _activeRouteId = currentVehicle['assigned_route_id'] as int? ?? 1;
+            debugPrint('Loaded vehicle config. Route ID: $_activeRouteId, Max Capacity: ${occupancyService.maxCapacity}');
           }
         }
       }
@@ -171,12 +171,12 @@ class AppState extends ChangeNotifier {
         try {
           // Loaded from environment variables configuration.
           final responsePaths = await http
-              .get(Uri.parse('${Env.apiBaseUrl}/api/routes/$activeRouteId/paths'))
+              .get(Uri.parse('${Env.apiBaseUrl}/api/routes/$_activeRouteId/paths'))
               .timeout(const Duration(seconds: 5));
           if (responsePaths.statusCode == 200) {
             pathsJson = responsePaths.body;
             await prefs.setString('cached_paths', pathsJson);
-            debugPrint('Successfully fetched and cached fresh paths for route $activeRouteId.');
+            debugPrint('Successfully fetched and cached fresh paths for route $_activeRouteId.');
           }
 
           final responseRoutes = await http
@@ -186,7 +186,7 @@ class AppState extends ChangeNotifier {
             final routesList = json.decode(responseRoutes.body) as List;
             if (routesList.isNotEmpty) {
               final activeRoute = routesList.firstWhere(
-                (r) => r['id'] == activeRouteId,
+                (r) => r['id'] == _activeRouteId,
                 orElse: () => routesList.first,
               );
               final baseFare = (activeRoute['base_fare'] ?? 15.0).toDouble();
@@ -443,6 +443,9 @@ class AppState extends ChangeNotifier {
       destinationLon: session.destination.lon,
     );
 
+    // Send remote release to Slave
+    usbService.sendForceReleaseCommand(uid);
+
     dbService.insertLog(log);
     sessionService.releaseSlot(uid);
     refreshData();
@@ -454,8 +457,10 @@ class AppState extends ChangeNotifier {
       'uid': uid,
       'fare': session.finalFareCentavos,
       'seat': slotNum,
-      'route': session.boarding.id,
+      'route': _activeRouteId,
       'vehicle_id': occupancyService.vehicleId,
+      'origin': session.boarding.name,
+      'destination': session.destination.name,
     });
   }
 

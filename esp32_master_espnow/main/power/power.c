@@ -9,6 +9,8 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "toms_power";
 
@@ -16,6 +18,7 @@ static const char *TAG = "toms_power";
 
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t         s_cali_handle = NULL;
+static SemaphoreHandle_t         s_adc_mutex = NULL;
 static bool                      s_initialized = false;
 
 /* ── Initialization ───────────────────────────────────────────────────── */
@@ -23,6 +26,13 @@ static bool                      s_initialized = false;
 int toms_power_init(void)
 {
     if (s_initialized) return 0;
+
+    /* Create mutex */
+    s_adc_mutex = xSemaphoreCreateMutex();
+    if (!s_adc_mutex) {
+        ESP_LOGE(TAG, "Failed to create ADC mutex");
+        return ESP_ERR_NO_MEM;
+    }
 
     /* ADC unit init */
     adc_oneshot_unit_init_cfg_t unit_cfg = {
@@ -80,10 +90,12 @@ int toms_power_init(void)
 
 uint32_t toms_power_get_battery_mv(void)
 {
-    if (!s_initialized) return 0;
+    if (!s_initialized || !s_adc_mutex) return 0;
 
     int raw = 0;
+    xSemaphoreTake(s_adc_mutex, portMAX_DELAY);
     esp_err_t err = adc_oneshot_read(s_adc_handle, TOMS_BATTERY_ADC_CHANNEL, &raw);
+    xSemaphoreGive(s_adc_mutex);
     if (err != ESP_OK) return 0;
 
     int voltage_mv = 0;

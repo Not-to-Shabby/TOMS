@@ -95,6 +95,14 @@ void toms_slave_nfc_set_board_cb(toms_slave_nfc_board_cb_t cb)
     s_board_cb = cb;
 }
 
+void toms_slave_nfc_reload_dict(void)
+{
+    if (s_initialized) {
+        toms_fare_dict_load(&s_fare_dict);
+        ESP_LOGI(TAG, "NFC dictionary reloaded from NVS (%d entries)", s_fare_dict.count);
+    }
+}
+
 /* ── NFC Target Listener Task ─────────────────────────────────────────── */
 
 void toms_slave_nfc_task(void *arg)
