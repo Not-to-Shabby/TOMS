@@ -85,7 +85,16 @@ class SyncService extends ChangeNotifier {
     // 2. If online - try to push immediately
     if (connectivity.isOnline) {
       flushQueue();
+    } else {
+      _pendingSyncCount++;
+      notifyListeners();
     }
+  }
+
+  Future<void> initPendingCount() async {
+    final pending = await db.getUnsyncedEvents();
+    _pendingSyncCount = pending.length;
+    notifyListeners();
   }
 
   Future<void> flushQueue() async {

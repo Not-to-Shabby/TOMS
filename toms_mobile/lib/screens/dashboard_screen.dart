@@ -58,58 +58,69 @@ class DashboardScreen extends StatelessWidget {
         actions: [
           Consumer<UsbService>(builder: (_, usb, __) => _NfcChip(connected: usb.isConnected)),
           const SizedBox(width: 4),
-          PopupMenuButton<String>(
-            icon: const Icon(LucideIcons.moreVertical, size: 20),
-            color: TomsTheme.bgCard,
-            onSelected: (v) {
-              if (v == 'usb') {
-                final usb = context.read<UsbService>();
-                usb.isConnected ? usb.disconnect() : context.read<AppState>().connectUsb();
-              } else if (v == 'history') {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const ShiftHistoryScreen()));
-              } else if (v == 'dispute') {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const DisputeResolutionScreen()));
-              } else if (v == 'reconciliation') {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncReconciliationScreen()));
-              } else if (v == 'end_shift') {
-                _confirmEndShift(context);
-              } else if (v == 'debug') {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const DebugScreen()));
-              }
+          Consumer<AppState>(
+            builder: (context, app, _) {
+              return PopupMenuButton<String>(
+                icon: const Icon(LucideIcons.moreVertical, size: 20),
+                color: TomsTheme.bgCard,
+                onSelected: (v) {
+                  if (v == 'usb') {
+                    final usb = context.read<UsbService>();
+                    usb.isConnected ? usb.disconnect() : context.read<AppState>().connectUsb();
+                  } else if (v == 'history') {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const ShiftHistoryScreen()));
+                  } else if (v == 'dispute') {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const DisputeResolutionScreen()));
+                  } else if (v == 'reconciliation') {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const SyncReconciliationScreen()));
+                  } else if (v == 'end_shift') {
+                    _confirmEndShift(context);
+                  } else if (v == 'debug') {
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const DebugScreen()));
+                  } else if (v == 'toggle_debug') {
+                    app.toggleDebugMode();
+                  }
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(value: 'usb', child: Consumer<UsbService>(builder: (_, usb, __) => Row(children: [
+                    Icon(usb.isConnected ? LucideIcons.unplug : LucideIcons.plug, size: 16, color: TomsTheme.textSecondary),
+                    const SizedBox(width: 10),
+                    Text(usb.isConnected ? 'Disconnect USB' : 'Connect USB', style: const TextStyle(color: TomsTheme.textPrimary)),
+                  ]))),
+                  const PopupMenuItem(value: 'history', child: Row(children: [
+                    Icon(LucideIcons.history, size: 16, color: TomsTheme.textSecondary),
+                    SizedBox(width: 10),
+                    Text('Shift History', style: TextStyle(color: TomsTheme.textPrimary)),
+                  ])),
+                  const PopupMenuItem(value: 'dispute', child: Row(children: [
+                    Icon(LucideIcons.scan, size: 16, color: TomsTheme.textSecondary),
+                    SizedBox(width: 10),
+                    Text('Dispute Resolution', style: TextStyle(color: TomsTheme.textPrimary)),
+                  ])),
+                  const PopupMenuItem(value: 'reconciliation', child: Row(children: [
+                    Icon(LucideIcons.refreshCw, size: 16, color: TomsTheme.textSecondary),
+                    SizedBox(width: 10),
+                    Text('Sync Reconciliation', style: TextStyle(color: TomsTheme.textPrimary)),
+                  ])),
+                  const PopupMenuItem(value: 'debug', child: Row(children: [
+                    Icon(LucideIcons.terminal, size: 16, color: TomsTheme.textSecondary),
+                    SizedBox(width: 10),
+                    Text('Debug Console', style: TextStyle(color: TomsTheme.textPrimary)),
+                  ])),
+                  PopupMenuItem(value: 'toggle_debug', child: Row(children: [
+                    Icon(app.debugMode ? LucideIcons.toggleRight : LucideIcons.toggleLeft, size: 16, color: app.debugMode ? TomsTheme.success : TomsTheme.textSecondary),
+                    const SizedBox(width: 10),
+                    Text('Debug Mode: ${app.debugMode ? "ON" : "OFF"}', style: const TextStyle(color: TomsTheme.textPrimary)),
+                  ])),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(value: 'end_shift', child: Row(children: [
+                    Icon(LucideIcons.logOut, size: 16, color: TomsTheme.danger),
+                    SizedBox(width: 10),
+                    Text('End Shift', style: TextStyle(color: TomsTheme.danger, fontWeight: FontWeight.w700)),
+                  ])),
+                ],
+              );
             },
-            itemBuilder: (_) => [
-              PopupMenuItem(value: 'usb', child: Consumer<UsbService>(builder: (_, usb, __) => Row(children: [
-                Icon(usb.isConnected ? LucideIcons.unplug : LucideIcons.plug, size: 16, color: TomsTheme.textSecondary),
-                const SizedBox(width: 10),
-                Text(usb.isConnected ? 'Disconnect USB' : 'Connect USB', style: const TextStyle(color: TomsTheme.textPrimary)),
-              ]))),
-              const PopupMenuItem(value: 'history', child: Row(children: [
-                Icon(LucideIcons.history, size: 16, color: TomsTheme.textSecondary),
-                SizedBox(width: 10),
-                Text('Shift History', style: TextStyle(color: TomsTheme.textPrimary)),
-              ])),
-              const PopupMenuItem(value: 'dispute', child: Row(children: [
-                Icon(LucideIcons.scan, size: 16, color: TomsTheme.textSecondary),
-                SizedBox(width: 10),
-                Text('Dispute Resolution', style: TextStyle(color: TomsTheme.textPrimary)),
-              ])),
-              const PopupMenuItem(value: 'reconciliation', child: Row(children: [
-                Icon(LucideIcons.refreshCw, size: 16, color: TomsTheme.textSecondary),
-                SizedBox(width: 10),
-                Text('Sync Reconciliation', style: TextStyle(color: TomsTheme.textPrimary)),
-              ])),
-              const PopupMenuItem(value: 'debug', child: Row(children: [
-                Icon(LucideIcons.terminal, size: 16, color: TomsTheme.textSecondary),
-                SizedBox(width: 10),
-                Text('Debug Console', style: TextStyle(color: TomsTheme.textPrimary)),
-              ])),
-              const PopupMenuDivider(),
-              const PopupMenuItem(value: 'end_shift', child: Row(children: [
-                Icon(LucideIcons.logOut, size: 16, color: TomsTheme.danger),
-                SizedBox(width: 10),
-                Text('End Shift', style: TextStyle(color: TomsTheme.danger, fontWeight: FontWeight.w700)),
-              ])),
-            ],
           ),
           const SizedBox(width: 4),
         ],
@@ -708,29 +719,94 @@ void _confirmEndShift(BuildContext context) {
 class _SyncStatusBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return Consumer<SyncService>(
-      builder: (_, sync, __) {
-        if (sync.pendingSyncCount == 0) return const SizedBox.shrink();
-        return Container(
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: TomsTheme.warning.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: TomsTheme.warning.withValues(alpha: 0.4)),
-          ),
-          child: Row(children: [
-            const Icon(LucideIcons.cloudOff, size: 14, color: TomsTheme.warning),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '${sync.pendingSyncCount} event${sync.pendingSyncCount == 1 ? '' : 's'} queued — will sync when online',
-                style: const TextStyle(fontSize: 12, color: TomsTheme.warning),
+    final app = context.watch<AppState>();
+    final sync = context.watch<SyncService>();
+    final debugMode = app.debugMode;
+
+    if (sync.pendingSyncCount == 0 && !debugMode) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: debugMode
+            ? TomsTheme.accent.withValues(alpha: 0.08)
+            : TomsTheme.warning.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: debugMode
+              ? TomsTheme.accent.withValues(alpha: 0.4)
+              : TomsTheme.warning.withValues(alpha: 0.4),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                debugMode ? LucideIcons.bug : LucideIcons.cloudOff,
+                size: 14,
+                color: debugMode ? TomsTheme.accent : TomsTheme.warning,
               ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  debugMode
+                      ? 'Sync Debug: ${sync.pendingSyncCount} queued events'
+                      : '${sync.pendingSyncCount} event${sync.pendingSyncCount == 1 ? '' : 's'} queued — will sync when online',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: debugMode ? TomsTheme.accent : TomsTheme.warning,
+                    fontWeight: debugMode ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (debugMode) ...[
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Text('Force Offline: ', style: TextStyle(fontSize: 11, color: TomsTheme.textSecondary)),
+                    SizedBox(
+                      height: 24,
+                      child: Switch(
+                        value: app.connectivityService.forceOffline,
+                        activeThumbColor: TomsTheme.accent,
+                        onChanged: (val) {
+                          app.setForceOffline(val);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    app.addMockUnsyncedEvent();
+                  },
+                  icon: const Icon(LucideIcons.plus, size: 12),
+                  label: const Text('MOCK EVENT', style: TextStyle(fontSize: 10)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: TomsTheme.bgCardLight,
+                    foregroundColor: TomsTheme.accent,
+                    elevation: 0,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      side: const BorderSide(color: TomsTheme.border),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ]),
-        );
-      },
+          ],
+        ],
+      ),
     );
   }
 }

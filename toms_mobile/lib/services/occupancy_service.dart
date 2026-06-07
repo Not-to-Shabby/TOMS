@@ -5,7 +5,7 @@ import 'session_service.dart';
 class OccupancyService extends ChangeNotifier {
   final SessionService sessionService;
   int maxCapacity = 20; // Default capacity, configurable
-  String vehicleId = 'CDB-001';
+  String vehicleId = '';
 
   // Map of slaveUid to slotNumber
   final Map<String, int> _slotMappings = {};

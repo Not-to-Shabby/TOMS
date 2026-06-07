@@ -58,8 +58,10 @@ class AppState extends ChangeNotifier {
   List<TransitStop> _stops = [];
   String? _requestingUid;
   String? _manualAssignTarget;
+  bool _debugMode = false;
 
   // ── Getters ──────────────────────────────────────────────────
+  bool get debugMode => _debugMode;
   String? get requestingUid => _requestingUid;
   String? get manualAssignTarget => _manualAssignTarget;
   bool get isDocked => false;
@@ -134,7 +136,17 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> initialize() async {
+    final prefs = await SharedPreferences.getInstance();
+    _debugMode = prefs.getBool('debug_mode') ?? false;
+
+    // Restore the vehicle ID from the persisted AuthService assignment
+    final savedVehicleId = prefs.getString('vehicle_id');
+    if (savedVehicleId != null && savedVehicleId.isNotEmpty) {
+      occupancyService.vehicleId = savedVehicleId;
+    }
+
     await connectivityService.init();
+    await syncService.initPendingCount();
     syncService.startRetryTimer();
 
     // 1. Fetch vehicle config first to determine its active assigned route ID
@@ -566,6 +578,72 @@ class AppState extends ChangeNotifier {
   void clearRequestingUid() {
     _requestingUid = null;
     notifyListeners();
+  }
+
+  void toggleDebugMode() async {
+    _debugMode = !_debugMode;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('debug_mode', _debugMode);
+    notifyListeners();
+  }
+
+  void setForceOffline(bool force) {
+    connectivityService.forceOffline = force;
+    notifyListeners();
+  }
+
+  void addMockUnsyncedEvent() {
+    final mockUid = 'MOCKUID${DateTime.now().millisecond}';
+    _pushSyncEvent(
+      'board',
+      mockUid,
+      PassengerSession(
+        id: 'mock-session-id-${DateTime.now().millisecond}',
+        slaveUid: mockUid,
+        boarding: _stops.isNotEmpty ? _stops.first : TransitStop(id: 1, name: 'Tambo Terminal', lat: 8.2287, lon: 124.2451),
+        destination: _stops.length > 1 ? _stops[1] : TransitStop(id: 2, name: 'Country Hills', lat: 8.2456, lon: 124.2611),
+        fareId: 1,
+        baseFareCentavos: 1500,
+        finalFareCentavos: 1500,
+        type: PassengerType.regular,
+        boardedAt: DateTime.now(),
+      ),
+      99,
+    );
+  }
+
+  void toggleMockAlarm(String slaveUid) {
+    final session = sessionService.getSessionBySlave(slaveUid);
+    if (session != null) {
+      session.alarmTriggered = !session.alarmTriggered;
+      if (session.alarmTriggered) {
+        _onProximityAlarm(session);
+      }
+      notifyListeners();
+    }
+  }
+
+  void addMockPassengerSession() {
+    final mockUid = 'MOCKUID${DateTime.now().millisecond}';
+    final origin = _stops.isNotEmpty ? _stops.first : TransitStop(id: 1, name: 'Tambo Terminal', lat: 8.2287, lon: 124.2451);
+    final dest = _stops.length > 1 ? _stops[1] : TransitStop(id: 2, name: 'Country Hills', lat: 8.2456, lon: 124.2611);
+    
+    final session = PassengerSession(
+      id: 'mock-session-id-${DateTime.now().millisecond}',
+      slaveUid: mockUid,
+      boarding: origin,
+      destination: dest,
+      fareId: dest.id,
+      baseFareCentavos: 1500,
+      finalFareCentavos: 1500,
+      type: PassengerType.regular,
+      boardedAt: DateTime.now(),
+      paid: false,
+      alarmTriggered: false,
+    );
+    
+    sessionService.activeSessions.add(session);
+    sessionService.notifyListeners();
   }
 
   Future<void> refreshData() async {

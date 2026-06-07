@@ -4,7 +4,18 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 class ConnectivityService {
   final Connectivity _connectivity = Connectivity();
   bool _isOnline = false;
-  bool get isOnline => _isOnline;
+  bool _forceOffline = false;
+
+  bool get forceOffline => _forceOffline;
+
+  set forceOffline(bool value) {
+    if (_forceOffline != value) {
+      _forceOffline = value;
+      _controller.add(isOnline);
+    }
+  }
+
+  bool get isOnline => _forceOffline ? false : _isOnline;
 
   final _controller = StreamController<bool>.broadcast();
   Stream<bool> get onConnectivityChanged => _controller.stream;

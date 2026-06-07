@@ -638,6 +638,11 @@ app.post('/api/events', (req, res) => {
               io.emit('fleet_update', status);
             });
 
+            // Emit individual events for the Live Feed ticker
+            events.forEach(event => {
+              io.emit('new_event', event);
+            });
+
             res.json({ status: 'success', synced: events.length });
         });
       }
