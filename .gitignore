@@ -28,3 +28,6 @@ dependencies.lock
 # OS files
 .DS_Store
 Thumbs.db
+
+# ESP-IDF component manager downloads (restored by the build)
+managed_components/
