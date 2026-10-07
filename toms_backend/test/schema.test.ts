@@ -23,7 +23,11 @@ describe('migrations', () => {
   it('apply once and are skipped on the next run', async () => {
     expect(await migrate(pool)).toEqual([]);
     const { rows } = await pool.query('SELECT name FROM schema_migrations ORDER BY name');
-    expect(rows.map((r) => r.name)).toEqual(['001_init.sql']);
+    const onDisk = fs
+      .readdirSync(path.join(__dirname, '..', 'migrations'))
+      .filter((f) => f.endsWith('.sql'))
+      .sort();
+    expect(rows.map((r) => r.name)).toEqual(onDisk);
   });
 
   it('roll back completely when a later file fails', async () => {

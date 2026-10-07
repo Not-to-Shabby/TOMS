@@ -3,6 +3,7 @@ import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { envelopeSchema, ingestEvents } from './ingest';
 
 export interface AppDeps {
   pool: Pool;
@@ -40,6 +41,20 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
   app.get('/health', async (_req, res) => {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', timestamp: new Date() });
+  });
+
+  // --- Event ingest -------------------------------------------------------------------------
+  // Open until the auth step adds device credentials. Do not expose it to the internet before then.
+
+  app.post('/api/events', async (req, res) => {
+    const envelope = envelopeSchema.safeParse(req.body);
+    if (!envelope.success) {
+      return void res.status(400).json({
+        error: 'Invalid request',
+        issues: envelope.error.issues.slice(0, 5).map((i) => ({ path: i.path.join('.'), message: i.message })),
+      });
+    }
+    res.json(await ingestEvents(pool, envelope.data.events, envelope.data.delivery_channel));
   });
 
   // --- Routes -------------------------------------------------------------------------------
@@ -396,6 +411,12 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
 
   // Express 5 forwards rejected async handlers here. Details stay in the log, not the response.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const status = (err as { status?: unknown })?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      return void res
+        .status(status)
+        .json({ error: status === 413 ? 'Request body too large' : 'Invalid request body' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
   });
