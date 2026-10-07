@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import http from 'http';
 import { createApp } from './app';
 import { assertJwtSecret, makeAuth } from './auth';
+import { assertTimezone } from './dashboard';
 import { createPool, migrate } from './db';
 import { attachSocket } from './socket';
 
@@ -22,9 +23,11 @@ async function main() {
   const applied = await migrate(pool);
   if (applied.length > 0) console.log('Applied migrations:', applied.join(', '));
 
+  const reportTimezone = await assertTimezone(pool, process.env.REPORT_TIMEZONE ?? 'Asia/Manila');
+
   const server = http.createServer();
   const io = attachSocket(server, makeAuth({ pool, jwtSecret }), corsOrigins);
-  const app = createApp({ pool, jwtSecret, corsOrigins, emit: (event, payload) => io.emit(event, payload) });
+  const app = createApp({ pool, jwtSecret, corsOrigins, reportTimezone, emit: (event, payload) => io.emit(event, payload) });
   server.on('request', app);
 
   const port = Number(process.env.PORT) || 3000;

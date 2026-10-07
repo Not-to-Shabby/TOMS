@@ -4,6 +4,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { LoginLimiter, makeAuth, newDeviceCredential, verifyPassword } from './auth';
+import { fleetStatus, registerDashboardRoutes } from './dashboard';
 import { envelopeSchema, ingestEvents } from './ingest';
 
 export interface AppDeps {
@@ -14,6 +15,8 @@ export interface AppDeps {
   /** Pushes a live update to dashboard clients. A no-op in tests. */
   emit?: (event: string, payload: unknown) => void;
   loginLimiter?: LoginLimiter;
+  /** IANA zone used for "today" in reports. Defaults to the Philippines. */
+  reportTimezone?: string;
 }
 
 const id = z.coerce.number().int().positive();
@@ -38,7 +41,7 @@ const stopBody = z.object({
   radius_m: z.number().int().positive().optional(),
 });
 
-export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => undefined, loginLimiter }: AppDeps) {
+export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => undefined, loginLimiter, reportTimezone = 'Asia/Manila' }: AppDeps) {
   const app = express();
   const auth = makeAuth({ pool, jwtSecret });
   const limiter = loginLimiter ?? new LoginLimiter();
@@ -151,8 +154,29 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
     if (foreign) {
       return void res.status(403).json({ error: 'Events must carry the authenticated device_id' });
     }
-    res.json(await ingestEvents(pool, envelope.data.events, envelope.data.delivery_channel));
+    const result = await ingestEvents(pool, envelope.data.events, envelope.data.delivery_channel);
+
+    // Tell open dashboards before answering, so the push is never left running after the response.
+    // The events are already committed, so a failure here is logged and must not fail the phone's request.
+    if (result.accepted.length > 0) {
+      try {
+        const { rows } = await pool.query(
+          'SELECT DISTINCT vehicle_id FROM events WHERE event_id = ANY($1::uuid[]) AND vehicle_id IS NOT NULL',
+          [result.accepted],
+        );
+        for (const r of rows) {
+          const [status] = await fleetStatus(pool, reportTimezone, r.vehicle_id as string);
+          if (status) emit('fleet_update', status);
+        }
+        emit('events_ingested', { device_id: deviceId, accepted: result.accepted.length });
+      } catch (err) {
+        console.error('live update failed', err);
+      }
+    }
+    res.json(result);
   });
+
+  registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
 
   // --- Routes -------------------------------------------------------------------------------
 
