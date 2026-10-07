@@ -10,6 +10,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import java.util.UUID
 import javax.inject.Singleton
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import ph.toms.conductor.data.db.DatabaseKeyProvider
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.NoBackendUploader
@@ -27,8 +29,14 @@ abstract class DataModule {
 object ProvidersModule {
 
     @Provides @Singleton
-    fun database(@ApplicationContext context: Context): TomsDatabase =
-        Room.databaseBuilder(context, TomsDatabase::class.java, "toms.db").build()
+    fun database(@ApplicationContext context: Context): TomsDatabase {
+        System.loadLibrary("sqlcipher")
+        context.deleteDatabase("toms.db")
+        val factory = SupportOpenHelperFactory(DatabaseKeyProvider(context).passphrase())
+        return Room.databaseBuilder(context, TomsDatabase::class.java, "toms_enc.db")
+            .openHelperFactory(factory)
+            .build()
+    }
 
     /** Generated once per install and kept; becomes the per-device identity at enrollment (1.4). */
     @Provides @Singleton
