@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Bus, Search, RefreshCw } from 'lucide-react';
-import axios from 'axios';
+import { api } from '../lib/api';
 
-const API_URL = 'http://localhost:3000/api';
 
 interface Vehicle {
   id: string;
@@ -30,7 +29,7 @@ export default function FleetManager() {
 
   const fetchVehicles = () => {
     setLoading(true);
-    axios.get(`${API_URL}/vehicles`)
+    api.get(`/vehicles`)
       .then(res => {
         setVehicles(res.data);
         setLoading(false);
@@ -44,8 +43,8 @@ export default function FleetManager() {
   const fetchDependencies = async () => {
     try {
       const [rRes, cRes] = await Promise.all([
-        axios.get(`${API_URL}/routes`),
-        axios.get(`${API_URL}/conductors`)
+        api.get(`/routes`),
+        api.get(`/conductors`)
       ]);
       setRoutes(rRes.data);
       setConductors(cRes.data);
@@ -62,7 +61,7 @@ export default function FleetManager() {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_URL}/vehicles`, newVehicle);
+      await api.post(`/vehicles`, newVehicle);
       setShowAddModal(false);
       setNewVehicle({ id: '', plate_number: '', max_capacity: 20 });
       fetchVehicles();
@@ -74,7 +73,7 @@ export default function FleetManager() {
   const handleDelete = async (id: string) => {
     if (!confirm(`Are you sure you want to remove ${id} from the fleet?`)) return;
     try {
-      await axios.delete(`${API_URL}/vehicles/${id}`);
+      await api.delete(`/vehicles/${id}`);
       fetchVehicles();
     } catch (err) {
       alert('Failed to delete vehicle');
@@ -85,7 +84,7 @@ export default function FleetManager() {
     e.preventDefault();
     if (!editingVehicle) return;
     try {
-      await axios.put(`${API_URL}/vehicles/${editingVehicle.id}`, {
+      await api.put(`/vehicles/${editingVehicle.id}`, {
         plate_number: editingVehicle.plate_number,
         max_capacity: editingVehicle.max_capacity,
         status: editingVehicle.status,

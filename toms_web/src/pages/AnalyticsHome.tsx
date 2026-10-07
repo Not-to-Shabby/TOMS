@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, Users, Award, Calendar } from 'lucide-react';
-import axios from 'axios';
+import { api, downloadFile } from '../lib/api';
+import { categoryLabel, categoryShares } from '../lib/format';
 
-const API_URL = 'http://localhost:3000/api';
 
 interface DailyRevenue {
   date: string;
   regular_revenue: number;
-  student_revenue: number;
-  senior_revenue: number;
+  discounted_revenue: number;
+  discount_given: number;
   total_revenue: number;
   total_payments: number;
   total_boardings: number;
+  by_category: Record<string, number>;
 }
+
+const BAR_COLORS = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)'];
 
 export default function AnalyticsHome() {
   const [days, setDays] = useState<number>(7);
@@ -22,7 +25,7 @@ export default function AnalyticsHome() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API_URL}/analytics/revenue?days=${days}`)
+    api.get(`/analytics/revenue?days=${days}`)
       .then(res => {
         setData(res.data);
         setLoading(false);
@@ -34,10 +37,10 @@ export default function AnalyticsHome() {
   }, [days]);
 
   // Aggregate stats
+  const shares = categoryShares(data);
   const totalRevenue = data.reduce((acc, curr) => acc + curr.total_revenue, 0);
   const totalRidership = data.reduce((acc, curr) => acc + curr.total_boardings, 0);
-  const totalRegular = data.reduce((acc, curr) => acc + curr.regular_revenue, 0);
-  const totalDiscounted = data.reduce((acc, curr) => acc + curr.student_revenue + curr.senior_revenue, 0);
+  const totalDiscounted = data.reduce((acc, curr) => acc + curr.discounted_revenue, 0);
   const avgDailyRevenue = data.length > 0 ? totalRevenue / data.length : 0;
 
   // Chart computations
@@ -70,7 +73,7 @@ export default function AnalyticsHome() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <button 
-            onClick={() => window.location.href = `${API_URL}/export/audit`}
+            onClick={() => { downloadFile('/export/audit', 'toms_audit_logs.csv').catch(() => alert('Export failed. Please try again.')); }}
             style={{ 
               padding: '8px 16px', 
               borderRadius: '8px', 
@@ -265,38 +268,18 @@ export default function AnalyticsHome() {
         <div className="glass-panel" style={{ padding: '24px' }}>
           <h3 style={{ margin: '0 0 20px 0', fontSize: '18px' }}>Passenger Demographic Split</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* Regular */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '8px' }}>
-                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Regular Fare</span>
-                <span style={{ color: 'var(--text-secondary)' }}>₱{totalRegular.toLocaleString()} ({totalRevenue > 0 ? ((totalRegular / totalRevenue) * 100).toFixed(0) : 0}%)</span>
+            {shares.length === 0 && <div style={{ color: 'var(--text-secondary)' }}>No paid trips in this period.</div>}
+            {shares.map((share, i) => (
+              <div key={share.category}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '8px' }}>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{categoryLabel(share.category)}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>₱{share.revenue.toLocaleString()} ({share.percent.toFixed(0)}%)</span>
+                </div>
+                <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
+                  <div style={{ width: `${share.percent}%`, height: '100%', background: BAR_COLORS[i % BAR_COLORS.length] }} />
+                </div>
               </div>
-              <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
-                <div style={{ width: `${totalRevenue > 0 ? (totalRegular / totalRevenue) * 100 : 0}%`, height: '100%', background: 'var(--accent)' }} />
-              </div>
-            </div>
-
-            {/* Student */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '8px' }}>
-                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Student (20% Discount)</span>
-                <span style={{ color: 'var(--text-secondary)' }}>₱{data.reduce((acc, curr) => acc + curr.student_revenue, 0).toLocaleString()} ({totalRevenue > 0 ? ((data.reduce((acc, curr) => acc + curr.student_revenue, 0) / totalRevenue) * 100).toFixed(0) : 0}%)</span>
-              </div>
-              <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
-                <div style={{ width: `${totalRevenue > 0 ? (data.reduce((acc, curr) => acc + curr.student_revenue, 0) / totalRevenue) * 100 : 0}%`, height: '100%', background: 'var(--success)' }} />
-              </div>
-            </div>
-
-            {/* Senior */}
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '14px', marginBottom: '8px' }}>
-                <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Senior Citizen</span>
-                <span style={{ color: 'var(--text-secondary)' }}>₱{data.reduce((acc, curr) => acc + curr.senior_revenue, 0).toLocaleString()} ({totalRevenue > 0 ? ((data.reduce((acc, curr) => acc + curr.senior_revenue, 0) / totalRevenue) * 100).toFixed(0) : 0}%)</span>
-              </div>
-              <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
-                <div style={{ width: `${totalRevenue > 0 ? (data.reduce((acc, curr) => acc + curr.senior_revenue, 0) / totalRevenue) * 100 : 0}%`, height: '100%', background: 'var(--warning)' }} />
-              </div>
-            </div>
+            ))}
           </div>
         </div>
 

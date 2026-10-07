@@ -1,26 +1,34 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Calendar, ChevronLeft, ChevronRight, RefreshCw, Eye } from 'lucide-react';
-import axios from 'axios';
+import { api, downloadFile } from '../lib/api';
+import { eventLabel, pesos, shortId, stopRange } from '../lib/format';
 
-const API_URL = 'http://localhost:3000/api';
 
 interface LogEvent {
   id: number;
+  event_id: string;
   event_type: string;
   timestamp: string;
-  vehicle_id: string;
-  conductor_name: string | null;
-  route: string | null;
-  slot_number: number | null;
-  slave_uid: string | null;
-  passenger_type: string | null;
-  fare_centavos: number;
-  discount_centavos: number;
-  boarding_stop: string | null;
-  destination_stop: string | null;
-  occupancy_now: number;
-  max_capacity: number;
+  clock_suspect: boolean;
+  vehicle_id: string | null;
+  device_id: string;
+  delivery_channel: string;
+  card_uuid: string | null;
+  nfc_uid: string | null;
+  card_state: string | null;
+  boarding_stop_id: string | null;
+  declared_destination_stop_id: string | null;
+  actual_destination_stop_id: string | null;
+  discount_category_id: string | null;
+  computed_fare_centavos: number | null;
+  fare_centavos: number | null;
+  discount_centavos: number | null;
+  fare_version: number | null;
+  override_reason: string | null;
+  gps_lat: number | null;
+  gps_lon: number | null;
+  gps_accuracy_m: number | null;
 }
 
 interface PaginationMetadata {
@@ -51,7 +59,7 @@ export default function AuditLogs() {
     if (startDate) params.startDate = `${startDate}T00:00:00.000Z`;
     if (endDate) params.endDate = `${endDate}T23:59:59.000Z`;
 
-    axios.get(`${API_URL}/audit/logs`, { params })
+    api.get(`/audit/logs`, { params })
       .then(res => {
         setLogs(res.data.logs);
         setMetadata(res.data.metadata);
@@ -85,14 +93,23 @@ export default function AuditLogs() {
     }
   };
 
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const exportCsv = async () => {
+    setExportNote(null);
+    try {
+      const { truncated } = await downloadFile('/export/audit', 'toms_audit_logs.csv');
+      if (truncated) setExportNote('Export was cut at 50,000 rows. Narrow the data or ask for a full export.');
+    } catch {
+      setExportNote('Export failed. Please try again.');
+    }
+  };
+
   const getEventBadgeStyle = (type: string) => {
     switch (type) {
-      case 'payment':
+      case 'card_state_changed':
         return { background: 'rgba(16, 185, 129, 0.15)', color: 'var(--success)', border: '1px solid var(--success)' };
-      case 'boarding':
+      case 'trip_created':
         return { background: 'rgba(0, 210, 255, 0.15)', color: 'var(--accent)', border: '1px solid var(--accent)' };
-      case 'release':
-        return { background: 'rgba(148, 163, 184, 0.15)', color: 'var(--text-secondary)', border: '1px solid var(--border)' };
       case 'alarm':
         return { background: 'rgba(239, 68, 68, 0.15)', color: 'var(--danger)', border: '1px solid var(--danger)' };
       default:
@@ -102,6 +119,7 @@ export default function AuditLogs() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', height: '100%', position: 'relative' }}>
+      {exportNote && <div role="status" style={{ color: 'var(--warning)' }}>{exportNote}</div>}
       <header className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '28px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Conductor Transaction Audit Logs</h2>
@@ -109,7 +127,7 @@ export default function AuditLogs() {
         </div>
         <div style={{ display: 'flex', gap: '12px' }}>
           <button 
-            onClick={() => window.location.href = `${API_URL}/export/audit`}
+            onClick={() => exportCsv()}
             style={{ 
               background: 'transparent', 
               border: '1px solid var(--accent)', 
@@ -220,9 +238,9 @@ export default function AuditLogs() {
               <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(0,0,0,0.2)', position: 'sticky', top: 0, zIndex: 1 }}>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Timestamp</th>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Vehicle</th>
-                <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Conductor</th>
+                <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Device</th>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Event</th>
-                <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Slave Card UID</th>
+                <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Card UID</th>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Fare</th>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600 }}>Stop Range</th>
                 <th style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: '13px', fontWeight: 600, textAlign: 'center' }}>Details</th>
@@ -260,11 +278,11 @@ export default function AuditLogs() {
                     >
                       <td style={{ padding: '16px 24px', fontSize: '14px', whiteSpace: 'nowrap' }}>{dateStr}</td>
                       <td style={{ padding: '16px 24px', whiteSpace: 'nowrap' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{log.vehicle_id}</div>
-                        {log.route && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{log.route}</div>}
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{log.vehicle_id ?? 'Unassigned'}</div>
                       </td>
                       <td style={{ padding: '16px 24px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                        {log.conductor_name || 'N/A'}
+                        <div>{log.device_id}</div>
+                        <div style={{ fontSize: '12px' }}>{log.delivery_channel}{log.clock_suspect ? ' · clock?' : ''}</div>
                       </td>
                       <td style={{ padding: '16px 24px' }}>
                         <span style={{ 
@@ -275,17 +293,15 @@ export default function AuditLogs() {
                           textTransform: 'uppercase',
                           ...getEventBadgeStyle(log.event_type)
                         }}>
-                          {log.event_type}
+                          {eventLabel(log.event_type)}{log.card_state ? `: ${log.card_state}` : ''}
                         </span>
                       </td>
-                      <td style={{ padding: '16px 24px', fontSize: '14px', fontFamily: 'monospace' }}>{log.slave_uid || '-'}</td>
+                      <td style={{ padding: '16px 24px', fontSize: '14px', fontFamily: 'monospace' }}>{log.nfc_uid || '-'}</td>
                       <td style={{ padding: '16px 24px', fontSize: '14px', fontWeight: 600, color: 'var(--warning)' }}>
-                        {log.fare_centavos > 0 ? `₱${(log.fare_centavos / 100).toFixed(2)}` : '-'}
+                        {pesos(log.fare_centavos)}
                       </td>
                       <td style={{ padding: '16px 24px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-                        {log.boarding_stop || log.destination_stop ? (
-                          <span>{log.boarding_stop || '?'} ➔ {log.destination_stop || '?'}</span>
-                        ) : '-'}
+                        {stopRange(log.boarding_stop_id, log.declared_destination_stop_id, log.actual_destination_stop_id)}
                       </td>
                       <td style={{ padding: '16px 24px', textAlign: 'center' }}>
                         <button 
@@ -373,60 +389,73 @@ export default function AuditLogs() {
             </h3>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '14px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Log ID</span>
                 <span style={{ fontFamily: 'monospace' }}>#{selectedLog.id}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Timestamp</span>
-                <span>{new Date(selectedLog.timestamp).toLocaleString()}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Event ID</span>
+                <span style={{ fontFamily: 'monospace' }}>{shortId(selectedLog.event_id)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Vehicle ID</span>
-                <span style={{ fontWeight: 600 }}>{selectedLog.vehicle_id}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Time</span>
+                <span>{new Date(selectedLog.timestamp).toLocaleString()}{selectedLog.clock_suspect ? ' (phone clock looked wrong; server time used)' : ''}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Assigned Route</span>
-                <span>{selectedLog.route || 'N/A'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Vehicle</span>
+                <span style={{ fontWeight: 600 }}>{selectedLog.vehicle_id ?? 'Unassigned'}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Event Type</span>
-                <span style={{ 
-                  padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase',
-                  ...getEventBadgeStyle(selectedLog.event_type)
-                }}>{selectedLog.event_type}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Device / channel</span>
+                <span>{selectedLog.device_id} · {selectedLog.delivery_channel}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Seat Slot</span>
-                <span style={{ fontWeight: 700 }}>{selectedLog.slot_number || '-'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Event</span>
+                <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', ...getEventBadgeStyle(selectedLog.event_type) }}>{eventLabel(selectedLog.event_type)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Passenger Type</span>
-                <span>{selectedLog.passenger_type || 'N/A'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Card UID</span>
+                <span style={{ fontFamily: 'monospace' }}>{selectedLog.nfc_uid ?? '-'}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Fare Paid</span>
-                <span style={{ fontWeight: 700, color: 'var(--warning)' }}>
-                  {selectedLog.fare_centavos > 0 ? `₱${(selectedLog.fare_centavos / 100).toFixed(2)}` : 'N/A'}
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Card ID (QR)</span>
+                <span style={{ fontFamily: 'monospace' }}>{shortId(selectedLog.card_uuid, 13)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Discount Allowed</span>
-                <span>
-                  {selectedLog.discount_centavos > 0 ? `₱${(selectedLog.discount_centavos / 100).toFixed(2)}` : 'N/A'}
-                </span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Card state</span>
+                <span>{selectedLog.card_state ?? '-'}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Boarding Stop</span>
-                <span>{selectedLog.boarding_stop || 'N/A'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Passenger type</span>
+                <span>{selectedLog.discount_category_id ?? 'regular'}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Destination Stop</span>
-                <span>{selectedLog.destination_stop || 'N/A'}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Fare charged</span>
+                <span style={{ fontWeight: 700, color: 'var(--warning)' }}>{pesos(selectedLog.fare_centavos)}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Bus Occupancy Post-Event</span>
-                <span>{selectedLog.occupancy_now} / {selectedLog.max_capacity}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Fare computed</span>
+                <span>{pesos(selectedLog.computed_fare_centavos)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Discount</span>
+                <span>{pesos(selectedLog.discount_centavos)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Fare version</span>
+                <span>{selectedLog.fare_version ?? '-'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Stops</span>
+                <span>{stopRange(selectedLog.boarding_stop_id, selectedLog.declared_destination_stop_id, selectedLog.actual_destination_stop_id)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>Override reason</span>
+                <span>{selectedLog.override_reason ?? '-'}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <span style={{ color: 'var(--text-secondary)' }}>GPS</span>
+                <span>{selectedLog.gps_lat !== null && selectedLog.gps_lon !== null ? `${selectedLog.gps_lat.toFixed(5)}, ${selectedLog.gps_lon.toFixed(5)}${selectedLog.gps_accuracy_m !== null ? ` ±${Math.round(selectedLog.gps_accuracy_m)} m` : ''}` : 'no fix'}</span>
               </div>
             </div>
 

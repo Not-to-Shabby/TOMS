@@ -1,15 +1,18 @@
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Map as MapIcon, BarChart3, History, Settings, Users, Bus } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, BarChart3, History, Settings, Users, Bus, LogOut } from 'lucide-react';
 import RouteBuilder from './pages/RouteBuilder';
 import DashboardHome from './pages/DashboardHome';
 import AnalyticsHome from './pages/AnalyticsHome';
 import AuditLogs from './pages/AuditLogs';
 import ConductorsList from './pages/ConductorsList';
 import FleetManager from './pages/FleetManager';
+import Login from './pages/Login';
+import { AuthProvider, useAuth } from './lib/auth';
 import './index.css';
 
 function Sidebar() {
   const location = useLocation();
+  const { signOut } = useAuth();
 
   const getLinkStyle = (path: string) => {
     const isActive = location.pathname === path;
@@ -67,13 +70,19 @@ function Sidebar() {
           <Settings size={20} />
           <span>Settings</span>
         </Link>
+        <button onClick={signOut} style={{ ...getLinkStyle('/signout'), background: 'transparent', border: 'none', cursor: 'pointer', width: '100%' }}>
+          <LogOut size={20} />
+          <span>Sign out</span>
+        </button>
       </div>
     </div>
   );
 }
 
 
-function App() {
+function Shell() {
+  const { signedIn } = useAuth();
+  if (!signedIn) return <Login />;
   return (
     <Router>
       <div style={{ display: 'flex', height: '100vh', padding: '16px', gap: '16px', overflow: 'hidden' }}>
@@ -91,6 +100,14 @@ function App() {
         </div>
       </div>
     </Router>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <Shell />
+    </AuthProvider>
   );
 }
 
