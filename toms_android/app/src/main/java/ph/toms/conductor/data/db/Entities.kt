@@ -19,6 +19,10 @@ data class TripEntity(
     val fareVersion: Int,
     val overrideReason: String?,
     val createdAtMillis: Long,
+    val gpsLat: Double? = null,
+    val gpsLon: Double? = null,
+    val gpsAccuracyMeters: Float? = null,
+    val gpsFixAtMillis: Long? = null,
 )
 
 @Entity(tableName = "cards")

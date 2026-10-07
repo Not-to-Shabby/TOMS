@@ -12,6 +12,7 @@ import ph.toms.conductor.data.db.OutboxEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.db.TripEntity
 import ph.toms.conductor.domain.CardState
+import ph.toms.conductor.domain.GeoFix
 import ph.toms.conductor.domain.Trip
 
 object EventTypes {
@@ -33,6 +34,10 @@ data class TripCreatedPayload(
     val discountCentavos: Int,
     val fareVersion: Int,
     val overrideReason: String?,
+    val gpsLat: Double? = null,
+    val gpsLon: Double? = null,
+    val gpsAccuracyMeters: Float? = null,
+    val gpsFixAtMillis: Long? = null,
 )
 
 @Serializable
@@ -97,15 +102,20 @@ private fun Trip.toEntity() = TripEntity(
     id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
     discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion,
     overrideReason, createdAtMillis,
+    gps?.lat, gps?.lon, gps?.accuracyMeters, gps?.fixAtMillis,
 )
 
 private fun TripEntity.toDomain() = Trip(
     id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
     discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion,
     overrideReason, createdAtMillis,
+    gps = if (gpsLat != null && gpsLon != null && gpsFixAtMillis != null) {
+        GeoFix(gpsLat, gpsLon, gpsAccuracyMeters, gpsFixAtMillis)
+    } else null,
 )
 
 private fun Trip.toPayload() = TripCreatedPayload(
     id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
     discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion, overrideReason,
+    gps?.lat, gps?.lon, gps?.accuracyMeters, gps?.fixAtMillis,
 )

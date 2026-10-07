@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,6 +21,9 @@ import ph.toms.conductor.domain.ApprovedCards
 import ph.toms.conductor.domain.CardEvent
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.domain.CardStateMachine
+import ph.toms.conductor.domain.GeoFix
+import ph.toms.conductor.domain.StopMatch
+import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.domain.TapDebouncer
 import ph.toms.conductor.domain.TomsConfig
 import ph.toms.conductor.domain.Transition
@@ -27,6 +31,7 @@ import ph.toms.conductor.domain.Trip
 import ph.toms.conductor.domain.TripFactory
 import ph.toms.conductor.domain.TripRejection
 import ph.toms.conductor.domain.TripResult
+import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
 
 data class TripRow(val trip: Trip, val cardState: CardState)
@@ -45,6 +50,9 @@ data class SessionUiState(
     val reads: List<CardRead> = emptyList(),
     val trips: List<TripRow> = emptyList(),
     val pendingCount: Int = 0,
+    val fix: GeoFix? = null,
+    val nearestStop: StopMatch? = null,
+    val gpsEnabled: Boolean = true,
     val message: String? = null,
 )
 
@@ -52,6 +60,7 @@ data class SessionUiState(
 class SessionViewModel @Inject constructor(
     private val repo: SessionRepository,
     private val trips: TripRepository,
+    private val location: LocationTracker,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SessionUiState())
@@ -89,6 +98,31 @@ class SessionViewModel @Inject constructor(
         _state.update { it.copy(assignment = Assignment(conductor, vehicle, route)) }
     }
 
+    private var locationJob: Job? = null
+
+    /** Called when location permission is granted and the screen is in the foreground. */
+    fun startLocation() {
+        if (locationJob?.isActive == true) return
+        _state.update { it.copy(gpsEnabled = location.gnssEnabled()) }
+        locationJob = viewModelScope.launch {
+            location.fixes().collect { fix ->
+                val now = System.currentTimeMillis()
+                val match = StopMatcher.nearest(fix, _state.value.config.stops, now)
+                _state.update { it.copy(fix = fix, nearestStop = match, gpsEnabled = true) }
+            }
+        }
+    }
+
+    fun stopLocation() {
+        locationJob?.cancel()
+        locationJob = null
+    }
+
+    /** Sets the boarding stop from the nearest matched stop; leaves it alone when there is no good match. */
+    fun useNearestAsBoarding() {
+        _state.value.nearestStop?.let { m -> _state.update { it.copy(boardingStopId = m.stop.id) } }
+    }
+
     fun selectBoarding(id: String) = _state.update { it.copy(boardingStopId = id) }
     fun selectDestination(id: String) = _state.update { it.copy(destinationStopId = id) }
     fun selectCategory(id: String?) = _state.update { it.copy(categoryId = id) }
@@ -109,6 +143,7 @@ class SessionViewModel @Inject constructor(
             override = null,
             config = s.config,
             nowMillis = read.readAtMillis,
+            fix = s.fix,
         )
         when (result) {
             is TripResult.Created -> {

@@ -44,6 +44,9 @@ class MainActivity : ComponentActivity() {
                         onResolve = viewModel::resolve,
                         onRelease = viewModel::release,
                         onClear = viewModel::clearReads,
+                        onStartLocation = viewModel::startLocation,
+                        onStopLocation = viewModel::stopLocation,
+                        onUseNearest = viewModel::useNearestAsBoarding,
                     )
                 }
             }

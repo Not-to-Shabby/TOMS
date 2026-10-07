@@ -1,6 +1,12 @@
 package ph.toms.conductor.ui
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.awaitCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +32,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import ph.toms.conductor.domain.CardState
+import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.nfc.NfcAvailability
 import ph.toms.conductor.nfc.NfcReader
@@ -46,8 +53,23 @@ fun TapScreen(
     onResolve: (String) -> Unit,
     onRelease: (String) -> Unit,
     onClear: () -> Unit,
+    onStartLocation: () -> Unit,
+    onStopLocation: () -> Unit,
+    onUseNearest: () -> Unit,
 ) {
     val activity = LocalContext.current as Activity
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) onStartLocation()
+    }
+    val lifecycleForGps = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleForGps) {
+        lifecycleForGps.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+            if (granted) onStartLocation() else permission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            try { awaitCancellation() } finally { onStopLocation() }
+        }
+    }
     val availability = remember { nfcReader.availability(activity) }
     val lifecycleOwner = LocalLifecycleOwner.current
     if (availability == NfcAvailability.Ready) {
@@ -66,6 +88,7 @@ fun TapScreen(
             NfcAvailability.Ready -> Text("Pick stops and passenger type, then tap a card.")
         }
 
+        GpsLine(state, onUseNearest)
         ChipRow("Boarding", state.config.stops.map { it.id to it.name }, state.boardingStopId, onBoarding)
         ChipRow("Destination", state.config.stops.map { it.id to it.name }, state.destinationStopId, onDestination)
         ChipRow(
@@ -107,6 +130,29 @@ fun TapScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun GpsLine(state: SessionUiState, onUseNearest: () -> Unit) {
+    val fix = state.fix
+    val text = when {
+        !state.gpsEnabled -> "GPS is off. Turn on location."
+        fix == null -> "GPS: waiting for a fix..."
+        else -> {
+            val age = ((System.currentTimeMillis() - fix.fixAtMillis) / 1000).coerceAtLeast(0)
+            val acc = fix.accuracyMeters?.let { "±%.0f m".format(it) } ?: "accuracy unknown"
+            val near = state.nearestStop?.let { "near ${it.stop.name} (%.0f m)".format(it.distanceMeters) } ?: "no stop nearby"
+            if (age * 1000 > StopMatcher.DEFAULT_MAX_AGE_MILLIS) {
+                "GPS STALE: last fix %ds ago, waiting for a new one (not used for trips)".format(age)
+            } else {
+                "GPS %.5f, %.5f  %s  %ds old  |  %s".format(fix.lat, fix.lon, acc, age, near)
+            }
+        }
+    }
+    Column {
+        Text(text, style = MaterialTheme.typography.bodySmall)
+        if (state.nearestStop != null) OutlinedButton(onUseNearest) { Text("Board at nearest stop") }
     }
 }
 

@@ -25,6 +25,8 @@ data class Trip(
     val fareVersion: Int,
     val overrideReason: String?,
     val createdAtMillis: Long,
+    /** The position fix in force when the card was tapped; null when there was none or it was stale. */
+    val gps: GeoFix? = null,
 )
 
 sealed interface TripResult {
@@ -53,6 +55,7 @@ object TripFactory {
         override: TripOverride?,
         config: TomsConfig,
         nowMillis: Long,
+        fix: GeoFix? = null,
     ): TripResult {
         val cardUuid = config.approvedCards.cardUuidFor(nfcUid)
             ?: return TripResult.Rejected(TripRejection.UNKNOWN_CARD)
@@ -98,6 +101,7 @@ object TripFactory {
                 fareVersion = quote.fareVersion,
                 overrideReason = override?.reason?.trim(),
                 createdAtMillis = nowMillis,
+                gps = fix?.takeUnless { StopMatcher.isStale(it, nowMillis) },
             ),
             next.state,
         )
