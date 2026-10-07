@@ -1,6 +1,11 @@
 import { randomUUID } from 'crypto';
 import { Pool } from 'pg';
+import { createAdmin } from '../src/admins';
+import { newDeviceCredential } from '../src/auth';
 import { migrate } from '../src/db';
+
+export const TEST_JWT_SECRET = 'test-secret-test-secret-test-secret-0123456789';
+export const ADMIN_PASSWORD = 'correct horse battery';
 
 /** Creates a fresh, migrated database so tests never see each other's rows. */
 export async function createTestDb(): Promise<{ pool: Pool; drop: () => Promise<void> }> {
@@ -64,4 +69,24 @@ export async function insertEvent(pool: Pool, row: Record<string, unknown>) {
   });
   const placeholders = COLUMNS.map((_, i) => `$${i + 1}`).join(', ');
   return pool.query(`INSERT INTO events (${COLUMNS.join(', ')}) VALUES (${placeholders})`, values);
+}
+
+/** Creates an admin and returns a signed-in token for it. */
+export async function adminToken(pool: Pool, app: import('express').Express, username = 'boss'): Promise<string> {
+  const { default: request } = await import('supertest');
+  await createAdmin(pool, username, ADMIN_PASSWORD);
+  const res = await request(app).post('/api/admin/login').send({ username, password: ADMIN_PASSWORD });
+  if (res.status !== 200) throw new Error(`admin login failed: ${res.status}`);
+  return res.body.token as string;
+}
+
+/** Enrolls a device directly in the database and returns its credential. */
+export async function enrollDevice(pool: Pool, deviceId: string, vehicleId: string | null = null): Promise<string> {
+  const { token, tokenHash } = newDeviceCredential(deviceId);
+  await pool.query('INSERT INTO devices (device_id, vehicle_id, token_hash) VALUES ($1, $2, $3)', [
+    deviceId,
+    vehicleId,
+    tokenHash,
+  ]);
+  return token;
 }

@@ -3,12 +3,17 @@ import cors from 'cors';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import { LoginLimiter, makeAuth, newDeviceCredential, verifyPassword } from './auth';
 import { envelopeSchema, ingestEvents } from './ingest';
 
 export interface AppDeps {
   pool: Pool;
+  jwtSecret: string;
+  /** Browser origins allowed to call the API. Empty means no cross-origin browser access. */
+  corsOrigins?: string[];
   /** Pushes a live update to dashboard clients. A no-op in tests. */
   emit?: (event: string, payload: unknown) => void;
+  loginLimiter?: LoginLimiter;
 }
 
 const id = z.coerce.number().int().positive();
@@ -33,9 +38,19 @@ const stopBody = z.object({
   radius_m: z.number().int().positive().optional(),
 });
 
-export function createApp({ pool, emit = () => undefined }: AppDeps) {
+export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => undefined, loginLimiter }: AppDeps) {
   const app = express();
-  app.use(cors());
+  const auth = makeAuth({ pool, jwtSecret });
+  const limiter = loginLimiter ?? new LoginLimiter();
+  const admin = auth.requireRole('admin');
+
+  app.disable('x-powered-by');
+  app.use(
+    cors({
+      origin: corsOrigins.length ? corsOrigins : false,
+      allowedHeaders: ['Authorization', 'Content-Type'],
+    }),
+  );
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/health', async (_req, res) => {
@@ -43,10 +58,82 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     res.json({ status: 'ok', timestamp: new Date() });
   });
 
-  // --- Event ingest -------------------------------------------------------------------------
-  // Open until the auth step adds device credentials. Do not expose it to the internet before then.
+  // --- Sign in ------------------------------------------------------------------------------
 
-  app.post('/api/events', async (req, res) => {
+  const loginBody = z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(200) });
+
+  function loginHandler(role: 'admin' | 'conductor') {
+    const table = role === 'admin' ? 'admins' : 'conductors';
+    return async (req: Request, res: Response) => {
+      const body = parse(loginBody, req.body, res);
+      if (!body) return;
+
+      const key = `${role}:${body.username.toLowerCase()}`;
+      const wait = limiter.blockedFor(key);
+      if (wait > 0) {
+        res.setHeader('Retry-After', String(Math.ceil(wait / 1000)));
+        return void res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
+      }
+
+      const columns = role === 'admin' ? 'id, username, password_hash' : 'id, username, password_hash, name';
+      const { rows } = await pool.query(`SELECT ${columns} FROM ${table} WHERE username = $1`, [body.username]);
+      const user = rows[0];
+      const ok = await verifyPassword(user?.password_hash, body.password);
+      if (!user || !ok) {
+        limiter.fail(key);
+        return void res.status(401).json({ error: 'Invalid username or password' });
+      }
+      limiter.reset(key);
+
+      const token = auth.signToken(role, user.id, user.username);
+      res.json({ token, user: { id: user.id, username: user.username, name: user.name ?? user.username, role } });
+    };
+  }
+
+  app.post('/api/admin/login', loginHandler('admin'));
+  app.post('/api/conductors/login', loginHandler('conductor'));
+
+  // --- Device enrollment (admin) ------------------------------------------------------------
+
+  app.post('/api/devices', admin, async (req, res) => {
+    const body = parse(
+      z.object({
+        device_id: z.string().trim().regex(/^[A-Za-z0-9_-]{3,64}$/, 'letters, digits, dash, underscore; 3 to 64'),
+        vehicle_id: z.string().trim().min(1).max(64).nullish(),
+        label: z.string().trim().min(1).max(100).nullish(),
+      }),
+      req.body,
+      res,
+    );
+    if (!body) return;
+    const { token, tokenHash } = newDeviceCredential(body.device_id);
+    try {
+      await pool.query(
+        'INSERT INTO devices (device_id, vehicle_id, label, token_hash) VALUES ($1, $2, $3, $4)',
+        [body.device_id, body.vehicle_id ?? null, body.label ?? null, tokenHash],
+      );
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === '23505') return void res.status(409).json({ error: 'Device already enrolled' });
+      if (code === '23503') return void res.status(400).json({ error: 'Unknown vehicle' });
+      throw err;
+    }
+    // The only time the credential is visible. Only its hash is stored.
+    res.status(201).json({ device_id: body.device_id, token });
+  });
+
+  app.delete('/api/devices/:deviceId', admin, async (req, res) => {
+    const r = await pool.query(
+      'UPDATE devices SET revoked_at = now() WHERE device_id = $1 AND revoked_at IS NULL',
+      [req.params.deviceId],
+    );
+    if (r.rowCount === 0) return void res.status(404).json({ error: 'Device not found or already revoked' });
+    res.json({ status: 'revoked' });
+  });
+
+  // --- Event ingest (phones) ----------------------------------------------------------------
+
+  app.post('/api/events', auth.requireDevice, async (req, res) => {
     const envelope = envelopeSchema.safeParse(req.body);
     if (!envelope.success) {
       return void res.status(400).json({
@@ -54,19 +141,29 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
         issues: envelope.error.issues.slice(0, 5).map((i) => ({ path: i.path.join('.'), message: i.message })),
       });
     }
+    const deviceId = res.locals.deviceId as string;
+    // Only an event naming a different device is an impersonation attempt. Items with no
+    // device_id, or that are not objects, fail validation one by one and do not sink the batch.
+    const foreign = envelope.data.events.some((e) => {
+      const claimed = (e as { device_id?: unknown } | null)?.device_id;
+      return typeof claimed === 'string' && claimed !== deviceId;
+    });
+    if (foreign) {
+      return void res.status(403).json({ error: 'Events must carry the authenticated device_id' });
+    }
     res.json(await ingestEvents(pool, envelope.data.events, envelope.data.delivery_channel));
   });
 
   // --- Routes -------------------------------------------------------------------------------
 
-  app.get('/api/routes', async (_req, res) => {
+  app.get('/api/routes', admin, async (_req, res) => {
     const { rows } = await pool.query(
       'SELECT id, name, company_id, base_fare, per_km_fare FROM routes ORDER BY id',
     );
     res.json(rows);
   });
 
-  app.post('/api/routes', async (req, res) => {
+  app.post('/api/routes', admin, async (req, res) => {
     const body = parse(z.object({ name: z.string().trim().min(1), company_id: optionalText }), req.body, res);
     if (!body) return;
     const { rows } = await pool.query(
@@ -76,14 +173,14 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     res.status(201).json(rows[0]);
   });
 
-  app.delete('/api/routes/:id', async (req, res) => {
+  app.delete('/api/routes/:id', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     if (!routeId) return;
     await pool.query('DELETE FROM routes WHERE id = $1', [routeId]);
     res.json({ status: 'success' });
   });
 
-  app.post('/api/routes/:id/fare', async (req, res) => {
+  app.post('/api/routes/:id/fare', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     const body = parse(
       z.object({ base_fare: z.number().min(0).max(100000), per_km_fare: z.number().min(0).max(100000) }),
@@ -102,7 +199,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
 
   // --- Paths and stops ----------------------------------------------------------------------
 
-  app.get('/api/routes/:id/paths', async (req, res) => {
+  app.get('/api/routes/:id/paths', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     if (!routeId) return;
     const paths = (
@@ -130,7 +227,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     );
   });
 
-  app.post('/api/routes/:id/paths', async (req, res) => {
+  app.post('/api/routes/:id/paths', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     const body = parse(z.object({ name: optionalText, color: optionalText }), req.body, res);
     if (!routeId || !body) return;
@@ -143,7 +240,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     res.status(201).json({ ...rows[0], stops: [] });
   });
 
-  app.post('/api/routes/:id/paths/:pathId/stops', async (req, res) => {
+  app.post('/api/routes/:id/paths/:pathId/stops', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     const pathId = parse(id, req.params.pathId, res);
     const stops = parse(z.array(stopBody).max(500), req.body, res);
@@ -169,7 +266,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     }
   });
 
-  app.delete('/api/routes/:id/paths/:pathId', async (req, res) => {
+  app.delete('/api/routes/:id/paths/:pathId', admin, async (req, res) => {
     const pathId = parse(id, req.params.pathId, res);
     if (!pathId) return;
     await pool.query('DELETE FROM route_paths WHERE id = $1', [pathId]);
@@ -177,7 +274,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
   });
 
   // Legacy per-route stop list, kept because the route builder still calls it.
-  app.get('/api/routes/:id/stops', async (req, res) => {
+  app.get('/api/routes/:id/stops', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     if (!routeId) return;
     const { rows } = await pool.query(
@@ -187,7 +284,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     res.json(rows);
   });
 
-  app.post('/api/routes/:id/stops', async (req, res) => {
+  app.post('/api/routes/:id/stops', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     const stops = parse(z.array(stopBody).max(500), req.body, res);
     if (!routeId || !stops) return;
@@ -213,13 +310,13 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
 
   // --- Schedules ----------------------------------------------------------------------------
 
-  app.get('/api/routes/:id/schedules', async (req, res) => {
+  app.get('/api/routes/:id/schedules', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     if (!routeId) return;
     res.json((await pool.query('SELECT * FROM route_schedules WHERE route_id = $1', [routeId])).rows);
   });
 
-  app.post('/api/routes/:id/schedules', async (req, res) => {
+  app.post('/api/routes/:id/schedules', admin, async (req, res) => {
     const routeId = parse(id, req.params.id, res);
     const schedules = parse(
       z.array(
@@ -256,7 +353,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
 
   // --- Conductors (login and protection arrive with the auth step) -------------------------
 
-  app.post('/api/conductors', async (req, res) => {
+  app.post('/api/conductors', admin, async (req, res) => {
     const body = parse(
       z.object({
         username: z.string().trim().min(3).max(64),
@@ -299,7 +396,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     }
   });
 
-  app.delete('/api/conductors/:id', async (req, res) => {
+  app.delete('/api/conductors/:id', admin, async (req, res) => {
     const conductorId = parse(id, req.params.id, res);
     if (!conductorId) return;
     await pool.query('DELETE FROM conductors WHERE id = $1', [conductorId]);
@@ -308,7 +405,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
 
   // --- Vehicles -----------------------------------------------------------------------------
 
-  app.get('/api/vehicles', async (_req, res) => {
+  app.get('/api/vehicles', admin, async (_req, res) => {
     const { rows } = await pool.query(
       `SELECT v.*, r.name AS assigned_route_name, c.name AS assigned_conductor_name
        FROM vehicles v
@@ -319,7 +416,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     res.json(rows);
   });
 
-  app.post('/api/vehicles', async (req, res) => {
+  app.post('/api/vehicles', admin, async (req, res) => {
     const body = parse(
       z.object({
         id: z.string().trim().min(1).max(64),
@@ -347,7 +444,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     }
   });
 
-  app.put('/api/vehicles/:id', async (req, res) => {
+  app.put('/api/vehicles/:id', admin, async (req, res) => {
     const vehicleId = req.params.id;
     const body = parse(
       z.object({
@@ -404,7 +501,7 @@ export function createApp({ pool, emit = () => undefined }: AppDeps) {
     }
   });
 
-  app.delete('/api/vehicles/:id', async (req, res) => {
+  app.delete('/api/vehicles/:id', admin, async (req, res) => {
     await pool.query('DELETE FROM vehicles WHERE id = $1', [req.params.id]);
     res.json({ status: 'success' });
   });
