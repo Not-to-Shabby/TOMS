@@ -39,6 +39,7 @@ import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.SettingsStore
+import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.OutboxFlusher
 
 enum class Tab { Board, Collect, Calc, More }
@@ -87,6 +88,7 @@ class ConductorViewModel @Inject constructor(
     private val settings: SettingsStore,
     private val deviceConfig: DeviceConfigStore,
     private val flusher: OutboxFlusher,
+    private val cardSync: CardRegistrySync,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -106,6 +108,16 @@ class ConductorViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            trips.loadApprovedCards()?.let { cached ->
+                if (cached.isNotEmpty()) {
+                    _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached))) }
+                }
+            }
+            if (_state.value.isEnrolled) {
+                syncApprovedCards()
+            }
+        }
+        viewModelScope.launch {
             cardStates.putAll(trips.loadCardStates())
             trips.loadTrips().forEach { t ->
                 // Newest trip per card wins; loadTrips returns newest first.
@@ -116,7 +128,13 @@ class ConductorViewModel @Inject constructor(
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
         viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
-        viewModelScope.launch { deviceConfig.deviceToken.collect { tok -> _state.update { it.copy(isEnrolled = !tok.isNullOrBlank()) } } }
+        viewModelScope.launch {
+            deviceConfig.deviceToken.collect { tok ->
+                val enrolled = !tok.isNullOrBlank()
+                _state.update { it.copy(isEnrolled = enrolled) }
+                if (enrolled) syncApprovedCards()
+            }
+        }
     }
 
     // ---- navigation and board choices
@@ -259,12 +277,27 @@ class ConductorViewModel @Inject constructor(
         _state.update { it.copy(isUploading = true, uploadMessage = null) }
         viewModelScope.launch {
             val report = flusher.flush()
+            syncApprovedCards()
             val msg = if (report.failure != null) {
                 "Upload failed: ${report.failure}"
             } else {
                 "Uploaded ${report.delivered} event(s)"
             }
             _state.update { it.copy(isUploading = false, uploadMessage = msg) }
+        }
+    }
+
+    fun syncApprovedCards() {
+        viewModelScope.launch {
+            cardSync.fetchApprovedCards()
+                .onSuccess { cardsMap ->
+                    if (cardsMap.isNotEmpty()) {
+                        trips.saveApprovedCards(cardsMap)
+                        _state.update {
+                            it.copy(config = it.config.copy(approvedCards = ApprovedCards(cardsMap)))
+                        }
+                    }
+                }
         }
     }
 

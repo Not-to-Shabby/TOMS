@@ -22,6 +22,7 @@ import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.PrefsDeviceConfig
 import ph.toms.conductor.settings.PrefsSettings
 import ph.toms.conductor.settings.SettingsStore
+import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
@@ -43,6 +44,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun uploader(impl: RetrofitEventUploader): EventUploader
+
+    @Binds
+    abstract fun cardRegistrySync(impl: RetrofitEventUploader): CardRegistrySync
 }
 
 @Module

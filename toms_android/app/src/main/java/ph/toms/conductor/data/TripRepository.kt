@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import ph.toms.conductor.data.db.CardEntity
+import ph.toms.conductor.data.db.ConfigCacheEntity
 import ph.toms.conductor.data.db.EventEntity
 import ph.toms.conductor.data.db.OutboxEntity
 import ph.toms.conductor.data.db.TomsDatabase
@@ -95,6 +96,22 @@ class TripRepository(
         db.cards().all().associate { it.nfcUid to CardState.valueOf(it.state) }
 
     suspend fun loadTrips(): List<Trip> = db.trips().all().map { it.toDomain() }
+
+    suspend fun loadApprovedCards(): Map<String, String>? {
+        val cached = db.config().get("approved_cards") ?: return null
+        return runCatching { json.decodeFromString<Map<String, String>>(cached.json) }.getOrNull()
+    }
+
+    suspend fun saveApprovedCards(cards: Map<String, String>) {
+        db.config().put(
+            ConfigCacheEntity(
+                key = "approved_cards",
+                version = 1,
+                json = json.encodeToString(cards),
+                fetchedAtMillis = System.currentTimeMillis(),
+            ),
+        )
+    }
 
     private suspend fun appendEvent(type: String, payload: String, nowMillis: Long) {
         val eventId = newEventId()

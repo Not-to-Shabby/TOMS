@@ -34,6 +34,7 @@ import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
+import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.UploadResult
@@ -71,7 +72,13 @@ class ConductorViewModelTest {
         override fun setDeviceToken(token: String?) { deviceToken.value = token }
     }
 
+    private class FakeCardSync : CardRegistrySync {
+        var returnCards: Map<String, String> = emptyMap()
+        override suspend fun fetchApprovedCards(): Result<Map<String, String>> = Result.success(returnCards)
+    }
+
     private val uploader = FakeUploader()
+    private val fakeCardSync = FakeCardSync()
 
     @Before
     fun setUp() {
@@ -84,7 +91,7 @@ class ConductorViewModelTest {
         location = LocationTracker(context)
         deviceConfig = TestDeviceConfigStore()
         flusher = OutboxFlusher(db.outbox(), uploader)
-        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, flusher)
+        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, flusher, fakeCardSync)
     }
 
     @After
@@ -296,5 +303,23 @@ class ConductorViewModelTest {
         vm.updateDeviceToken(null)
         advanceUntilIdle()
         assertTrue(!vm.state.value.isEnrolled)
+    }
+
+    @Test
+    fun `syncApprovedCards updates approvedCards in config and caches them in Room`() = runTest {
+        advanceUntilIdle()
+        fakeCardSync.returnCards = mapOf("99998888" to "custom-uuid-99")
+        vm.syncApprovedCards()
+        var tries = 0
+        while (vm.state.value.config.approvedCards.cardUuidFor("99998888") == null && tries < 20) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+            tries++
+        }
+
+        assertEquals("custom-uuid-99", vm.state.value.config.approvedCards.cardUuidFor("99998888"))
+        val cached = repo.loadApprovedCards()
+        assertNotNull(cached)
+        assertEquals("custom-uuid-99", cached!!["99998888"])
     }
 }

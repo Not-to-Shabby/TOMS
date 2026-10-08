@@ -1,6 +1,5 @@
 package ph.toms.conductor.sync
 
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.SerialName
@@ -15,6 +14,7 @@ import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 
@@ -48,24 +48,54 @@ data class IngestRejection(
     val reason: String = "",
 )
 
+@Serializable
+data class ApprovedCardsResponse(
+    val cards: Map<String, String> = emptyMap(),
+    val count: Int = 0,
+    val timestamp: String = "",
+)
+
 interface TomsApiService {
     @POST("api/events")
     suspend fun uploadEvents(
         @Header("Authorization") authHeader: String?,
         @Body envelope: EventUploadEnvelope,
     ): IngestResponse
+
+    @GET("api/cards/approved")
+    suspend fun fetchApprovedCards(
+        @Header("Authorization") authHeader: String?,
+    ): ApprovedCardsResponse
+}
+
+interface CardRegistrySync {
+    suspend fun fetchApprovedCards(): Result<Map<String, String>>
 }
 
 @Singleton
 class RetrofitEventUploader @Inject constructor(
     private val config: DeviceConfigStore,
     private val okHttpClient: OkHttpClient,
-) : EventUploader {
+) : EventUploader, CardRegistrySync {
 
     override val channel: String = "data_a"
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val contentType = "application/json".toMediaType()
+
+    private fun createApi(): TomsApiService? {
+        val baseUrl = config.serverUrl.value.trimEnd('/') + "/"
+        return try {
+            Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(okHttpClient)
+                .addConverterFactory(json.asConverterFactory(contentType))
+                .build()
+                .create(TomsApiService::class.java)
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     override suspend fun upload(batch: List<PendingEvent>): UploadResult {
         if (batch.isEmpty()) return UploadResult.Acked(emptySet())
@@ -74,17 +104,7 @@ class RetrofitEventUploader @Inject constructor(
             return UploadResult.Failed("device not enrolled (no token configured)")
         }
 
-        val baseUrl = config.serverUrl.value.trimEnd('/') + "/"
-        val api = try {
-            Retrofit.Builder()
-                .baseUrl(baseUrl)
-                .client(okHttpClient)
-                .addConverterFactory(json.asConverterFactory(contentType))
-                .build()
-                .create(TomsApiService::class.java)
-        } catch (e: Exception) {
-            return UploadResult.Failed("invalid server URL: ${e.message}")
-        }
+        val api = createApi() ?: return UploadResult.Failed("invalid server URL")
 
         val items = batch.map { p ->
             val payloadElement = runCatching { json.parseToJsonElement(p.payload) }
@@ -107,6 +127,20 @@ class RetrofitEventUploader @Inject constructor(
             UploadResult.Failed("HTTP ${e.code()}: ${e.message()}")
         } catch (e: Exception) {
             UploadResult.Failed(e.message ?: "network error")
+        }
+    }
+
+    override suspend fun fetchApprovedCards(): Result<Map<String, String>> {
+        val token = config.deviceToken.value
+        if (token.isNullOrBlank()) {
+            return Result.failure(IllegalStateException("device not enrolled (no token configured)"))
+        }
+        val api = createApi() ?: return Result.failure(IllegalStateException("invalid server URL"))
+        return try {
+            val res = api.fetchApprovedCards("Bearer $token")
+            Result.success(res.cards)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 }

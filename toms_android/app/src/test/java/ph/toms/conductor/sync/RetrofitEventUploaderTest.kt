@@ -117,4 +117,38 @@ class RetrofitEventUploaderTest {
 
         assertTrue(res is UploadResult.Failed)
     }
+
+    @Test
+    fun `fetchApprovedCards returns map when server answers 200 OK`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"cards":{"AABBCCDD":"uuid-123","11223344":"uuid-456"},"count":2}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.fetchApprovedCards()
+
+        assertTrue(res.isSuccess)
+        val cards = res.getOrThrow()
+        assertEquals(2, cards.size)
+        assertEquals("uuid-123", cards["AABBCCDD"])
+        assertEquals("uuid-456", cards["11223344"])
+
+        val recorded = server.takeRequest()
+        assertEquals("/api/cards/approved", recorded.path)
+        assertEquals("Bearer dev-test-1.secret123", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `fetchApprovedCards fails when device is not enrolled`() = runBlocking {
+        val config = TestConfigStore(initialUrl = server.url("/").toString(), initialToken = null)
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.fetchApprovedCards()
+
+        assertTrue(res.isFailure)
+        assertTrue(res.exceptionOrNull()?.message?.contains("not enrolled") == true)
+        assertEquals(0, server.requestCount)
+    }
 }
