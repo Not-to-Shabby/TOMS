@@ -36,8 +36,10 @@ import ph.toms.conductor.feedback.Cue
 import ph.toms.conductor.feedback.Feedback
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
+import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.SettingsStore
+import ph.toms.conductor.sync.OutboxFlusher
 
 enum class Tab { Board, Collect, Calc, More }
 
@@ -68,6 +70,11 @@ data class ConductorState(
     val focusTripId: String? = null,
     /** A short message for tabs other than Board, such as "Open Board to start a trip". */
     val notice: String? = null,
+    val deviceId: String = "",
+    val serverUrl: String = "",
+    val isEnrolled: Boolean = false,
+    val isUploading: Boolean = false,
+    val uploadMessage: String? = null,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 }
@@ -78,9 +85,18 @@ class ConductorViewModel @Inject constructor(
     private val location: LocationTracker,
     private val feedback: Feedback,
     private val settings: SettingsStore,
+    private val deviceConfig: DeviceConfigStore,
+    private val flusher: OutboxFlusher,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(ConductorState(handedness = settings.handedness.value))
+    private val _state = MutableStateFlow(
+        ConductorState(
+            handedness = settings.handedness.value,
+            deviceId = deviceConfig.deviceId,
+            serverUrl = deviceConfig.serverUrl.value,
+            isEnrolled = !deviceConfig.deviceToken.value.isNullOrBlank(),
+        ),
+    )
     val state: StateFlow<ConductorState> = _state.asStateFlow()
 
     private val debouncer = TapDebouncer()
@@ -99,6 +115,8 @@ class ConductorViewModel @Inject constructor(
         }
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
+        viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
+        viewModelScope.launch { deviceConfig.deviceToken.collect { tok -> _state.update { it.copy(isEnrolled = !tok.isNullOrBlank()) } } }
     }
 
     // ---- navigation and board choices
@@ -233,6 +251,25 @@ class ConductorViewModel @Inject constructor(
     fun openCalcForBoard() = _state.update {
         it.copy(tab = Tab.Calc, calcMode = CalcMode.CHANGE, calcDueCentavos = it.preview?.totalCentavos ?: 0)
     }
+
+    // ---- sync & diagnostics
+
+    fun flushNow() {
+        if (_state.value.isUploading) return
+        _state.update { it.copy(isUploading = true, uploadMessage = null) }
+        viewModelScope.launch {
+            val report = flusher.flush()
+            val msg = if (report.failure != null) {
+                "Upload failed: ${report.failure}"
+            } else {
+                "Uploaded ${report.delivered} event(s)"
+            }
+            _state.update { it.copy(isUploading = false, uploadMessage = msg) }
+        }
+    }
+
+    fun updateServerUrl(url: String) = deviceConfig.setServerUrl(url)
+    fun updateDeviceToken(token: String?) = deviceConfig.setDeviceToken(token)
 
     // ---- location
 

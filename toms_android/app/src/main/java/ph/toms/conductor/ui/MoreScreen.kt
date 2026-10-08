@@ -15,20 +15,87 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import java.util.Date
 import ph.toms.conductor.settings.Handedness
+import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
+import ph.toms.conductor.ui.theme.QuietButton
+import ph.toms.conductor.ui.theme.Status
+import ph.toms.conductor.ui.theme.StatusChip
 import ph.toms.conductor.ui.theme.TomsColors
 import ph.toms.conductor.ui.theme.TouchTarget
 
 @Composable
-fun MoreScreen(state: ConductorState, onHand: (Handedness) -> Unit) {
+fun MoreScreen(
+    state: ConductorState,
+    onHand: (Handedness) -> Unit,
+    onServerUrl: (String) -> Unit = {},
+    onDeviceToken: (String?) -> Unit = {},
+    onUploadNow: () -> Unit = {},
+) {
+    var editUrl by remember { mutableStateOf<String?>(null) }
+    var editToken by remember { mutableStateOf<String?>(null) }
+
+    editUrl?.let { current ->
+        var input by remember { mutableStateOf(current) }
+        AlertDialog(
+            onDismissRequest = { editUrl = null },
+            title = { Text("Server URL") },
+            text = {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    label = { Text("e.g. http://127.0.0.1:3000") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { onServerUrl(input); editUrl = null }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editUrl = null }) { Text("Cancel") }
+            },
+        )
+    }
+
+    editToken?.let { current ->
+        var input by remember { mutableStateOf(current) }
+        AlertDialog(
+            onDismissRequest = { editToken = null },
+            title = { Text("Device Token") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Paste <device_id>.<secret> from dashboard enrollment.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        label = { Text("Device token") },
+                        singleLine = true,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { onDeviceToken(input.trim().ifEmpty { null }); editToken = null }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editToken = null }) { Text("Cancel") }
+            },
+        )
+    }
+
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(Gap),
@@ -45,6 +112,32 @@ fun MoreScreen(state: ConductorState, onHand: (Handedness) -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = TomsColors.InkSoft,
         )
+
+        Text("Server Sync", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
+        Fact("Device ID", state.deviceId.ifEmpty { "loading..." })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Server URL", style = MaterialTheme.typography.bodyLarge, color = TomsColors.InkSoft)
+                Text(state.serverUrl.ifEmpty { "Not set" }, style = MaterialTheme.typography.bodyMedium)
+            }
+            QuietButton("Change", { editUrl = state.serverUrl })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Enrollment", style = MaterialTheme.typography.bodyLarge, color = TomsColors.InkSoft)
+                StatusChip(if (state.isEnrolled) "Enrolled" else "Not enrolled", if (state.isEnrolled) Status.Good else Status.Warn)
+            }
+            QuietButton("Set Token", { editToken = "" })
+        }
+
+        BigButton(
+            text = if (state.isUploading) "Uploading..." else "Upload now (${state.pendingCount} pending)",
+            onClick = onUploadNow,
+            enabled = !state.isUploading && state.isEnrolled,
+        )
+        state.uploadMessage?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded")) TomsColors.Good else TomsColors.Bad)
+        }
 
         Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Text("For whoever is fixing the app, not for the conductor.", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)

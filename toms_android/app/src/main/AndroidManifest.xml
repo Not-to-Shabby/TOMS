@@ -19,6 +19,7 @@
         android:name=".TomsApp"
         android:allowBackup="false"
         android:label="TOMS Conductor"
+        android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"

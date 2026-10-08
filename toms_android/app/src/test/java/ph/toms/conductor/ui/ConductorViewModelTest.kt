@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -21,6 +23,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import ph.toms.conductor.data.TripRepository
+import ph.toms.conductor.data.db.PendingEvent
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.domain.CalcMode
 import ph.toms.conductor.domain.CardState
@@ -28,8 +31,12 @@ import ph.toms.conductor.feedback.Cue
 import ph.toms.conductor.feedback.RecordingFeedback
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
+import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
+import ph.toms.conductor.sync.EventUploader
+import ph.toms.conductor.sync.OutboxFlusher
+import ph.toms.conductor.sync.UploadResult
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -42,7 +49,29 @@ class ConductorViewModelTest {
     private lateinit var feedback: RecordingFeedback
     private lateinit var settings: MemorySettings
     private lateinit var location: LocationTracker
+    private lateinit var deviceConfig: TestDeviceConfigStore
+    private lateinit var flusher: OutboxFlusher
     private lateinit var vm: ConductorViewModel
+
+    private class FakeUploader : EventUploader {
+        override val channel = "data_a"
+        var failWith: String? = null
+        override suspend fun upload(batch: List<PendingEvent>): UploadResult =
+            failWith?.let { UploadResult.Failed(it) } ?: UploadResult.Acked(batch.map { it.eventId }.toSet())
+    }
+
+    private class TestDeviceConfigStore(
+        override val deviceId: String = "test-dev-1",
+        initialUrl: String = "http://localhost:3000",
+        initialToken: String? = "test-dev-1.secret",
+    ) : DeviceConfigStore {
+        override val serverUrl = MutableStateFlow(initialUrl)
+        override val deviceToken = MutableStateFlow(initialToken)
+        override fun setServerUrl(url: String) { serverUrl.value = url }
+        override fun setDeviceToken(token: String?) { deviceToken.value = token }
+    }
+
+    private val uploader = FakeUploader()
 
     @Before
     fun setUp() {
@@ -53,7 +82,9 @@ class ConductorViewModelTest {
         feedback = RecordingFeedback()
         settings = MemorySettings(Handedness.Right)
         location = LocationTracker(context)
-        vm = ConductorViewModel(repo, location, feedback, settings)
+        deviceConfig = TestDeviceConfigStore()
+        flusher = OutboxFlusher(db.outbox(), uploader)
+        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, flusher)
     }
 
     @After
@@ -228,5 +259,42 @@ class ConductorViewModelTest {
         vm.setHandedness(Handedness.Left)
         advanceUntilIdle()
         assertEquals(Handedness.Left, vm.state.value.handedness)
+    }
+
+    @Test
+    fun `flushNow triggers outbox flusher and updates uploadMessage`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+
+        // Pending events present in outbox
+        assertTrue(db.outbox().pendingCountNow() > 0)
+
+        vm.flushNow()
+        // Wait briefly for background thread query to complete
+        var tries = 0
+        while (vm.state.value.isUploading && tries < 20) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+            tries++
+        }
+        assertNotNull(vm.state.value.uploadMessage)
+        assertTrue(vm.state.value.uploadMessage!!.startsWith("Uploaded"))
+        assertEquals(0, db.outbox().pendingCountNow())
+    }
+
+    @Test
+    fun `updating server URL and device token updates state and enrollment`() = runTest {
+        advanceUntilIdle()
+        vm.updateServerUrl("http://192.168.1.100:3000")
+        vm.updateDeviceToken("dev-1.mytoken123")
+        advanceUntilIdle()
+
+        assertEquals("http://192.168.1.100:3000", vm.state.value.serverUrl)
+        assertTrue(vm.state.value.isEnrolled)
+
+        vm.updateDeviceToken(null)
+        advanceUntilIdle()
+        assertTrue(!vm.state.value.isEnrolled)
     }
 }

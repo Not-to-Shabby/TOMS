@@ -92,7 +92,13 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
                     onClearAlarm = { vm.clearAlarm(it.id) },
                 )
                 Tab.Calc -> CalcScreen(state = state, onMode = vm::setCalcMode)
-                Tab.More -> MoreScreen(state = state, onHand = vm::setHandedness)
+                Tab.More -> MoreScreen(
+                    state = state,
+                    onHand = vm::setHandedness,
+                    onServerUrl = vm::updateServerUrl,
+                    onDeviceToken = vm::updateDeviceToken,
+                    onUploadNow = vm::flushNow,
+                )
             }
         }
         TabBar(state, vm::selectTab)
