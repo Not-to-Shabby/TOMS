@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'v2/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend:
+    name: Backend (Node.js & PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: toms_user
+          POSTGRES_PASSWORD: toms_password
+          POSTGRES_DB: toms_test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: toms_backend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: toms_backend
+        run: npm ci
+
+      - name: Run unit & integration tests
+        working-directory: toms_backend
+        env:
+          DATABASE_URL: postgres://toms_user:toms_password@localhost:5432/toms_test_db
+          TEST_DATABASE_ADMIN_URL: postgres://toms_user:toms_password@localhost:5432/toms_test_db
+          JWT_SECRET: ci-test-secret-ci-test-secret-ci-test-secret-12345
+        run: npm test
+
+      - name: Build TypeScript project
+        working-directory: toms_backend
+        run: npm run build
+
+  web:
+    name: Web Dashboard (React & Vite)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: toms_web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: toms_web
+        run: npm ci
+
+      - name: Run unit & component tests
+        working-directory: toms_web
+        run: npm test
+
+      - name: Build production bundle
+        working-directory: toms_web
+        run: npm run build
+
+  android:
+    name: Android Conductor App (Kotlin & Gradle)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: 17
+          cache: 'gradle'
+
+      - name: Grant execute permission for gradlew
+        working-directory: toms_android
+        run: chmod +x gradlew
+
+      - name: Run unit & domain tests
+        working-directory: toms_android
+        run: ./gradlew test
+
+      - name: Assemble Debug APK
+        working-directory: toms_android
+        run: ./gradlew :app:assembleDebug
