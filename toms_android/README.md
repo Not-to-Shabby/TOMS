@@ -1,6 +1,6 @@
 # toms_android
 
-Native Kotlin conductor app for TOMS v2. It replaces the Flutter app in `../toms_mobile`, which is kept only as read-only reference.
+Native Kotlin conductor app for TOMS v2. It replaces the Flutter app, which is kept for reference in `../archive/toms_mobile`.
 
 - Progress, code map and known gaps: `../documentation/v2_progress.md`
 - Decisions: `../documentation/v2_decisions.md`

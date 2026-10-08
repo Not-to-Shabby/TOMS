@@ -5,6 +5,10 @@
 build/
 latex/
 html/
+archive/esp32_master/build/
+archive/esp32_slave/build/
+archive/toms_mobile/build/
+# before the 2026 move into archive/
 esp32_master/build/
 esp32_slave/build/
 toms_mobile/build/
