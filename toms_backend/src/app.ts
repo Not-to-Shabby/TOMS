@@ -5,6 +5,9 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { LoginLimiter, makeAuth, newDeviceCredential, verifyPassword } from './auth';
 import { fleetStatus, registerDashboardRoutes } from './dashboard';
+import { registerCardRoutes } from './cards';
+import { registerFareRoutes, FARES_UPLOAD_DIR } from './fares';
+import { registerReceiptRoutes } from './receipt';
 import { envelopeSchema, ingestEvents } from './ingest';
 
 export interface AppDeps {
@@ -191,7 +194,13 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
     res.json(result);
   });
 
+  // Serve verified LTFRB document uploads
+  app.use('/uploads/fares', express.static(FARES_UPLOAD_DIR));
+
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
+  registerCardRoutes(app, { pool, admin, auth });
+  registerFareRoutes(app, { pool, admin });
+  registerReceiptRoutes(app, { pool });
 
   // --- Routes -------------------------------------------------------------------------------
 
