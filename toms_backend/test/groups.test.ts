@@ -245,3 +245,52 @@ describe('group trips: dashboard', () => {
     expect(rows[1].split(',').at(-1)).toBe('3');
   });
 });
+
+describe('live feed events', () => {
+  it('sends one new_event per trip and card change, with the trip fare and party size on a payment', async () => {
+    const emitted: { event: string; payload: any }[] = [];
+    const feedApp = createApp({ pool, jwtSecret: TEST_JWT_SECRET, emit: (event, payload) => emitted.push({ event, payload }) });
+    const family = groupTrip([line(null, 2, 2800), line('student', 1, 2200, 600)]);
+    const post = (events: unknown[]) =>
+      request(feedApp).post('/api/events').set('Authorization', `Bearer ${device}`).send({ events });
+
+    await post([family, pay(family)]);
+
+    const feed = emitted.filter((e) => e.event === 'new_event').map((e) => e.payload);
+    expect(feed).toHaveLength(2);
+    expect(feed[0]).toMatchObject({ event_type: 'trip_created', passenger_count: 3, fare_centavos: 7800 });
+    expect(feed[1]).toMatchObject({ event_type: 'card_state_changed', card_state: 'ASSIGNED_PAID', passenger_count: 3, fare_centavos: 7800 });
+  });
+
+  it('emits events oldest first, so the feed reads in the order things happened', async () => {
+    const emitted: any[] = [];
+    const feedApp = createApp({ pool, jwtSecret: TEST_JWT_SECRET, emit: (e, p) => e === 'new_event' && emitted.push(p) });
+    const trip = groupTrip([line(null, 1, 1500)]);
+    await request(feedApp).post('/api/events').set('Authorization', `Bearer ${device}`).send({ events: [trip, pay(trip), giveBack(trip)] });
+    expect(emitted.map((p) => p.card_state ?? p.event_type)).toEqual(['trip_created', 'ASSIGNED_PAID', 'RETURNED']);
+  });
+
+  it('limits a catch-up batch to 20 lines and sends nothing for events it ignores or already has', async () => {
+    const emitted: any[] = [];
+    const feedApp = createApp({ pool, jwtSecret: TEST_JWT_SECRET, emit: (e, p) => e === 'new_event' && emitted.push(p) });
+    const post = (events: unknown[]) => request(feedApp).post('/api/events').set('Authorization', `Bearer ${device}`).send({ events });
+
+    const many = Array.from({ length: 30 }, () => groupTrip(null));
+    await post(many);
+    expect(emitted).toHaveLength(20);
+
+    emitted.length = 0;
+    await post(many); // all duplicates now
+    expect(emitted).toHaveLength(0);
+
+    await post([{ event_id: randomUUID(), device_id: 'dev-1', local_seq: ++seq, type: 'future_thing', created_at_millis: Date.now(), payload: {} }]);
+    expect(emitted).toHaveLength(0); // an event type the feed does not describe
+  });
+
+  it('a feed failure never fails the phone request', async () => {
+    const feedApp = createApp({ pool, jwtSecret: TEST_JWT_SECRET, emit: () => { throw new Error('socket down'); } });
+    const res = await request(feedApp).post('/api/events').set('Authorization', `Bearer ${device}`).send({ events: [groupTrip(null)] });
+    expect(res.status).toBe(200);
+    expect(res.body.accepted).toHaveLength(1);
+  });
+});

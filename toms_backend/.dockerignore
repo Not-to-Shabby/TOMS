@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+test
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+.git
+.gitignore
+Dockerfile
+docker-compose.yml
+vitest.config.ts
+*.md
