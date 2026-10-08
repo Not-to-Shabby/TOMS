@@ -112,3 +112,32 @@ describe('group figures', () => {
     expect(paidShare([{ total_payments: 0, total_trips: 0 }])).toBe(0);
   });
 });
+
+import { feedMessage } from './format';
+
+describe('feedMessage', () => {
+  const base = { vehicle_id: 'BUS-1', card_state: null, passenger_count: 1, fare_centavos: null, destination_stop_id: null };
+
+  it('says how many boarded, where to and for how much', () => {
+    expect(feedMessage({ ...base, event_type: 'trip_created', passenger_count: 3, fare_centavos: 8400, destination_stop_id: 's4' }))
+      .toBe('🚌 BUS-1: 3 passengers boarded for s4 (₱84.00)');
+    expect(feedMessage({ ...base, event_type: 'trip_created' })).toBe('🚌 BUS-1: 1 passenger boarded');
+  });
+
+  it('says what a paid group paid and who left when the card comes back', () => {
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'ASSIGNED_PAID', passenger_count: 2, fare_centavos: 5400 }))
+      .toBe('💰 BUS-1: paid ₱54.00 for 2 passengers');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'RETURNED', passenger_count: 4 }))
+      .toBe('🚶 BUS-1: card returned, 4 passengers off');
+  });
+
+  it('flags an unpaid return and a lost card so they stand out', () => {
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'RETURNED_UNPAID', fare_centavos: 2700 })).toContain('UNPAID');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'LOST' })).toContain('lost');
+  });
+
+  it('still produces a line for unknown events and a phone with no vehicle', () => {
+    expect(feedMessage({ ...base, event_type: 'future_thing', vehicle_id: null })).toBe('⚡ Unassigned phone: future thing');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'WEIRD_STATE' })).toBe('⚡ BUS-1: card weird state');
+  });
+});
