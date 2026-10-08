@@ -87,8 +87,8 @@ interface ConfigDao {
 
 @Database(
     entities = [TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class],
-    version = 1,
-    exportSchema = false,
+    version = 2,
+    exportSchema = true,
 )
 abstract class TomsDatabase : RoomDatabase() {
     abstract fun trips(): TripDao

@@ -12,7 +12,10 @@ import ph.toms.conductor.data.db.OutboxEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.db.TripEntity
 import ph.toms.conductor.domain.CardState
+import ph.toms.conductor.data.db.PassengerJson
+import ph.toms.conductor.data.db.PassengerLineRecord
 import ph.toms.conductor.domain.GeoFix
+import ph.toms.conductor.domain.LineQuote
 import ph.toms.conductor.domain.Trip
 
 object EventTypes {
@@ -38,6 +41,8 @@ data class TripCreatedPayload(
     val gpsLon: Double? = null,
     val gpsAccuracyMeters: Float? = null,
     val gpsFixAtMillis: Long? = null,
+    val passengerCount: Int = 1,
+    val passengers: List<PassengerLineRecord> = emptyList(),
 )
 
 @Serializable
@@ -98,24 +103,35 @@ class TripRepository(
     }
 }
 
+private fun LineQuote.toRecord() = PassengerLineRecord(categoryId, count, perPersonCentavos, fareCentavos, discountCentavos)
+
+private fun PassengerLineRecord.toQuote() = LineQuote(categoryId, count, perPersonCentavos, fareCentavos, discountCentavos)
+
 private fun Trip.toEntity() = TripEntity(
     id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
     discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion,
     overrideReason, createdAtMillis,
-    gps?.lat, gps?.lon, gps?.accuracyMeters, gps?.fixAtMillis,
+    passengersJson = PassengerJson.encode(passengers.map { it.toRecord() }),
+    gpsLat = gps?.lat, gpsLon = gps?.lon, gpsAccuracyMeters = gps?.accuracyMeters, gpsFixAtMillis = gps?.fixAtMillis,
 )
 
-private fun TripEntity.toDomain() = Trip(
-    id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
-    discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion,
-    overrideReason, createdAtMillis,
-    gps = if (gpsLat != null && gpsLon != null && gpsFixAtMillis != null) {
-        GeoFix(gpsLat, gpsLon, gpsAccuracyMeters, gpsFixAtMillis)
-    } else null,
-)
+private fun TripEntity.toDomain(): Trip {
+    val lines = PassengerJson.decode(passengersJson).map { it.toQuote() }
+    return Trip(
+        id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
+        discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion,
+        overrideReason, createdAtMillis,
+        gps = if (gpsLat != null && gpsLon != null && gpsFixAtMillis != null) {
+            GeoFix(gpsLat, gpsLon, gpsAccuracyMeters, gpsFixAtMillis)
+        } else null,
+        passengers = lines.ifEmpty { listOf(LineQuote(discountCategoryId, 1, fareCentavos, fareCentavos, discountCentavos)) },
+    )
+}
 
 private fun Trip.toPayload() = TripCreatedPayload(
     id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
     discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion, overrideReason,
     gps?.lat, gps?.lon, gps?.accuracyMeters, gps?.fixAtMillis,
+    passengerCount = passengerCount,
+    passengers = passengers.map { it.toRecord() },
 )

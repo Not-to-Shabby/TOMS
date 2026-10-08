@@ -1,5 +1,6 @@
 package ph.toms.conductor.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -19,6 +20,9 @@ data class TripEntity(
     val fareVersion: Int,
     val overrideReason: String?,
     val createdAtMillis: Long,
+    /** JSON list of passenger lines (type, count, per-person and line fare). Added in schema version 2. */
+    @ColumnInfo(defaultValue = "[]")
+    val passengersJson: String = "[]",
     val gpsLat: Double? = null,
     val gpsLon: Double? = null,
     val gpsAccuracyMeters: Float? = null,

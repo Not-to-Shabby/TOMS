@@ -11,6 +11,7 @@ import dagger.hilt.components.SingletonComponent
 import java.util.UUID
 import javax.inject.Singleton
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import ph.toms.conductor.data.db.ALL_MIGRATIONS
 import ph.toms.conductor.data.db.DatabaseKeyProvider
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.sync.EventUploader
@@ -35,6 +36,7 @@ object ProvidersModule {
         val factory = SupportOpenHelperFactory(DatabaseKeyProvider(context).passphrase())
         return Room.databaseBuilder(context, TomsDatabase::class.java, "toms_enc.db")
             .openHelperFactory(factory)
+            .addMigrations(*ALL_MIGRATIONS)
             .build()
     }
 
