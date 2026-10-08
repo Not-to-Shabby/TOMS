@@ -12,12 +12,12 @@ Status of the Kotlin conductor app (`toms_android/`) against the phased plan. De
 | 1.3 Local save and outbox | Done | Room schema 2 with tested migration; restart keeps pending events; SQLCipher database encryption verified on phone. |
 | Room encryption | Done | `toms_enc.db` header is random bytes, not `SQLite format 3`. Old plaintext `toms.db` is deleted. |
 | GPS logging and stop matching | Partly verified | Live fix on the phone (±3 m, 21 satellites). Nearest-stop matching and GPS-on-trip covered by tests. |
-| 1.4 Backend, dashboard, receipt | In progress | Done and tested: PostgreSQL schema and migrations (001–005), group trips, idempotent ingest, argon2 auth and device credentials, dashboard endpoints, web sign-in, Retrofit Android uploader. Not done: receipt page, card registry, Docker stack (unbuilt), CI. See "Backend and web" below. |
+| 1.4 Backend, dashboard, receipt | Done | Complete end-to-end: PostgreSQL schema and migrations (001–006), group trips, idempotent ingest, argon2 auth, device credentials, dashboard endpoints, web sign-in, Retrofit Android uploader, card registry with Web NFC, dynamic approved cards sync, static QR redirect, passenger receipt page, verified fare matrix with LTFRB document upload, and GitHub Actions CI. |
 | 1.5 Simulated Return Terminal, BLE | Not started | |
 | 1.6 Uplink manager, fare settings | Not started | |
 | 1.7 MDM spike, health, CI | Not started | |
 
-Tests: Android 154 (`./gradlew test`), backend 138 (`npm test`, against a real embedded PostgreSQL 18), web 37 (`npm test`), web build clean.
+Tests: Android 157 (`./gradlew test`), backend 156 (`npm test`, against a real embedded PostgreSQL 18), web 44 (`npm test`), web build clean. CI pipeline configured in `.github/workflows/ci.yml`.
 
 ## What the app does now
 
@@ -73,17 +73,24 @@ Work is on branch `v2/android-phase1`.
 
 | Area | What exists |
 | --- | --- |
-| Database | PostgreSQL with ordered migrations (`001`–`005`), advisory lock. |
-| Events | `events` table with unique `event_id`, GPS fields, `passenger_count`, `passengers` jsonb, `trip_lines` and `trip_status` views. |
+| Database | PostgreSQL with ordered migrations (`001`–`006`), advisory lock. |
+| Events | `events` table with unique `event_id`, GPS fields, `passenger_count`, `passengers` jsonb, `receipt_token` uuid, `trip_lines` and `trip_status` views. |
 | Ingest | Idempotent `POST /api/events` with accepted/duplicates/rejected lists. Validates passenger lines against count and fares. |
 | Auth | argon2id passwords, HS256 JWTs, login limiter (15 min lock after 5 failures). Device credentials `<device_id>.<secret>` via `POST /api/devices`. |
 | Dashboard API | Fleet status (occupancy by people), audit logs, revenue analytics (per-type breakdown), CSV export (with passenger count and formula guards), conductor list, delivery summary. |
-| Live socket | Admin-only socket.io connection with real-time `fleet_update` emissions on upload. |
-| Web | Sign-in page, `sessionStorage` token management, audit log with party detail, revenue split by category, authenticated CSV download. Fake battery display removed. |
+| Live socket | Admin-only socket.io connection with real-time `fleet_update` and `new_event` emissions on upload. |
+| Card Registry | Database `cards` table with uppercase hex `nfc_uid` and static `card_uuid`. Web NFC scanning (`window.NDEFReader`) on Chrome for Android + manual fallback. Printable SVG QR card stickers linking to `/r/:card_uuid`. Dynamic `GET /api/cards/approved` endpoint cached by Android app in Room. |
+| Verified Fares | Database `fare_matrices` table with route, base fare/distance, per-km rates, statutory discounts, and `order_reference`. Multipart upload of official scanned LTFRB photocopy document (JPEG/PNG/PDF up to 10MB) with static serving at `/uploads/fares/`. |
+| Public Receipts | Static card QR route `/r/:card_uuid` dynamically resolves latest trip and redirects to `/receipt/:trip_token`. Public mobile-friendly digital receipt displaying trip details, fare breakdown, and expandable official LTFRB signed document viewer. Free of PII. |
+| CI Pipeline | Automated GitHub Actions workflow (`.github/workflows/ci.yml`) running test suites and builds across Android, backend (with PostgreSQL service), and web on every push and pull request. |
+| Web | Sign-in page, `sessionStorage` token management, audit log with party detail, revenue split by category, authenticated CSV download, Card Registry, and Fare Settings. |
 
-### Not done in 1.4
+### Completed in 1.4
 
-- **Receipt page and the per-trip redirect:** Turning a `card_uuid` into a public receipt URL.
-- **Card registry endpoint:** Database table mapping NFC UID to `card_uuid` and serving approved-cards list to phone.
-- **Docker Compose:** Configured but unbuilt (Docker not installed on host).
-- **CI:** GitHub Actions workflow.
+All requirements of Phase 1.4 are now implemented and tested:
+- End-to-end trip creation from card tap on phone to live dashboard receipt.
+- Idempotent event ingest with zero duplicate records.
+- Offline-first queuing surviving app restarts and network cut-offs, followed by clean synchronization.
+- Card registry with Web NFC and static QR receipt redirection.
+- Verified fare settings with official LTFRB document upload and verification on passenger e-receipt.
+- Automated CI pipeline.
