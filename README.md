@@ -1,10 +1,12 @@
 # Transportation Occupancy Monitoring System (TOMS)
 
+> **TOMS v2 is in progress.** The system described below (Master/Slave terminals, Flutter app) is the first generation and now lives in [`archive/`](archive/README.md). v2 uses the conductor's phone as the card reader: see [`toms_android/`](toms_android/README.md), [`toms_backend/`](documentation/v2_progress.md) and [`toms_web/`](toms_web/), and the design notes in [`documentation/v2_decisions.md`](documentation/v2_decisions.md) and [`documentation/v2_progress.md`](documentation/v2_progress.md). The hardware drawings below are still current.
+
 TOMS is a secure, offline-first, contactless transit ticketing and manifest system designed to modernize public utility vehicle operations (such as minibuses and modern jeepneys in Iligan City, Philippines). It replaces traditional manual ticket issuance and cash collection with a robust Master-Slave-Phone network architecture utilizing contactless NFC-DEP Peer-to-Peer communication, ESP-NOW wireless synchronization, and USB CDC-ACM mobile integration.
 
 ---
 
-## 🚀 System Architecture
+## 🚀 System Architecture (v1, archived)
 
 TOMS is composed of three primary tiers:
 1. **Slave Terminal (Tap / Interface Device)**

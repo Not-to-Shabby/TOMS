@@ -6,7 +6,7 @@ import org.junit.Test
 
 /**
  * LEGACY_OLD_APP parity: these cases only confirm the Kotlin port reproduces what
- * toms_mobile/lib/services/session_service.dart outputs (ceil per started km beyond 4 km,
+ * archive/toms_mobile/lib/services/session_service.dart outputs (ceil per started km beyond 4 km,
  * flat 20% for non-regular passengers, nearest whole peso). They are NOT statements that these
  * are the correct fares. Real fares and discount rates come from server settings (Phase 1.6) and
  * the government source cited in Chapter IV 4.9.
