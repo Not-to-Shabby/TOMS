@@ -125,7 +125,7 @@ fun StatusChip(text: String, kind: Status, modifier: Modifier = Modifier) {
             Modifier.size(28.dp),
             contentAlignment = Alignment.Center,
         ) { Text(mark, color = fg, fontSize = 20.sp, fontWeight = FontWeight.Black) }
-        Text(text, color = fg, style = MaterialTheme.typography.titleMedium)
+        Text(text, color = fg, style = MaterialTheme.typography.titleMedium, maxLines = 1, softWrap = false)
     }
 }
 

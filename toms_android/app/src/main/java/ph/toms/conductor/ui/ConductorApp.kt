@@ -10,6 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -106,6 +108,7 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
 }
 
 /** One line, dots and words, so a glance is enough: which bus, is the card reader on, is GPS good, what is unsent. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorState) {
     val gps: Pair<String, Status> = run {
@@ -123,7 +126,12 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
     }
     Column(Modifier.fillMaxWidth().background(TomsColors.Surface).padding(horizontal = 16.dp, vertical = 6.dp)) {
         Text(header, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        // Three chips do not fit one line on a 720 px wide phone, so they wrap to a second line instead of being cut off.
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             StatusChip(reader.first, reader.second)
             StatusChip(gps.first, gps.second)
             if (state.pendingCount > 0) StatusChip("${state.pendingCount} unsent", Status.Neutral)
