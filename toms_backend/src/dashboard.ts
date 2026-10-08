@@ -35,7 +35,7 @@ export async function fleetStatus(pool: Pool, tz: string, vehicleId?: string) {
      LEFT JOIN routes rt     ON rt.id = v.assigned_route_id
      LEFT JOIN conductors c  ON c.id  = v.assigned_conductor_id
      LEFT JOIN (
-       SELECT vehicle_id, count(*) AS open_trips
+       SELECT vehicle_id, sum(passenger_count) AS open_trips
        FROM trip_status
        WHERE current_state IN ${OPEN_STATES}
          AND effective_at > now() - interval '${OPEN_TRIP_WINDOW_HOURS} hours'
@@ -146,7 +146,8 @@ export function registerDashboardRoutes(
               card_uuid, nfc_uid, card_state, trip_id,
               boarding_stop_id, declared_destination_stop_id, actual_destination_stop_id,
               discount_category_id, computed_fare_centavos, fare_centavos, discount_centavos,
-              fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m, gps_fix_at
+              fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m, gps_fix_at,
+              passenger_count, passengers
        FROM events ${where.sql}
        ORDER BY effective_at DESC, id DESC
        LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}`,
@@ -161,46 +162,57 @@ export function registerDashboardRoutes(
     const days = q.data.days;
     const from = `(now() AT TIME ZONE $1)::date - $2::int`;
 
+    // Money comes from the lines so each passenger type is counted on its own. A trip whose fare was
+    // overridden still reports its charged fare in total_revenue; the per-type split uses the lines.
     const daily = await pool.query(
-      `SELECT to_char((effective_at AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS date,
-              COALESCE(sum(fare_centavos) FILTER (WHERE paid), 0)                                   AS total_cents,
-              COALESCE(sum(fare_centavos) FILTER (WHERE paid AND discount_category_id IS NULL), 0)  AS regular_cents,
-              COALESCE(sum(fare_centavos) FILTER (WHERE paid AND discount_category_id IS NOT NULL), 0) AS discounted_cents,
-              COALESCE(sum(discount_centavos) FILTER (WHERE paid), 0)                               AS discount_given_cents,
-              count(*) FILTER (WHERE paid) AS total_payments,
-              count(*)                     AS total_boardings
-       FROM trip_status
-       WHERE (effective_at AT TIME ZONE $1)::date >= ${from}
+      `SELECT to_char((t.effective_at AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS date,
+              COALESCE(sum(t.fare_centavos) FILTER (WHERE t.paid), 0)                              AS total_cents,
+              COALESCE(sum(t.discount_centavos) FILTER (WHERE t.paid), 0)                          AS discount_given_cents,
+              count(*) FILTER (WHERE t.paid)                                                       AS total_payments,
+              count(*)                                                                             AS total_trips,
+              COALESCE(sum(t.passenger_count), 0)                                                  AS total_boardings
+       FROM trip_status t
+       WHERE (t.effective_at AT TIME ZONE $1)::date >= ${from}
        GROUP BY 1 ORDER BY 1`,
       [tz, days],
     );
     const byCategory = await pool.query(
       `SELECT to_char((effective_at AT TIME ZONE $1)::date, 'YYYY-MM-DD') AS date,
-              COALESCE(discount_category_id, 'regular') AS category,
-              sum(fare_centavos) AS cents
-       FROM trip_status
+              category, sum(fare_centavos) AS cents, sum(passengers) AS people
+       FROM trip_lines
        WHERE paid AND (effective_at AT TIME ZONE $1)::date >= ${from}
        GROUP BY 1, 2`,
       [tz, days],
     );
 
     const categories = new Map<string, Record<string, number>>();
+    const people = new Map<string, Record<string, number>>();
     for (const r of byCategory.rows) {
-      const day = categories.get(r.date) ?? {};
-      day[r.category] = Number(r.cents) / 100;
-      categories.set(r.date, day);
+      const money = categories.get(r.date) ?? {};
+      money[r.category] = Number(r.cents) / 100;
+      categories.set(r.date, money);
+      const heads = people.get(r.date) ?? {};
+      heads[r.category] = Number(r.people);
+      people.set(r.date, heads);
     }
     res.json(
-      daily.rows.map((r) => ({
-        date: r.date,
-        total_revenue: Number(r.total_cents) / 100,
-        regular_revenue: Number(r.regular_cents) / 100,
-        discounted_revenue: Number(r.discounted_cents) / 100,
-        discount_given: Number(r.discount_given_cents) / 100,
-        total_payments: Number(r.total_payments),
-        total_boardings: Number(r.total_boardings),
-        by_category: categories.get(r.date) ?? {},
-      })),
+      daily.rows.map((r) => {
+        const split = categories.get(r.date) ?? {};
+        const regular = split.regular ?? 0;
+        const totalFromLines = Object.values(split).reduce((a, b) => a + b, 0);
+        return {
+          date: r.date,
+          total_revenue: Number(r.total_cents) / 100,
+          regular_revenue: regular,
+          discounted_revenue: totalFromLines - regular,
+          discount_given: Number(r.discount_given_cents) / 100,
+          total_payments: Number(r.total_payments),
+          total_trips: Number(r.total_trips),
+          total_boardings: Number(r.total_boardings),
+          by_category: split,
+          passengers_by_category: people.get(r.date) ?? {},
+        };
+      }),
     );
   });
 
@@ -210,7 +222,7 @@ export function registerDashboardRoutes(
               delivery_channel, card_uuid, nfc_uid, card_state, trip_id,
               boarding_stop_id, declared_destination_stop_id, actual_destination_stop_id,
               discount_category_id, computed_fare_centavos, fare_centavos, discount_centavos,
-              fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m
+              fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m, passenger_count
        FROM events ORDER BY effective_at DESC, id DESC LIMIT $1`,
       [EXPORT_ROW_LIMIT + 1],
     );
@@ -221,7 +233,7 @@ export function registerDashboardRoutes(
       'Time (UTC)', 'Received (UTC)', 'Clock suspect', 'Event ID', 'Event type', 'Vehicle', 'Device',
       'Channel', 'Card UUID', 'NFC UID', 'Card state', 'Trip ID', 'Boarding stop', 'Declared destination',
       'Actual destination', 'Discount category', 'Computed fare (PHP)', 'Fare (PHP)', 'Discount (PHP)',
-      'Fare version', 'Override reason', 'GPS lat', 'GPS lon', 'GPS accuracy (m)',
+      'Fare version', 'Override reason', 'GPS lat', 'GPS lon', 'GPS accuracy (m)', 'Passengers',
     ].join(',');
     const lines = data.map((r) =>
       [
@@ -232,7 +244,7 @@ export function registerDashboardRoutes(
         csvText(r.actual_destination_stop_id), csvText(r.discount_category_id),
         pesos(r.computed_fare_centavos), pesos(r.fare_centavos), pesos(r.discount_centavos),
         csvNumber(r.fare_version), csvText(r.override_reason),
-        csvNumber(r.gps_lat), csvNumber(r.gps_lon), csvNumber(r.gps_accuracy_m),
+        csvNumber(r.gps_lat), csvNumber(r.gps_lon), csvNumber(r.gps_accuracy_m), csvNumber(r.passenger_count),
       ].join(','),
     );
 

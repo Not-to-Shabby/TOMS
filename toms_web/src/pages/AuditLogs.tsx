@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Calendar, ChevronLeft, ChevronRight, RefreshCw, Eye } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
-import { eventLabel, pesos, shortId, stopRange } from '../lib/format';
+import { eventLabel, partyText, pesos, shortId, stopRange } from '../lib/format';
 
 
 interface LogEvent {
@@ -29,6 +29,8 @@ interface LogEvent {
   gps_lat: number | null;
   gps_lon: number | null;
   gps_accuracy_m: number | null;
+  passenger_count: number;
+  passengers: { categoryId: string | null; count: number; fareCentavos: number }[];
 }
 
 interface PaginationMetadata {
@@ -426,8 +428,8 @@ export default function AuditLogs() {
                 <span>{selectedLog.card_state ?? '-'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Passenger type</span>
-                <span>{selectedLog.discount_category_id ?? 'regular'}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>Passengers</span>
+                <span>{partyText(selectedLog.passengers, selectedLog.passenger_count)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Fare charged</span>

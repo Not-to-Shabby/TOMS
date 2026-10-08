@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, Users, Award, Calendar } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
-import { categoryLabel, categoryShares } from '../lib/format';
+import { averagePartySize, categoryLabel, categoryShares, paidShare } from '../lib/format';
 
 
 interface DailyRevenue {
@@ -11,8 +11,10 @@ interface DailyRevenue {
   discount_given: number;
   total_revenue: number;
   total_payments: number;
+  total_trips: number;
   total_boardings: number;
   by_category: Record<string, number>;
+  passengers_by_category: Record<string, number>;
 }
 
 const BAR_COLORS = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)'];
@@ -136,7 +138,7 @@ export default function AnalyticsHome() {
           </div>
           <div>
             <div style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>Total Ridership</div>
-            <div style={{ fontSize: '24px', fontWeight: 800 }}>{totalRidership} <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>trips</span></div>
+            <div style={{ fontSize: '24px', fontWeight: 800 }}>{totalRidership} <span style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>passengers</span></div>
           </div>
         </div>
 
@@ -251,7 +253,7 @@ export default function AnalyticsHome() {
                   ₱{points[hoveredIndex].data.total_revenue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                 </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
-                  Tickets Sold: {points[hoveredIndex].data.total_payments}
+                  Paid trips: {points[hoveredIndex].data.total_payments} of {points[hoveredIndex].data.total_trips} · Passengers: {points[hoveredIndex].data.total_boardings}
                 </div>
                 <div style={{ color: 'var(--text-secondary)' }}>
                   Regular: ₱{points[hoveredIndex].data.regular_revenue.toFixed(0)}
@@ -288,17 +290,21 @@ export default function AnalyticsHome() {
           <h3 style={{ margin: '0 0 20px 0', fontSize: '18px' }}>Operational Insights</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Avg. Tickets per Day</span>
+              <span style={{ color: 'var(--text-secondary)' }}>Avg. Paid Trips per Day</span>
               <span style={{ fontWeight: 700 }}>{data.length > 0 ? (data.reduce((acc, curr) => acc + curr.total_payments, 0) / data.length).toFixed(1) : 0} sales</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ color: 'var(--text-secondary)' }}>Avg. Passengers per Trip</span>
+              <span style={{ fontWeight: 700 }}>{averagePartySize(data).toFixed(1)}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Payment Conversion Rate</span>
               <span style={{ fontWeight: 700, color: 'var(--success)' }}>
-                {totalRidership > 0 ? ((data.reduce((acc, curr) => acc + curr.total_payments, 0) / totalRidership) * 100).toFixed(1) : 0}%
+                {paidShare(data).toFixed(1)}%
               </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Average Ticket Value</span>
+              <span style={{ color: 'var(--text-secondary)' }}>Average Paid Trip Value</span>
               <span style={{ fontWeight: 700, color: 'var(--accent)' }}>
                 ₱{data.reduce((acc, curr) => acc + curr.total_payments, 0) > 0 ? (totalRevenue / data.reduce((acc, curr) => acc + curr.total_payments, 0)).toFixed(2) : 0}
               </span>

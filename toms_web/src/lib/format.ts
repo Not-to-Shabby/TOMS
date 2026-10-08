@@ -57,3 +57,26 @@ export function categoryShares(days: { by_category: Record<string, number> }[]):
 export function categoryLabel(category: string): string {
   return category === 'regular' ? 'Regular fare' : category.charAt(0).toUpperCase() + category.slice(1);
 }
+
+interface PartyLine {
+  categoryId: string | null;
+  count: number;
+}
+
+/** "2 regular, 1 student" for a group. An old trip with no lines is "1 regular" (or the count it had). */
+export function partyText(lines: PartyLine[] | null | undefined, count: number): string {
+  if (!lines || lines.length === 0) return count === 1 ? '1 passenger' : `${count} passengers`;
+  return lines.map((l) => `${l.count} ${(l.categoryId ?? 'regular').toLowerCase()}`).join(', ');
+}
+
+/** People per paid-or-unpaid trip over the period. 0 when there were no trips. */
+export function averagePartySize(days: { total_boardings: number; total_trips: number }[]): number {
+  const trips = days.reduce((n, d) => n + d.total_trips, 0);
+  return trips > 0 ? days.reduce((n, d) => n + d.total_boardings, 0) / trips : 0;
+}
+
+/** Percent of trips that have been paid. Trips, not people: one card is paid once for the whole group. */
+export function paidShare(days: { total_payments: number; total_trips: number }[]): number {
+  const trips = days.reduce((n, d) => n + d.total_trips, 0);
+  return trips > 0 ? (days.reduce((n, d) => n + d.total_payments, 0) / trips) * 100 : 0;
+}

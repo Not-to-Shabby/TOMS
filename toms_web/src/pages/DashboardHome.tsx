@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Bus, Users, MapPin, X, Activity, Battery } from 'lucide-react';
+import { Bus, Users, MapPin, X, Activity } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { api, API_BASE, tokenStore } from '../lib/api';
 import maplibregl from 'maplibre-gl';
@@ -239,8 +239,6 @@ export default function DashboardHome() {
             {Object.values(fleet).map(bus => {
               const fillPct = bus.max_capacity > 0 ? (bus.occupancy_now / bus.max_capacity) * 100 : 0;
               const isFull = fillPct >= 100;
-              // Fake battery for demo: 80% to 100%
-              const battery = 80 + (bus.occupancy_now % 20);
 
             return (
               <div 
@@ -291,12 +289,7 @@ export default function DashboardHome() {
                     <span style={{ color: 'var(--text-secondary)' }}>Occupancy</span>
                     <span style={{ fontWeight: 600 }}>{bus.occupancy_now} / {bus.max_capacity}</span>
                   </div>
-                  
-                  {/* Battery Level */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
-                    <span style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}><Battery size={12}/> Battery Level</span>
-                    <span style={{ fontWeight: 600, color: battery > 20 ? 'var(--success)' : 'var(--danger)' }}>{battery}%</span>
-                  </div>
+
 
                   <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
                     <div style={{ 

@@ -82,3 +82,33 @@ describe('categoryShares', () => {
     expect(shares.map((s) => s.category)).toEqual(['a', 'b']);
   });
 });
+
+import { averagePartySize, paidShare, partyText } from './format';
+
+describe('partyText', () => {
+  it('lists each type with its count', () => {
+    expect(partyText([{ categoryId: null, count: 2 }, { categoryId: 'student', count: 1 }], 3)).toBe('2 regular, 1 student');
+  });
+  it('falls back to the count for a trip saved before groups', () => {
+    expect(partyText([], 1)).toBe('1 passenger');
+    expect(partyText(null, 4)).toBe('4 passengers');
+    expect(partyText(undefined, 1)).toBe('1 passenger');
+  });
+});
+
+describe('group figures', () => {
+  const days = [
+    { total_boardings: 7, total_trips: 3, total_payments: 2 },
+    { total_boardings: 2, total_trips: 1, total_payments: 1 },
+  ];
+  it('averages people per trip, not per day', () => {
+    expect(averagePartySize(days)).toBeCloseTo(9 / 4);
+  });
+  it('measures paid trips against all trips', () => {
+    expect(paidShare(days)).toBeCloseTo(75);
+  });
+  it('is zero rather than NaN with no trips', () => {
+    expect(averagePartySize([])).toBe(0);
+    expect(paidShare([{ total_payments: 0, total_trips: 0 }])).toBe(0);
+  });
+});
