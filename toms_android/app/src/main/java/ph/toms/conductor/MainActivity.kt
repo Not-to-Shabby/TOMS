@@ -4,49 +4,42 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import ph.toms.conductor.nfc.NfcReader
 import ph.toms.conductor.ui.AssignmentScreen
+import ph.toms.conductor.ui.ConductorApp
+import ph.toms.conductor.ui.ConductorViewModel
 import ph.toms.conductor.ui.LoginScreen
 import ph.toms.conductor.ui.SessionViewModel
-import ph.toms.conductor.ui.TapScreen
+import ph.toms.conductor.ui.theme.TomsTheme
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    private val viewModel: SessionViewModel by viewModels()
+    /** Sign-in and the choice of vehicle and route. The stub accepts any name until real sign-in (Phase 1.4). */
+    private val session: SessionViewModel by viewModels()
+    private val conductor: ConductorViewModel by viewModels()
 
     @Inject lateinit var nfcReader: NfcReader
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
-                val state by viewModel.state.collectAsState()
-                val assignment = state.assignment
+            TomsTheme {
+                val s by session.state.collectAsState()
+                val c by conductor.state.collectAsState()
+                val assignment = s.assignment
                 when {
-                    state.conductor == null -> LoginScreen(state.loginError, state.busy, viewModel::login)
-                    assignment == null -> AssignmentScreen(state.vehicles, state.routes, viewModel::assign)
-                    else -> TapScreen(
-                        header = "${assignment.conductor} | ${assignment.vehicle.plate} | ${assignment.route.name}",
-                        state = state,
+                    s.conductor == null -> LoginScreen(s.loginError, s.busy, session::login)
+                    assignment == null -> AssignmentScreen(s.vehicles, s.routes, session::assign)
+                    else -> ConductorApp(
+                        vm = conductor,
                         nfcReader = nfcReader,
-                        onRead = viewModel::onCardRead,
-                        onBoarding = viewModel::selectBoarding,
-                        onDestination = viewModel::selectDestination,
-                        onCategory = viewModel::selectCategory,
-                        onPaid = viewModel::markPaid,
-                        onReturn = viewModel::returnCard,
-                        onResolve = viewModel::resolve,
-                        onRelease = viewModel::release,
-                        onClear = viewModel::clearReads,
-                        onStartLocation = viewModel::startLocation,
-                        onStopLocation = viewModel::stopLocation,
-                        onUseNearest = viewModel::useNearestAsBoarding,
+                        header = "${assignment.vehicle.plate}  ·  ${assignment.route.name}",
+                        state = c,
                     )
                 }
             }

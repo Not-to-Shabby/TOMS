@@ -14,6 +14,10 @@ import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import ph.toms.conductor.data.db.ALL_MIGRATIONS
 import ph.toms.conductor.data.db.DatabaseKeyProvider
 import ph.toms.conductor.data.db.TomsDatabase
+import ph.toms.conductor.feedback.DeviceFeedback
+import ph.toms.conductor.feedback.Feedback
+import ph.toms.conductor.settings.PrefsSettings
+import ph.toms.conductor.settings.SettingsStore
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.NoBackendUploader
 import ph.toms.conductor.sync.OutboxFlusher
@@ -23,6 +27,12 @@ import ph.toms.conductor.sync.OutboxFlusher
 abstract class DataModule {
     @Binds
     abstract fun sessionRepository(impl: StubSessionRepository): SessionRepository
+
+    @Binds
+    abstract fun feedback(impl: DeviceFeedback): Feedback
+
+    @Binds
+    abstract fun settings(impl: PrefsSettings): SettingsStore
 }
 
 @Module
