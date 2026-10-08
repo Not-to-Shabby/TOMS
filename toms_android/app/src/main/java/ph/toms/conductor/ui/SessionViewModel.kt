@@ -22,6 +22,7 @@ import ph.toms.conductor.domain.CardEvent
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.domain.CardStateMachine
 import ph.toms.conductor.domain.GeoFix
+import ph.toms.conductor.domain.PassengerLine
 import ph.toms.conductor.domain.StopMatch
 import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.domain.TapDebouncer
@@ -139,7 +140,7 @@ class SessionViewModel @Inject constructor(
             cardState = cardStates[key] ?: CardState.AVAILABLE,
             boardingStopId = s.boardingStopId,
             declaredDestinationStopId = s.destinationStopId,
-            discountCategoryId = s.categoryId,
+            passengers = listOf(PassengerLine(s.categoryId, 1)),
             override = null,
             config = s.config,
             nowMillis = read.readAtMillis,
@@ -202,5 +203,7 @@ class SessionViewModel @Inject constructor(
         TripRejection.UNKNOWN_CATEGORY -> "Passenger type is not active"
         TripRejection.OVERRIDE_NEEDS_REASON -> "Override needs a reason"
         TripRejection.INVALID_OVERRIDE_FARE -> "Override fare is invalid"
+        TripRejection.NO_PASSENGERS -> "Add at least one passenger"
+        TripRejection.GROUP_TOO_LARGE -> "Too many passengers on one card"
     }
 }

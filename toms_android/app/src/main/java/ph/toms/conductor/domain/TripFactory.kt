@@ -18,6 +18,7 @@ data class Trip(
     val boardingStopId: String,
     val declaredDestinationStopId: String,
     val actualDestinationStopId: String?,
+    /** The category of a single-category group, or null for regular or mixed. See [passengers]. */
     val discountCategoryId: String?,
     val computedFareCentavos: Int,
     val fareCentavos: Int,
@@ -27,7 +28,11 @@ data class Trip(
     val createdAtMillis: Long,
     /** The position fix in force when the card was tapped; null when there was none or it was stale. */
     val gps: GeoFix? = null,
-)
+    /** Who the card covers. One card carries a whole group (a family) and returning it closes the trip for all. */
+    val passengers: List<LineQuote> = listOf(LineQuote(null, 1, 0, 0, 0)),
+) {
+    val passengerCount: Int get() = passengers.sumOf { it.count }
+}
 
 sealed interface TripResult {
     data class Created(val trip: Trip, val cardState: CardState) : TripResult
@@ -41,17 +46,24 @@ enum class TripRejection {
     UNKNOWN_CATEGORY,
     OVERRIDE_NEEDS_REASON,
     INVALID_OVERRIDE_FARE,
+    NO_PASSENGERS,
+    GROUP_TOO_LARGE,
 }
 
 object TripFactory {
 
+    /**
+     * Starts a trip for one card and the group it covers. A group of one is the common case.
+     * The fare is the sum of each passenger's own rounded fare; an override replaces the total
+     * and the computed total is kept beside it.
+     */
     fun create(
         tripId: String,
         nfcUid: String,
         cardState: CardState,
         boardingStopId: String,
         declaredDestinationStopId: String,
-        discountCategoryId: String?,
+        passengers: List<PassengerLine>,
         override: TripOverride?,
         config: TomsConfig,
         nowMillis: Long,
@@ -67,11 +79,6 @@ object TripFactory {
         val declared = config.stop(declaredDestinationStopId)
         if (boarding == null || declared == null) return TripResult.Rejected(TripRejection.UNKNOWN_STOP)
 
-        val category = if (discountCategoryId == null) null else {
-            config.category(discountCategoryId)?.takeIf { it.active }
-                ?: return TripResult.Rejected(TripRejection.UNKNOWN_CATEGORY)
-        }
-
         if (override != null) {
             if (override.reason.isBlank()) return TripResult.Rejected(TripRejection.OVERRIDE_NEEDS_REASON)
             if (override.fareCentavos != null && override.fareCentavos < 0) {
@@ -83,8 +90,12 @@ object TripFactory {
             config.stop(it) ?: return TripResult.Rejected(TripRejection.UNKNOWN_STOP)
         }
         val priced = actual ?: declared
-        val quote = FareCalculator.quote(boarding, priced, category, config.fare)
-        val charged = override?.fareCentavos ?: quote.fareCentavos
+        val quote = when (val q = GroupFare.quote(boarding, priced, passengers, config)) {
+            is GroupQuoteResult.Ok -> q.quote
+            is GroupQuoteResult.Invalid -> return TripResult.Rejected(q.reason)
+        }
+        val charged = override?.fareCentavos ?: quote.totalCentavos
+        val categories = quote.lines.map { it.categoryId }.distinct()
 
         return TripResult.Created(
             Trip(
@@ -94,14 +105,15 @@ object TripFactory {
                 boardingStopId = boarding.id,
                 declaredDestinationStopId = declared.id,
                 actualDestinationStopId = actual?.id?.takeIf { it != declared.id },
-                discountCategoryId = category?.id,
-                computedFareCentavos = quote.fareCentavos,
+                discountCategoryId = categories.singleOrNull(),
+                computedFareCentavos = quote.totalCentavos,
                 fareCentavos = charged,
                 discountCentavos = quote.discountCentavos,
                 fareVersion = quote.fareVersion,
                 overrideReason = override?.reason?.trim(),
                 createdAtMillis = nowMillis,
                 gps = fix?.takeUnless { StopMatcher.isStale(it, nowMillis) },
+                passengers = quote.lines,
             ),
             next.state,
         )

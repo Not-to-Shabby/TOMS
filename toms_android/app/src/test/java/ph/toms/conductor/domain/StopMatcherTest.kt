@@ -64,7 +64,7 @@ class TripGpsTest {
     )
 
     private fun create(fix: GeoFix?) = TripFactory.create(
-        "t", "04AA", CardState.AVAILABLE, "a", "b", null, null, config, nowMillis = 100_000, fix = fix,
+        "t", "04AA", CardState.AVAILABLE, "a", "b", listOf(PassengerLine(null, 1)), null, config, nowMillis = 100_000, fix = fix,
     ) as TripResult.Created
 
     @Test fun `fresh fix is stored on the trip`() {
