@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bus, Users, MapPin, X, Activity, Battery } from 'lucide-react';
 import { io } from 'socket.io-client';
-import axios from 'axios';
+import { api, API_BASE, tokenStore } from '../lib/api';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-const API_URL = 'http://localhost:3000/api';
-const SOCKET_URL = 'http://localhost:3000';
 
 interface FleetStatus {
   vehicle_id: string;
@@ -16,8 +14,10 @@ interface FleetStatus {
   seat_map: string | null;
   last_updated: string;
   daily_revenue: number;
-  current_lat?: number;
-  current_lon?: number;
+  current_lat?: number | null;
+  current_lon?: number | null;
+  gps_fix_at?: string | null;
+  gps_accuracy_m?: number | null;
   current_conductor_name?: string;
   assigned_route_name?: string;
   assigned_conductor_name?: string;
@@ -105,7 +105,7 @@ export default function DashboardHome() {
 
   useEffect(() => {
     // 1. Fetch initial snapshot
-    axios.get(`${API_URL}/fleet/status`).then(res => {
+    api.get(`/fleet/status`).then(res => {
       const initial: Record<string, FleetStatus> = {};
       res.data.forEach((status: any) => {
         initial[status.vehicle_id] = status;
@@ -115,7 +115,7 @@ export default function DashboardHome() {
     }).catch(err => console.error("Failed to fetch fleet status", err));
 
     // 2. Listen for real-time updates
-    const socket = io(SOCKET_URL);
+    const socket = io(API_BASE || undefined, { auth: { token: tokenStore.get() } });
     
     socket.on('fleet_update', (update: FleetStatus) => {
       setFleet(prev => {
@@ -132,7 +132,7 @@ export default function DashboardHome() {
 
     socket.on('dispatch_updated', () => {
       // Re-fetch the fleet status when assignments change
-      axios.get(`${API_URL}/fleet/status`).then(res => {
+      api.get(`/fleet/status`).then(res => {
         const updated: Record<string, FleetStatus> = {};
         res.data.forEach((status: any) => {
           updated[status.vehicle_id] = status;

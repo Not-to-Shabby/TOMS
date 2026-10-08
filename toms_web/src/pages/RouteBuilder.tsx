@@ -6,11 +6,11 @@ import type { DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2, Save, Calculator, MapPin, Activity, X, Clock, ChevronDown, ChevronRight } from 'lucide-react';
+import { api } from '../lib/api';
 import axios from 'axios';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-const API_URL = 'http://localhost:3000/api';
 const INITIAL_VIEW_STATE = {
   longitude: 124.24,
   latitude: 8.22,
@@ -276,7 +276,7 @@ export default function RouteBuilder() {
   const openConfirmDialog = (title: string, onConfirm: () => void) => {
     setDialogTitle(title);
     setDialogType('confirm');
-    setDialogOnConfirm(() => (val: string) => onConfirm());
+    setDialogOnConfirm(() => () => onConfirm());
     setDialogOpen(true);
   };
 
@@ -364,7 +364,7 @@ export default function RouteBuilder() {
   const fetchRoutes = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_URL}/routes`);
+      const response = await api.get(`/routes`);
       setRoutes(response.data);
       if (response.data.length > 0) {
         setActiveRouteId(response.data[0].id);
@@ -380,7 +380,7 @@ export default function RouteBuilder() {
   const fetchPaths = async (routeId: string | number) => {
     try {
       setLoading(true);
-      const response = await axios.get(`${API_URL}/routes/${routeId}/paths`);
+      const response = await api.get(`/routes/${routeId}/paths`);
       const data = response.data;
       setPaths(data);
       if (data.length > 0) {
@@ -460,7 +460,7 @@ export default function RouteBuilder() {
       if (!name.trim()) return;
       const color = '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0');
       try {
-        const response = await axios.post(`${API_URL}/routes/${activeRouteId}/paths`, { name: name.trim(), color });
+        const response = await api.post(`/routes/${activeRouteId}/paths`, { name: name.trim(), color });
         const newPath: RoutePath = { ...response.data, stops: [] };
         // Build the new paths array synchronously so handlePathSwitch sees it
         const updatedPaths = [...paths, newPath];
@@ -486,7 +486,7 @@ export default function RouteBuilder() {
     }
     openConfirmDialog('Are you sure you want to delete this path?', async () => {
       try {
-        await axios.delete(`${API_URL}/routes/${activeRouteId}/paths/${pathId}`);
+        await api.delete(`/routes/${activeRouteId}/paths/${pathId}`);
         const updatedPaths = paths.filter(p => p.id !== pathId);
         setPaths(updatedPaths);
         if (activePathId === pathId) {
@@ -503,13 +503,13 @@ export default function RouteBuilder() {
     openPromptDialog('Create New Route', 'Enter new route name', '', async (name) => {
       if (!name.trim()) return;
       try {
-        const routeResponse = await axios.post(`${API_URL}/routes`, { name: name.trim() });
+        const routeResponse = await api.post(`/routes`, { name: name.trim() });
         const newRoute = routeResponse.data;
         setRoutes(prev => [...prev, newRoute]);
         setActiveRouteId(newRoute.id);
 
         // Auto-create Primary path for the new route
-        const pathResponse = await axios.post(`${API_URL}/routes/${newRoute.id}/paths`, {
+        const pathResponse = await api.post(`/routes/${newRoute.id}/paths`, {
           name: 'Primary',
           color: '#00d4ff'
         });
@@ -527,7 +527,7 @@ export default function RouteBuilder() {
     if (!activeRouteId) return;
     openConfirmDialog('Are you sure you want to permanently delete this ENTIRE route and all its paths?', async () => {
       try {
-        await axios.delete(`${API_URL}/routes/${activeRouteId}`);
+        await api.delete(`/routes/${activeRouteId}`);
         const updatedRoutes = routes.filter(r => r.id.toString() !== activeRouteId.toString());
         setRoutes(updatedRoutes);
         if (updatedRoutes.length > 0) {
@@ -560,7 +560,7 @@ export default function RouteBuilder() {
 
       // Save all paths
       for (const path of currentPaths) {
-        await axios.post(`${API_URL}/routes/${activeRouteId}/paths/${path.id}/stops`, path.stops);
+        await api.post(`/routes/${activeRouteId}/paths/${path.id}/stops`, path.stops);
       }
       
       // Save schedules
@@ -572,10 +572,10 @@ export default function RouteBuilder() {
           start_time: p.schedule!.start_time,
           end_time: p.schedule!.end_time,
         }));
-      await axios.post(`${API_URL}/routes/${activeRouteId}/schedules`, schedules);
+      await api.post(`/routes/${activeRouteId}/schedules`, schedules);
 
       // Save Fare Matrix
-      await axios.post(`${API_URL}/routes/${activeRouteId}/fare`, { base_fare: baseFare, per_km_fare: perKmFare });
+      await api.post(`/routes/${activeRouteId}/fare`, { base_fare: baseFare, per_km_fare: perKmFare });
       alert('All Paths, Schedules, Geofences, and Fare Matrix saved successfully!');
     } catch (error) {
       console.error('Failed to save route', error);

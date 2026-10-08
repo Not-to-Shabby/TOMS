@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Search, Phone, Mail, Clock, ArrowRight, RefreshCw } from 'lucide-react';
+import { Search, Phone, Clock, ArrowRight, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import { api } from '../lib/api';
 
-const API_URL = 'http://localhost:3000/api';
 
 interface Conductor {
   id: string;
@@ -30,7 +29,7 @@ export default function ConductorsList() {
 
   const fetchConductors = () => {
     setLoading(true);
-    axios.get(`${API_URL}/conductors`)
+    api.get(`/conductors`)
       .then(res => {
         setConductors(res.data);
         setLoading(false);
@@ -43,7 +42,7 @@ export default function ConductorsList() {
 
   const fetchDependencies = async () => {
     try {
-      const vRes = await axios.get(`${API_URL}/vehicles`);
+      const vRes = await api.get(`/vehicles`);
       setVehicles(vRes.data);
     } catch (err) {
       console.error("Failed to fetch vehicles for assignment", err);
@@ -65,7 +64,7 @@ export default function ConductorsList() {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await axios.post(`${API_URL}/conductors`, newStaff);
+      await api.post(`/conductors`, newStaff);
       setShowAddModal(false);
       setNewStaff({ name: '', username: '', password: '', assigned_vehicle: '', contact_number: '', address: '' });
       fetchConductors();
@@ -77,7 +76,7 @@ export default function ConductorsList() {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to remove this conductor account?')) return;
     try {
-      await axios.delete(`${API_URL}/conductors/${id}`);
+      await api.delete(`/conductors/${id}`);
       fetchConductors();
     } catch (err) {
       alert('Failed to delete conductor');
@@ -96,14 +95,14 @@ export default function ConductorsList() {
         const newVehicleId = editingConductor.assigned_vehicle;
         const targetVehicle = vehicles.find(v => v.id === newVehicleId);
         if (targetVehicle) {
-          await axios.put(`${API_URL}/vehicles/${newVehicleId}`, {
+          await api.put(`/vehicles/${newVehicleId}`, {
             ...targetVehicle,
             assigned_conductor_id: editingConductor.id
           });
         }
       } else if (oldVehicle) {
         // Unassigning: just update the old vehicle to have no conductor
-        await axios.put(`${API_URL}/vehicles/${oldVehicle.id}`, {
+        await api.put(`/vehicles/${oldVehicle.id}`, {
           ...oldVehicle,
           assigned_conductor_id: null
         });

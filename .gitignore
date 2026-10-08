@@ -28,3 +28,17 @@ dependencies.lock
 # OS files
 .DS_Store
 Thumbs.db
+
+# Secrets and local databases - never commit
+*.db
+*.db-shm
+*.db-wal
+.env
+.env.*
+!.env.example
+
+# ZCode session files
+.zcode/
+
+# ESP-IDF component manager downloads
+managed_components/
