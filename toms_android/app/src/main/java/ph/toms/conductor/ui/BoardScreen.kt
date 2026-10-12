@@ -186,7 +186,7 @@ private fun ResultArea(
             Text(r.message, style = MaterialTheme.typography.titleLarge, color = TomsColors.Bad, textAlign = TextAlign.Center)
         }
 
-        is BoardResult.Started -> TripCard(r.trip, CardState.ASSIGNED_UNPAID, "Started", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm)
+        is BoardResult.Started -> TripCard(r.trip, r.state, "Started", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm)
         is BoardResult.Existing -> TripCard(r.trip, r.state, "Already on a trip", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm)
     }
 }

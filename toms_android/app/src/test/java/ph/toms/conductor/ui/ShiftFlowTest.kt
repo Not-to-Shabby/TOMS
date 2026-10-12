@@ -325,6 +325,47 @@ class ShiftFlowTest {
         assertEquals(0, typeCount(EventTypes.CONDUCTOR_RELEASED_UNPAID))
     }
 
+    @Test fun `paying a just started trip updates the card on the Board straight away`() {
+        startShift()
+        tap(cardA, 10_000)
+        val started = vm.state.value.result as BoardResult.Started
+        assertEquals(CardState.ASSIGNED_UNPAID, started.state)
+
+        vm.markPaid(started.trip.id)
+        settle()
+
+        val shown = vm.state.value.result as BoardResult.Started
+        assertEquals("the same trip is still shown", started.trip.id, shown.trip.id)
+        assertEquals(CardState.ASSIGNED_PAID, shown.state)
+    }
+
+    @Test fun `returning a paid just started trip updates the card on the Board`() {
+        startShift()
+        tap(cardA, 10_000)
+        val id = (vm.state.value.result as BoardResult.Started).trip.id
+        vm.markPaid(id); settle()
+
+        vm.returnCard(id)
+        settle { runBlocking { repo.loadCardStates() }[cardA.replace(":", "")] == CardState.AVAILABLE }
+
+        val shown = vm.state.value.result as BoardResult.Started
+        assertEquals(CardState.RETURNED, shown.state)
+    }
+
+    @Test fun `paying a different trip leaves the card on the Board alone`() {
+        startShift()
+        tap(cardA, 10_000)
+        val firstId = (vm.state.value.result as BoardResult.Started).trip.id
+        tap(cardB, 20_000)
+        // The Board now shows B. A is still open on Collect; paying A must not change what B's card shows.
+        val before = vm.state.value.result as BoardResult.Started
+        vm.markPaid(firstId); settle()
+
+        val after = vm.state.value.result as BoardResult.Started
+        assertEquals(before.trip.id, after.trip.id)
+        assertEquals(CardState.ASSIGNED_UNPAID, after.state)
+    }
+
     @Test fun `a tap with no open shift is refused and nothing is saved`() {
         vm.onCardRead(CardRead(cardA, listOf("NfcA"), 10_000))
         settle()

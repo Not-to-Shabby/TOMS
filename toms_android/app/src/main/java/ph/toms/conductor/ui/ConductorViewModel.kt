@@ -50,7 +50,8 @@ enum class Tab { Board, Collect, Calc, More }
 
 /** What the big result area on the Board shows after a tap. Cleared when the conductor starts the next group. */
 sealed interface BoardResult {
-    data class Started(val trip: Trip) : BoardResult
+    /** [state] is the card's state now, so the card on screen follows Paid and Return like any other trip. */
+    data class Started(val trip: Trip, val state: CardState = CardState.ASSIGNED_UNPAID) : BoardResult
     data class Existing(val trip: Trip, val state: CardState) : BoardResult
     data class Refused(val message: String) : BoardResult
 }
@@ -366,11 +367,16 @@ class ConductorViewModel @Inject constructor(
                 cardStates[key] = finalState
                 if (finalState == CardState.AVAILABLE) tripByCard.remove(key)
                 feedback.play(Cue.Done)
-                // If the result on screen is this trip, show what just happened to it.
+                // If the result on screen is this trip, show what just happened to it. Both a trip just started
+                // and one opened by tapping its card are shown, so Paid and Return always show on the Board.
                 _state.update {
                     val shown = it.result
                     it.copy(
-                        result = if (shown is BoardResult.Existing && shown.trip.id == tripId) shown.copy(state = steps.first()) else shown,
+                        result = when {
+                            shown is BoardResult.Started && shown.trip.id == tripId -> shown.copy(state = steps.first())
+                            shown is BoardResult.Existing && shown.trip.id == tripId -> shown.copy(state = steps.first())
+                            else -> shown
+                        },
                     )
                 }
                 refreshOpen()
