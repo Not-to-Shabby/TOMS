@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Plus, Search, QrCode, Printer, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers } from 'lucide-react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { Plus, Search, QrCode, Printer, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../lib/api';
 
@@ -37,13 +37,24 @@ export default function CardRegistry() {
   const [labelInput, setLabelInput] = useState('');
   const [notesInput, setNotesInput] = useState('');
   const [vehicleIdInput, setVehicleIdInput] = useState<string>('');
+  const [writeNdefOnEnroll, setWriteNdefOnEnroll] = useState(true);
   const [enrollError, setEnrollError] = useState<string | null>(null);
   const [nfcScanning, setNfcScanning] = useState(false);
+  const [nfcStatusText, setNfcStatusText] = useState<string | null>(null);
   const [hasWebNfc, setHasWebNfc] = useState(false);
+
+  // NDEF writing on QR modal
+  const [writingTag, setWritingTag] = useState(false);
+  const [writeSuccess, setWriteSuccess] = useState<string | null>(null);
+
+  const scanAbortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setHasWebNfc('NDEFReader' in window);
     loadVehicles();
+    return () => {
+      scanAbortControllerRef.current?.abort();
+    };
   }, []);
 
   useEffect(() => {
@@ -76,7 +87,10 @@ export default function CardRegistry() {
   }
 
   function openEnrollForVehicle(presetVehicleId?: string | null) {
+    scanAbortControllerRef.current?.abort();
     setEnrollError(null);
+    setNfcStatusText(null);
+    setNfcScanning(false);
     setNfcUidInput('');
     setLabelInput('');
     setNotesInput('');
@@ -90,33 +104,57 @@ export default function CardRegistry() {
     setShowEnrollModal(true);
   }
 
+  function closeEnrollModal() {
+    scanAbortControllerRef.current?.abort();
+    setNfcScanning(false);
+    setShowEnrollModal(false);
+  }
+
+  // Web NFC: Scan hardware serial number using window.NDEFReader
   async function startWebNfcScan() {
     if (!('NDEFReader' in window)) {
-      alert('Web NFC is not supported on this browser. Please use Chrome on Android or enter NFC UID manually.');
+      alert('Web NFC is not available on this browser. Use Chrome on Android with NFC turned on in Android settings.');
       return;
     }
+
+    scanAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    scanAbortControllerRef.current = controller;
+
     setNfcScanning(true);
     setEnrollError(null);
+    setNfcStatusText('NFC Scanner Ready. Hold card against the back of your phone...');
+
     try {
       const ndef = new (window as any).NDEFReader();
-      await ndef.scan();
+      await ndef.scan({ signal: controller.signal });
+
       ndef.addEventListener('reading', (event: any) => {
         if (event.serialNumber) {
           const raw = String(event.serialNumber);
           const clean = raw.replace(/[:\s-]/g, '').toUpperCase();
           setNfcUidInput(clean);
           setNfcScanning(false);
+          setNfcStatusText(`✓ Scanned Serial: ${clean}`);
+
+          // Provide haptic feedback if available
+          if ('vibrate' in navigator) navigator.vibrate(60);
         }
       });
+
       ndef.addEventListener('readingerror', () => {
-        setEnrollError('Cannot read card. Try holding the tag steady against the phone.');
+        setEnrollError('Cannot read data from the NFC tag. Try holding it steady against phone.');
         setNfcScanning(false);
       });
     } catch (err: any) {
-      setEnrollError(err.message || 'NFC scan permission denied or unavailable.');
+      if (err.name !== 'AbortError') {
+        setEnrollError(err.message || 'NFC scan failed or permission was denied.');
+      }
       setNfcScanning(false);
     }
   }
+
+  const receiptUrl = (cardUuid: string) => `${window.location.origin}/r/${cardUuid}`;
 
   async function handleEnroll(e: React.FormEvent) {
     e.preventDefault();
@@ -125,20 +163,57 @@ export default function CardRegistry() {
       setEnrollError('NFC UID is required.');
       return;
     }
+
     try {
-      await api.post('/cards', {
+      const res = await api.post('/cards', {
         nfc_uid: nfcUidInput.trim(),
         label: labelInput.trim() || null,
         notes: notesInput.trim() || null,
         vehicle_id: vehicleIdInput || null,
       });
-      setShowEnrollModal(false);
-      setNfcUidInput('');
-      setLabelInput('');
-      setNotesInput('');
+
+      const newCard: CardItem = res.data;
+
+      // If Web NFC writing is enabled and supported, offer to write the static URL to tag memory
+      if (writeNdefOnEnroll && 'NDEFReader' in window) {
+        try {
+          const ndef = new (window as any).NDEFReader();
+          await ndef.write({
+            records: [{ recordType: 'url', data: receiptUrl(newCard.card_uuid) }],
+          });
+          if ('vibrate' in navigator) navigator.vibrate([60, 50, 60]);
+        } catch (writeErr: any) {
+          console.warn('Could not write NDEF record to tag:', writeErr);
+        }
+      }
+
+      closeEnrollModal();
       loadCards();
     } catch (err: any) {
       setEnrollError(err.response?.data?.error || 'Failed to enroll card.');
+    }
+  }
+
+  // Write static QR receipt URL to card's NDEF memory from the sticker modal
+  async function writeNdefUrlToTag(cardUuid: string) {
+    if (!('NDEFReader' in window)) {
+      alert('Web NFC writing requires Chrome on Android.');
+      return;
+    }
+    setWritingTag(true);
+    setWriteSuccess(null);
+    try {
+      const ndef = new (window as any).NDEFReader();
+      const targetUrl = receiptUrl(cardUuid);
+      await ndef.write({
+        records: [{ recordType: 'url', data: targetUrl }],
+      });
+      setWriteSuccess(`✓ Successfully wrote ${targetUrl} to card!`);
+      if ('vibrate' in navigator) navigator.vibrate(80);
+    } catch (err: any) {
+      alert(err.message || 'Failed to write URL to tag. Ensure NFC is enabled and card is held steady.');
+    } finally {
+      setWritingTag(false);
     }
   }
 
@@ -174,7 +249,7 @@ export default function CardRegistry() {
     }
   }
 
-  // Group cards by vehicle so each vehicle's deck is clearly organized
+  // Group cards by vehicle
   const groupedSections = useMemo(() => {
     const byVehicle = new Map<string | null, CardItem[]>();
     for (const c of cards) {
@@ -192,7 +267,6 @@ export default function CardRegistry() {
       items: CardItem[];
     }[] = [];
 
-    // 1. Add sections for known vehicles
     for (const v of vehicles) {
       if (vehicleFilter !== 'all' && vehicleFilter !== v.id) continue;
       const items = byVehicle.get(v.id) ?? [];
@@ -207,7 +281,6 @@ export default function CardRegistry() {
       byVehicle.delete(v.id);
     }
 
-    // 2. Any other vehicle IDs present on cards
     for (const [vid, items] of byVehicle.entries()) {
       if (vid === null) continue;
       sections.push({
@@ -219,7 +292,6 @@ export default function CardRegistry() {
       });
     }
 
-    // 3. Unassigned / Spare Pool section
     if (vehicleFilter === 'all' || vehicleFilter === 'unassigned') {
       const unassignedItems = byVehicle.get(null) ?? [];
       if (unassignedItems.length > 0 || vehicleFilter === 'unassigned' || sections.length === 0) {
@@ -236,15 +308,13 @@ export default function CardRegistry() {
     return sections;
   }, [cards, vehicles, vehicleFilter, search, statusFilter]);
 
-  const receiptUrl = (cardUuid: string) => `${window.location.origin}/r/${cardUuid}`;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', position: 'relative', overflow: 'hidden' }}>
       <header className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '28px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Card Registry by Vehicle</h2>
           <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
-            Organize reusable RFID/NFC passenger card decks per vehicle and print static QR receipt stickers
+            Bind physical RFID/NFC cards using Web NFC, manage vehicle card decks, and generate static QR receipt stickers
           </div>
         </div>
         <button
@@ -484,7 +554,7 @@ export default function CardRegistry() {
                           <td style={{ padding: '14px 24px', textAlign: 'center' }}>
                             <div style={{ display: 'inline-flex', gap: '8px' }}>
                               <button
-                                onClick={() => setSelectedCardForQr(c)}
+                                onClick={() => { setSelectedCardForQr(c); setWriteSuccess(null); }}
                                 title="Print QR Sticker"
                                 style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--accent)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600 }}
                               >
@@ -528,10 +598,10 @@ export default function CardRegistry() {
               Enroll Physical NFC Card
             </h3>
 
-            {hasWebNfc && (
+            {hasWebNfc ? (
               <div style={{ marginBottom: '20px', padding: '16px', background: 'rgba(0, 210, 255, 0.08)', border: '1px solid var(--accent)', borderRadius: '8px', textAlign: 'center' }}>
                 <p style={{ margin: '0 0 10px 0', fontSize: '13px', color: 'var(--text-secondary)' }}>
-                  Web NFC is available on this mobile browser. Tap to read card hardware UID directly.
+                  Web NFC is active. Click below and tap the card against your phone.
                 </p>
                 <button
                   type="button"
@@ -541,8 +611,17 @@ export default function CardRegistry() {
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '10px 18px', borderRadius: '6px' }}
                 >
                   <Radio size={16} />
-                  <span>{nfcScanning ? 'Listening... Tap Card Now' : 'Tap Card to Scan'}</span>
+                  <span>{nfcScanning ? 'Listening... Tap Card to Back of Phone' : 'Tap Card to Scan (Web NFC)'}</span>
                 </button>
+                {nfcStatusText && (
+                  <div style={{ fontSize: '12px', color: 'var(--accent)', marginTop: '8px', fontWeight: 600 }}>
+                    {nfcStatusText}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ marginBottom: '16px', padding: '12px 16px', background: 'rgba(255, 255, 255, 0.04)', border: '1px solid var(--border)', borderRadius: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                ℹ️ Web NFC requires Chrome on Android. For desktop or unsupported browsers, enter the NFC UID manually below.
               </div>
             )}
 
@@ -586,6 +665,17 @@ export default function CardRegistry() {
                 />
               </label>
 
+              {hasWebNfc && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={writeNdefOnEnroll}
+                    onChange={(e) => setWriteNdefOnEnroll(e.target.checked)}
+                  />
+                  <span>Write static receipt URL to tag (NDEF) on save</span>
+                </label>
+              )}
+
               <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '14px' }}>
                 Notes (Optional)
                 <input
@@ -604,7 +694,7 @@ export default function CardRegistry() {
               <div style={{ display: 'flex', gap: '12px', marginTop: '12px' }}>
                 <button
                   type="button"
-                  onClick={() => setShowEnrollModal(false)}
+                  onClick={closeEnrollModal}
                   style={{ flex: 1, padding: '10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: 'pointer' }}
                 >
                   Cancel
@@ -625,7 +715,7 @@ export default function CardRegistry() {
       {/* Modal: QR Code & Printable Sticker Sheet */}
       {selectedCardForQr && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-          <div className="glass-panel" style={{ width: '100%', maxWidth: '420px', padding: '28px', textAlign: 'center' }}>
+          <div className="glass-panel" style={{ width: '100%', maxWidth: '440px', padding: '28px', textAlign: 'center' }}>
             <h3 style={{ margin: '0 0 8px 0', fontSize: '18px' }}>
               Printable Card QR Sticker
             </h3>
@@ -644,7 +734,7 @@ export default function CardRegistry() {
               flexDirection: 'column',
               alignItems: 'center',
               gap: '10px',
-              margin: '0 auto 20px auto',
+              margin: '0 auto 16px auto',
               width: '260px',
             }}>
               <div style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '1px', color: '#0B3D91' }}>
@@ -672,13 +762,44 @@ export default function CardRegistry() {
                 {selectedCardForQr.label || `CARD #${selectedCardForQr.nfc_uid.slice(0, 8)}`}
               </div>
               <div style={{ fontSize: '10px', color: '#555', textAlign: 'center' }}>
-                Scan with phone camera for official e-Receipt
+                Scan with camera or tap phone to view e-Receipt
               </div>
             </div>
 
-            <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-              Target: {receiptUrl(selectedCardForQr.card_uuid)}
+            <div style={{ fontSize: '12px', fontFamily: 'monospace', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              Target: <a href={receiptUrl(selectedCardForQr.card_uuid)} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                {receiptUrl(selectedCardForQr.card_uuid)} <ExternalLink size={12} style={{ display: 'inline' }} />
+              </a>
             </div>
+
+            {hasWebNfc && (
+              <div style={{ marginBottom: '16px' }}>
+                <button
+                  type="button"
+                  onClick={() => writeNdefUrlToTag(selectedCardForQr.card_uuid)}
+                  disabled={writingTag}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--accent)',
+                    background: 'rgba(0, 210, 255, 0.08)',
+                    color: 'var(--accent)',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                  }}
+                >
+                  <Wifi size={14} />
+                  <span>{writingTag ? 'Hold card against phone...' : 'Write NDEF URL to Tag'}</span>
+                </button>
+                {writeSuccess && (
+                  <div style={{ fontSize: '12px', color: 'var(--success)', marginTop: '6px' }}>{writeSuccess}</div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'flex', gap: '12px' }}>
               <button
