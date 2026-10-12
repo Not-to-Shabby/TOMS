@@ -109,7 +109,7 @@ fun MoreScreen(
             HandChoice("Right", state.handedness == Handedness.Right) { onHand(Handedness.Right) }
         }
         Text(
-            "Every button is full width, so both hands reach everything. This only swaps Undo and Clear and the keypad corners.",
+            "Every button is full width, so both hands reach everything. This only swaps the keypad corners.",
             style = MaterialTheme.typography.bodyMedium,
             color = TomsColors.InkSoft,
         )

@@ -149,7 +149,6 @@ class ConductorViewModel @Inject constructor(
         it.copy(tally = base.add(categoryId), result = null)
     }
 
-    fun undoPassenger() = _state.update { it.copy(tally = it.tally.undo()) }
     fun clearPassengers() = _state.update { it.copy(tally = PassengerTally(), result = null) }
     fun dismissResult() = _state.update { it.copy(result = null) }
 
@@ -195,7 +194,9 @@ class ConductorViewModel @Inject constructor(
                 cardStates[key] = result.cardState
                 tripByCard[key] = result.trip
                 feedback.play(Cue.Done)
-                _state.update { it.copy(result = BoardResult.Started(result.trip)) }
+                // The result card now carries the group, so the next group starts fresh (one regular, the
+                // common case). The destination stays: the next passengers usually go to the same place.
+                _state.update { it.copy(result = BoardResult.Started(result.trip), tally = PassengerTally.starting()) }
                 refreshOpen()
                 viewModelScope.launch { trips.recordTrip(result.trip, result.cardState, read.readAtMillis) }
             }

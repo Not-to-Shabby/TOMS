@@ -56,7 +56,6 @@ fun BoardScreen(
     state: ConductorState,
     onFromTo: (from: Boolean, stopId: String) -> Unit,
     onAdd: (String?) -> Unit,
-    onUndo: () -> Unit,
     onClear: () -> Unit,
     onPaid: (Trip) -> Unit,
     onCalc: (Trip) -> Unit,
@@ -114,12 +113,7 @@ fun BoardScreen(
 
         PassengerButtons(state, nameOf, onAdd)
 
-        // Undo and Clear swap sides with the hand setting, so the one used most sits under the thumb.
-        val undo = @Composable { QuietButton("Undo", onUndo, Modifier.weight(1f)) }
-        val clear = @Composable { QuietButton("Clear", onClear, Modifier.weight(1f)) }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap)) {
-            if (state.handedness == Handedness.Right) { clear(); undo() } else { undo(); clear() }
-        }
+        QuietButton("Clear", onClear, Modifier.fillMaxWidth())
 
         ResultArea(state, nameOf, onPaid, onCalc, onReturn, onClearAlarm, Modifier.weight(1f))
     }

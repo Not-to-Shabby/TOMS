@@ -77,7 +77,6 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
                     state = state,
                     onFromTo = { from, id -> if (from) vm.selectBoarding(id) else vm.selectDestination(id) },
                     onAdd = vm::addPassenger,
-                    onUndo = vm::undoPassenger,
                     onClear = vm::clearPassengers,
                     onPaid = { vm.markPaid(it.id) },
                     onCalc = vm::openCalcFor,

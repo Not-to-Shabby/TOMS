@@ -104,7 +104,7 @@ class ConductorViewModelTest {
         CardRead(uidHex, listOf("NfcA"), time)
 
     @Test
-    fun `adding, undoing and clearing passengers updates tally and preview`() = runTest {
+    fun `adding and clearing passengers updates tally and preview`() = runTest {
         advanceUntilIdle()
         // Starts with 1 regular passenger
         assertEquals(1, vm.state.value.tally.total)
@@ -113,12 +113,42 @@ class ConductorViewModelTest {
         vm.addPassenger("student")
         assertEquals(2, vm.state.value.tally.total)
 
-        vm.undoPassenger()
-        assertEquals(1, vm.state.value.tally.total)
-
         vm.clearPassengers()
         assertEquals(0, vm.state.value.tally.total)
         assertNull(vm.state.value.preview)
+    }
+
+    @Test
+    fun `starting a trip resets the group to one regular and keeps the destination`() = runTest {
+        advanceUntilIdle()
+        vm.addPassenger("student")
+        vm.addPassenger("student")
+        val destination = vm.state.value.destinationStopId
+
+        vm.onCardRead(read("6F:F1:AD:39"))
+        advanceUntilIdle()
+
+        val s = vm.state.value
+        assertTrue(s.result is BoardResult.Started)
+        assertEquals(3, (s.result as BoardResult.Started).trip.passengerCount)
+        assertEquals(1, s.tally.total)
+        assertEquals(1, s.tally.counts[null])
+        assertEquals(destination, s.destinationStopId)
+    }
+
+    @Test
+    fun `tapping an in-use card leaves the group being built alone`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        vm.addPassenger("pwd")
+        val building = vm.state.value.tally
+
+        vm.onCardRead(read("6F:F1:AD:39", 15_000L))
+        advanceUntilIdle()
+
+        assertTrue(vm.state.value.result is BoardResult.Existing)
+        assertEquals(building, vm.state.value.tally)
     }
 
     @Test

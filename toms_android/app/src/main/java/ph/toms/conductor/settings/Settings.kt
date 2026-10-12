@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Which hand the conductor uses. Every control already spans the full width, so this only moves the few
- * things that sit to one side (the Undo and Clear pair and the tab order). Right is the default.
+ * things that sit to one side (the keypad corners and the tab order). Right is the default.
  */
 enum class Handedness { Right, Left }
 
