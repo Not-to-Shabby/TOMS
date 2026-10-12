@@ -29,5 +29,19 @@ services:
       db:
         condition: service_healthy
 
+  web:
+    build: ../toms_web
+    restart: unless-stopped
+    ports:
+      - "5173:443"
+    environment:
+      # Comma-separated LAN addresses to include in the self-signed certificate.
+      TLS_EXTRA_IPS: ${TLS_EXTRA_IPS:-}
+    volumes:
+      - web_certs:/etc/nginx/certs
+    depends_on:
+      - api
+
 volumes:
   postgres_data:
+  web_certs:
