@@ -12,12 +12,13 @@ Status of the Kotlin conductor app (`toms_android/`) against the phased plan. De
 | 1.3 Local save and outbox | Done | Room schema 2 with tested migration; restart keeps pending events; SQLCipher database encryption verified on phone. |
 | Room encryption | Done | `toms_enc.db` header is random bytes, not `SQLite format 3`. Old plaintext `toms.db` is deleted. |
 | GPS logging and stop matching | Partly verified | Live fix on the phone (±3 m, 21 satellites). Nearest-stop matching and GPS-on-trip covered by tests. |
+| Shift summary and End Shift | Done | Room schema 3 with tested migration; shift rules, write-off and release in the domain, repository and view model; summary screen, End Shift prompt and shift ended confirmation checked on the Tecno Pova 4 (a fresh shift with nothing in it; a shift with trips and unpaid cards was exercised in tests only). Backend accepts the new events unchanged. Rules in `v2_decisions.md`. |
 | 1.4 Backend, dashboard, receipt | Done | Complete end-to-end: PostgreSQL schema and migrations (001–006), group trips, idempotent ingest, argon2 auth, device credentials, dashboard endpoints, web sign-in, Retrofit Android uploader, card registry with Web NFC, dynamic approved cards sync, static QR redirect, passenger receipt page, verified fare matrix with LTFRB document upload, and GitHub Actions CI. |
 | 1.5 Simulated Return Terminal, BLE | Not started | |
 | 1.6 Uplink manager, fare settings | Not started | |
 | 1.7 MDM spike, health, CI | Not started | |
 
-Tests: Android 157 (`./gradlew test`), backend 156 (`npm test`, against a real embedded PostgreSQL 18), web 44 (`npm test`), web build clean. CI pipeline configured in `.github/workflows/ci.yml`.
+Tests: Android 208 debug and 201 release (`./gradlew test`), backend 164 (`npm test`, against a real embedded PostgreSQL 18), web 44 (`npm test`), web build clean. CI pipeline configured in `.github/workflows/ci.yml`.
 
 ## What the app does now
 
@@ -27,7 +28,7 @@ Tests: Android 157 (`./gradlew test`), backend 156 (`npm test`, against a real e
    - Huge live fare total (72sp) updating immediately with each passenger tap.
    - Passenger buttons (Regular, Student, PWD, Senior) with immediate count feedback. Child is treated as Student.
    - One card covers a family/group: fare is computed and rounded per person and summed.
-   - Undo and Clear buttons (swappable left/right based on hand preference).
+   - One full-width Clear button. After a card tap starts a trip, the group resets to one regular and the destination stays.
    - Tapping an available card starts the trip.
    - Tapping an already assigned card opens its existing trip and payment state instead of an error.
 3. **Collect Screen:**
@@ -39,7 +40,8 @@ Tests: Android 157 (`./gradlew test`), backend 156 (`npm test`, against a real e
    - Change mode: displays trip fare due, quick bill buttons (₱20, ₱50, ₱100, ₱200, ₱500, ₱1000) or custom keypad amount, and exact change to give back (whole-centavo math).
    - General calculator mode: arithmetic calculator with left-to-right operations, centavo rounding, and overflow safeguards.
 5. **More Screen (Settings & Diagnostics):**
-   - Left / Right hand preference (mirrors Undo/Clear and tab order).
+   - Shift summary and End Shift, reached from a button at the top.
+   - Left / Right hand preference (mirrors the keypad corners and tab order).
    - Server Sync: view device ID, configure Server URL, paste device enrollment token, and manual "Upload now" button with real-time status.
    - Diagnostics: waiting events count, fare version, approved cards count, GPS fix and accuracy, recent card reads log.
 6. **Haptics & Audio:** Haptic waveform vibration + audio ToneGenerator cues (Done = single buzz/ack, Refused = double buzz/nack, Opened = buzz/double beep). Color is never the sole feedback.
@@ -60,12 +62,13 @@ Tests: Android 157 (`./gradlew test`), backend 156 (`npm test`, against a real e
 | `feedback/Feedback.kt` | `DeviceFeedback` (VibrationEffect waveforms + ToneGenerator), `RecordingFeedback` |
 | `settings/` | `Handedness`, `PrefsSettings`, `DeviceConfigStore`, `PrefsDeviceConfig` |
 | `location/LocationTracker.kt` | Platform `LocationManager` GNSS (no Google Play services) |
-| `data/db/` | Room entities, DAOs, `MIGRATION_1_2`, `DatabaseKeyProvider` (Keystore SQLCipher) |
+| `data/db/` | Room entities (including shifts), DAOs, `MIGRATION_1_2` and `MIGRATION_2_3`, `DatabaseKeyProvider` (Keystore SQLCipher) |
+| `domain/ShiftSummary.kt` | `Shift`, the recorded trip facts, and `ShiftSummary.of`: collected cash, own-trip reconciliation, carried-in lines, per-type breakdown |
 | `data/TripRepository.kt` | Single-transaction trip, card state, event and outbox writing |
 | `sync/RetrofitEventUploader.kt` | Retrofit 2.11 + OkHttp 4.12 uploader with kotlinx.serialization |
 | `sync/Sync.kt`, `UploadWorker.kt` | `OutboxFlusher`, periodic WorkManager job |
 | `ui/theme/` | `TomsTheme`, `TomsColors` (4.5:1+ WCAG sunlight contrast), `TouchTarget` (64dp), `BigButton`, `StatusChip` |
-| `ui/` | `ConductorApp` (StatusStrip, TabBar), `BoardScreen`, `CollectCalcScreens`, `MoreScreen`, `ConductorViewModel` |
+| `ui/` | `ConductorApp` (StatusStrip, TabBar), `BoardScreen`, `CollectCalcScreens`, `MoreScreen`, `ShiftScreens` (summary, End Shift prompt, shift ended), `ConductorViewModel` |
 
 ## Backend and web (Phase 1.4)
 
