@@ -99,6 +99,9 @@ class SessionViewModel @Inject constructor(
         _state.update { it.copy(assignment = Assignment(conductor, vehicle, route)) }
     }
 
+    /** Back to choosing a vehicle and route. The conductor stays signed in. */
+    fun endAssignment() = _state.update { it.copy(assignment = null) }
+
     private var locationJob: Job? = null
 
     /** Called when location permission is granted and the screen is in the foreground. */

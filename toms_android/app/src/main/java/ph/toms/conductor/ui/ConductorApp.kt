@@ -69,9 +69,36 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
         }
     }
 
+    state.endPrompt?.let { prompt ->
+        EndShiftDialog(
+            prompt = prompt,
+            forPreviousShift = state.blockedBy != null,
+            busy = state.ending,
+            onGoBack = vm::goBackToCollect,
+            onWriteOff = { vm.confirmEndShift(writeOff = true) },
+            onEnd = { vm.confirmEndShift(writeOff = false) },
+            onCancel = if (state.blockedBy != null) vm::abandonBlockedStart else vm::dismissEndPrompt,
+        )
+    }
+    state.endedSummary?.let { ShiftEndedDialog(it, state.config, state.endedContinues, vm::acknowledgeEnded) }
+
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         StatusStrip(header, availability, state)
         Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
+            val summary = state.summary
+            val shift = state.shift
+            if (state.showSummary && summary != null && shift != null) {
+                ShiftSummaryScreen(
+                    summary = summary,
+                    config = state.config,
+                    conductor = shift.conductor,
+                    startedAtMillis = shift.startedAtMillis,
+                    nowMillis = System.currentTimeMillis(),
+                    onEndShift = vm::requestEndShift,
+                    onBack = vm::closeSummary,
+                )
+                return@Box
+            }
             when (state.tab) {
                 Tab.Board -> BoardScreen(
                     state = state,
@@ -99,6 +126,7 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
                     onServerUrl = vm::updateServerUrl,
                     onDeviceToken = vm::updateDeviceToken,
                     onUploadNow = vm::flushNow,
+                    onShiftSummary = vm::openSummary,
                 )
             }
         }

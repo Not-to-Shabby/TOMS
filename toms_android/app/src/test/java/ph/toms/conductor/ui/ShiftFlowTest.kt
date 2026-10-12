@@ -81,7 +81,22 @@ class ShiftFlowTest {
         )
     }
 
+    /** Waits until no more database writes are arriving, so a late write cannot hit a closed database. */
+    private fun drainWrites() {
+        var last = -1
+        var stable = 0
+        val end = System.currentTimeMillis() + 3_000
+        while (stable < 3 && System.currentTimeMillis() < end) {
+            dispatcher.scheduler.advanceUntilIdle()
+            val now = runBlocking { db.events().count() }
+            stable = if (now == last) stable + 1 else 0
+            last = now
+            Thread.sleep(15)
+        }
+    }
+
     @After fun tearDown() {
+        drainWrites()
         db.close()
         Dispatchers.resetMain()
     }

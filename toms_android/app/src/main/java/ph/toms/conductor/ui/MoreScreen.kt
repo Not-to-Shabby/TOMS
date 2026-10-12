@@ -46,6 +46,7 @@ fun MoreScreen(
     onServerUrl: (String) -> Unit = {},
     onDeviceToken: (String?) -> Unit = {},
     onUploadNow: () -> Unit = {},
+    onShiftSummary: () -> Unit = {},
 ) {
     var editUrl by remember { mutableStateOf<String?>(null) }
     var editToken by remember { mutableStateOf<String?>(null) }
@@ -101,7 +102,11 @@ fun MoreScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(Gap),
     ) {
-        Text("Settings", style = MaterialTheme.typography.headlineMedium)
+        if (state.shift != null) {
+            BigButton("Shift summary and end shift", onShiftSummary)
+        }
+
+        Text("Settings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 8.dp))
 
         Text("Which hand do you use?", style = MaterialTheme.typography.titleMedium, color = TomsColors.InkSoft)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap)) {
