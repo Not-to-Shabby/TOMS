@@ -11,8 +11,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ph.toms.conductor.data.SavedTrip
+import ph.toms.conductor.data.StartShiftResult
 import ph.toms.conductor.data.TestConfig
 import ph.toms.conductor.data.TripRepository
+import ph.toms.conductor.domain.Shift
+import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ApprovedCards
 import ph.toms.conductor.domain.BoardFlow
 import ph.toms.conductor.domain.CalcMode
@@ -51,7 +55,27 @@ sealed interface BoardResult {
     data class Refused(val message: String) : BoardResult
 }
 
+/** What End Shift has to ask before it can close a shift. Built from the shift's own open trips. */
+data class EndShiftPrompt(
+    val shiftId: String,
+    val shiftConductor: String,
+    val unpaidCount: Int,
+    val unpaidCentavos: Long,
+    /** Paid trips whose card is still out. They stay open and carry into the next shift. */
+    val paidOutCount: Int,
+)
+
 data class ConductorState(
+    val shift: Shift? = null,
+    /** An open shift of someone else, or on another vehicle or route. It must be ended before a new shift starts. */
+    val blockedBy: Shift? = null,
+    val endPrompt: EndShiftPrompt? = null,
+    val ending: Boolean = false,
+    val showSummary: Boolean = false,
+    val summary: ShiftSummary? = null,
+    /** Set when a shift has just been ended, so its figures are shown once before moving on. */
+    val endedSummary: ShiftSummary? = null,
+    val endedContinues: Boolean = false,
     val config: TomsConfig = TestConfig.config,
     val tab: Tab = Tab.Board,
     val boardingStopId: String = TestConfig.config.stops.first().id,
@@ -117,14 +141,7 @@ class ConductorViewModel @Inject constructor(
                 syncApprovedCards()
             }
         }
-        viewModelScope.launch {
-            cardStates.putAll(trips.loadCardStates())
-            trips.loadTrips().forEach { t ->
-                // Newest trip per card wins; loadTrips returns newest first.
-                tripByCard.putIfAbsent(t.nfcUid, t)
-            }
-            refreshOpen()
-        }
+        viewModelScope.launch { reloadCards() }
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
         viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
@@ -136,6 +153,113 @@ class ConductorViewModel @Inject constructor(
             }
         }
     }
+
+    /** Reads card states and each card's newest trip back from the database. */
+    private suspend fun reloadCards() {
+        cardStates.clear()
+        tripByCard.clear()
+        cardStates.putAll(trips.loadCardStates())
+        trips.loadTrips().forEach { t ->
+            // Newest trip per card wins; loadTrips returns newest first.
+            tripByCard.putIfAbsent(t.nfcUid, t)
+        }
+        refreshOpen()
+    }
+
+    // ---- shifts
+
+    /** Who is signed in. Written on every closing event as the person who ended the shift. */
+    private var actor: String = ""
+    private var pendingStart: Triple<String, String, String>? = null
+
+    /**
+     * Opens the shift for this conductor, vehicle and route, or resumes the open one. If another shift is
+     * still open, the shift is not started: its End Shift prompt is shown first, so its unpaid trips are asked about.
+     */
+    fun startShift(conductor: String, vehicleId: String, routeId: String) {
+        actor = conductor.trim()
+        pendingStart = Triple(conductor, vehicleId, routeId)
+        viewModelScope.launch { applyStart(trips.startShift(conductor, vehicleId, routeId)) }
+    }
+
+    private suspend fun applyStart(result: StartShiftResult) {
+        when (result) {
+            is StartShiftResult.Started -> _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+            is StartShiftResult.Resumed -> _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+            is StartShiftResult.NeedsEnding -> {
+                val prompt = promptFor(result.open)
+                _state.update { it.copy(shift = null, blockedBy = result.open, endPrompt = prompt) }
+            }
+        }
+    }
+
+    private suspend fun promptFor(shift: Shift): EndShiftPrompt {
+        val open: List<SavedTrip> = trips.openTripsOf(shift.id)
+        val unpaid = open.filter { it.cardState == CardState.ASSIGNED_UNPAID || it.cardState == CardState.RETURNED_UNPAID }
+        return EndShiftPrompt(
+            shiftId = shift.id,
+            shiftConductor = shift.conductor,
+            unpaidCount = unpaid.size,
+            unpaidCentavos = unpaid.sumOf { it.trip.fareCentavos.toLong() },
+            paidOutCount = open.count { it.cardState == CardState.ASSIGNED_PAID },
+        )
+    }
+
+    fun requestEndShift() {
+        val shift = _state.value.shift ?: return
+        viewModelScope.launch { _state.update { it.copy(endPrompt = promptFor(shift)) } }
+    }
+
+    /** "Go back and collect": closes the prompt and opens Collect. Nothing is changed. */
+    fun goBackToCollect() = _state.update { it.copy(endPrompt = null, showSummary = false, tab = Tab.Collect, notice = null, focusTripId = null) }
+
+    fun dismissEndPrompt() = _state.update { it.copy(endPrompt = null) }
+
+    /** Gives up starting a shift that is blocked by an open one. The conductor goes back to choosing a vehicle. */
+    fun abandonBlockedStart() {
+        pendingStart = null
+        _state.update { it.copy(blockedBy = null, endPrompt = null) }
+    }
+
+    /**
+     * Ends the shift the prompt is about. With [writeOff], each unpaid trip is written off and its card released
+     * first; the write-off is recorded as a write-off, never as a terminal return. Ignored while already ending,
+     * so a double tap cannot end twice.
+     */
+    fun confirmEndShift(writeOff: Boolean) {
+        val prompt = _state.value.endPrompt ?: return
+        if (_state.value.ending) return
+        _state.update { it.copy(ending = true) }
+        viewModelScope.launch {
+            if (writeOff) {
+                trips.openTripsOf(prompt.shiftId)
+                    .filter { it.cardState == CardState.ASSIGNED_UNPAID || it.cardState == CardState.RETURNED_UNPAID }
+                    .forEach { trips.writeOffAndRelease(prompt.shiftId, it.trip.id, actor) }
+            }
+            val summary = trips.endShift(prompt.shiftId, actor)
+            reloadCards()
+            val wasBlocked = _state.value.blockedBy != null
+            _state.update {
+                it.copy(
+                    ending = false, endPrompt = null, showSummary = false, summary = null,
+                    shift = if (wasBlocked) it.shift else null,
+                    blockedBy = null,
+                    endedSummary = summary,
+                    endedContinues = wasBlocked,
+                )
+            }
+            if (wasBlocked) pendingStart?.let { (c, v, r) -> applyStart(trips.startShift(c, v, r)) }
+        }
+    }
+
+    fun acknowledgeEnded() = _state.update { it.copy(endedSummary = null, endedContinues = false) }
+
+    fun openSummary() {
+        val shift = _state.value.shift ?: return
+        viewModelScope.launch { _state.update { it.copy(summary = trips.summaryFor(shift.id), showSummary = true) } }
+    }
+
+    fun closeSummary() = _state.update { it.copy(showSummary = false) }
 
     // ---- navigation and board choices
 
@@ -177,6 +301,9 @@ class ConductorViewModel @Inject constructor(
             return
         }
 
+        // Every trip belongs to a shift, so no trip is started until one is open.
+        val shiftId = s0.shift?.id ?: return refuse("No shift open")
+
         val result = BoardFlow.handleTap(
             nfcUid = read.uidHex,
             passengers = s0.tally,
@@ -198,7 +325,7 @@ class ConductorViewModel @Inject constructor(
                 // common case). The destination stays: the next passengers usually go to the same place.
                 _state.update { it.copy(result = BoardResult.Started(result.trip), tally = PassengerTally.starting()) }
                 refreshOpen()
-                viewModelScope.launch { trips.recordTrip(result.trip, result.cardState, read.readAtMillis) }
+                viewModelScope.launch { trips.recordTrip(result.trip, result.cardState, read.readAtMillis, shiftId) }
             }
             is TapResult.Existing -> {
                 feedback.play(Cue.Opened)
@@ -247,8 +374,10 @@ class ConductorViewModel @Inject constructor(
                     )
                 }
                 refreshOpen()
+                // Tagged with the shift open now, so a payment counts in the shift where it happens.
+                val shiftId = _state.value.shift?.id
                 viewModelScope.launch {
-                    steps.forEach { trips.recordCardState(key, trip.cardUuid, trip.id, it, System.currentTimeMillis()) }
+                    steps.forEach { trips.recordCardState(key, trip.cardUuid, trip.id, it, System.currentTimeMillis(), shiftId) }
                 }
             }
             is Transition.Rejected -> feedback.play(Cue.Refused)

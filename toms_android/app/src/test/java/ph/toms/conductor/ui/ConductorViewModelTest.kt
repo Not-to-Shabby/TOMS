@@ -92,6 +92,19 @@ class ConductorViewModelTest {
         deviceConfig = TestDeviceConfigStore()
         flusher = OutboxFlusher(db.outbox(), uploader)
         vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, flusher, fakeCardSync)
+        // Every trip belongs to a shift, so the tests run inside one.
+        vm.startShift("juan", "v1", "r1")
+        waitUntil { vm.state.value.shift != null }
+    }
+
+    /** Room runs on its own thread, so the test scheduler alone cannot tell when a database call has finished. */
+    private fun waitUntil(timeoutMs: Long = 5_000, condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + timeoutMs
+        while (!condition() && System.currentTimeMillis() < end) {
+            testDispatcher.scheduler.advanceUntilIdle()
+            Thread.sleep(10)
+        }
+        assertTrue("timed out waiting", condition())
     }
 
     @After

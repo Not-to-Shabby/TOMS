@@ -175,6 +175,37 @@ class ShiftRepositoryTest {
         assertEquals("a second write off writes nothing", before, events().size)
     }
 
+    @Test fun `a card that really came back unpaid is written off and resolved, keeping its true terminal return`() = runBlocking {
+        val s = started(open())
+        val t = trip("1", 1500)
+        board(s.id, t)
+        repo.recordCardState(t.nfcUid, t.cardUuid, t.id, CardState.RETURNED_UNPAID, now, s.id)
+
+        assertTrue(repo.writeOffAndRelease(s.id, t.id, "juan"))
+
+        val forTrip = events().filter { it.tripId == t.id }
+        assertEquals(
+            listOf(EventTypes.TRIP_CREATED, EventTypes.CARD_STATE_CHANGED, EventTypes.FARE_WRITTEN_OFF, EventTypes.CARD_STATE_CHANGED),
+            forTrip.map { it.type },
+        )
+        // The card was never released from the vehicle, so there is no release event; the return is real and stays.
+        assertTrue(forTrip.none { it.type == EventTypes.CONDUCTOR_RELEASED_UNPAID })
+        assertEquals(listOf("RETURNED_UNPAID", "AVAILABLE"), forTrip.mapNotNull { it.cardState })
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["UID1"])
+        assertEquals(1500L, repo.summaryFor(s.id).writtenOffCentavos)
+    }
+
+    @Test fun `open trips of a shift lists only trips whose card is still out`() = runBlocking {
+        val s = started(open())
+        val a = trip("a"); val b = trip("b"); val c = trip("c")
+        board(s.id, a); board(s.id, b); board(s.id, c)
+        pay(s.id, b)
+        repo.writeOffAndRelease(s.id, c.id, "juan")
+
+        val open = repo.openTripsOf(s.id).associate { it.trip.id to it.cardState }
+        assertEquals(mapOf("a" to CardState.ASSIGNED_UNPAID, "b" to CardState.ASSIGNED_PAID), open)
+    }
+
     // 23
     @Test fun `a released card takes a new trip and the old trip stays written off`() = runBlocking {
         val s = started(open())

@@ -219,18 +219,33 @@ class TripRepository(
         }
     }
 
+    /** The trips of [shiftId] whose card still holds them, with the card's state. A freed card no longer holds its trip. */
+    suspend fun openTripsOf(shiftId: String): List<SavedTrip> {
+        val cardByTrip = db.cards().all().filter { it.currentTripId != null }.associateBy { it.currentTripId }
+        return db.trips().all().filter { it.shiftId == shiftId }.mapNotNull { t ->
+            val state = cardByTrip[t.id]?.let { CardState.valueOf(it.state) } ?: return@mapNotNull null
+            if (state == CardState.AVAILABLE) null else SavedTrip(t.toDomain(), state)
+        }
+    }
+
     /**
-     * End-of-shift write-off of an unpaid fare. In one transaction and in this order it records the write-off,
-     * the conductor's release of the card, and the card becoming available. The card never reached the terminal,
-     * so no terminal state is written. Does nothing if the trip is already paid or already written off.
+     * End-of-shift write-off of an unpaid fare, in one transaction. Two honest cases:
+     *
+     * - The card is still with the passenger (ASSIGNED_UNPAID): the write-off, the conductor's release of the
+     *   card, then the card becoming available. The card never reached the terminal, so no terminal state is written.
+     * - The card really came back unpaid (RETURNED_UNPAID): the write-off, then the card becoming available, which
+     *   is the conductor clearing the alarm. The terminal return already in its history is true, so it is kept, and
+     *   no "release" is recorded because the card was never released from the vehicle.
+     *
+     * Any other state is left exactly as it is: a paid card, or one already written off and freed.
      */
     suspend fun writeOffAndRelease(shiftId: String, tripId: String, actingConductor: String): Boolean =
         db.withTransaction {
             val shift = db.shifts().byId(shiftId) ?: return@withTransaction false
             val trip = db.trips().byId(tripId) ?: return@withTransaction false
             val card = db.cards().byTrip(tripId) ?: return@withTransaction false
-            // Only an unpaid, still-assigned card can be released. Anything else is left exactly as it is.
-            if (CardState.valueOf(card.state) != CardState.ASSIGNED_UNPAID) return@withTransaction false
+            val before = CardState.valueOf(card.state)
+            if (before != CardState.ASSIGNED_UNPAID && before != CardState.RETURNED_UNPAID) return@withTransaction false
 
             val now = clock()
             val payload = json.encodeToString(
@@ -241,7 +256,9 @@ class TripRepository(
                 ),
             )
             appendEvent(EventTypes.FARE_WRITTEN_OFF, payload, now, shiftId = shiftId, tripId = tripId)
-            appendEvent(EventTypes.CONDUCTOR_RELEASED_UNPAID, payload, now, shiftId = shiftId, tripId = tripId)
+            if (before == CardState.ASSIGNED_UNPAID) {
+                appendEvent(EventTypes.CONDUCTOR_RELEASED_UNPAID, payload, now, shiftId = shiftId, tripId = tripId)
+            }
             db.cards().upsert(CardEntity(trip.nfcUid, trip.cardUuid, CardState.AVAILABLE.name, tripId, now))
             appendEvent(
                 EventTypes.CARD_STATE_CHANGED,
