@@ -1,5 +1,26 @@
 package ph.toms.conductor.domain
 
+/** One conductor's run on one vehicle and route. Open while [endedAtMillis] is null. */
+data class Shift(
+    val id: String,
+    val conductor: String,
+    val vehicleId: String,
+    val routeId: String,
+    val startedAtMillis: Long,
+    val endedAtMillis: Long? = null,
+    val endedBy: String? = null,
+) {
+    val isOpen: Boolean get() = endedAtMillis == null
+
+    /** The same person on the same vehicle and route. Names are compared ignoring case and outer spaces. */
+    fun sameRunAs(conductor: String, vehicleId: String, routeId: String): Boolean =
+        normalizeName(this.conductor) == normalizeName(conductor) && this.vehicleId == vehicleId && this.routeId == routeId
+
+    companion object {
+        fun normalizeName(name: String): String = name.trim().lowercase(java.util.Locale.ROOT)
+    }
+}
+
 /** What happened to a trip, as recorded. Only these facts feed the shift summary. */
 enum class TripFact { PAID, WRITTEN_OFF, STATE_CHANGE }
 
@@ -30,9 +51,11 @@ data class TripEventRecord(
 /** A trip together with the shift it was created in (null for trips from before shifts existed). */
 data class ShiftTrip(val trip: Trip, val shiftId: String?)
 
+@kotlinx.serialization.Serializable
 data class TypeLine(val categoryId: String?, val passengers: Int, val fareCentavos: Long)
 
 /** Trips from an earlier shift that are still open here. Information only: never part of a total. */
+@kotlinx.serialization.Serializable
 data class CarriedIn(
     val paidHereCount: Int,
     val paidHereCentavos: Long,
@@ -43,6 +66,7 @@ data class CarriedIn(
     val writtenOffHereCentavos: Long = 0,
 )
 
+@kotlinx.serialization.Serializable
 data class ShiftSummary(
     val shiftId: String,
     val tripCount: Int,

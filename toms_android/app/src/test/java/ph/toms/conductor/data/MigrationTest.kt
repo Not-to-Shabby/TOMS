@@ -112,6 +112,64 @@ class MigrationTest {
         }
     }
 
+    private fun insertV2Trip(db: androidx.sqlite.db.SupportSQLiteDatabase, id: String) {
+        db.execSQL(
+            """INSERT INTO trips (id, cardUuid, nfcUid, boardingStopId, declaredDestinationStopId, actualDestinationStopId,
+               discountCategoryId, computedFareCentavos, fareCentavos, discountCentavos, fareVersion, overrideReason,
+               createdAtMillis, passengersJson)
+               VALUES (?, 'card-$id', 'UID$id', 's1', 's2', NULL, NULL, 1500, 1500, 0, 3, NULL, 1000, '[]')""",
+            arrayOf(id),
+        )
+    }
+
+    @Test fun `version 3 keeps existing trips and events, adds shifts, and leaves old rows in no shift`() {
+        helper.createDatabase(name, 2).apply {
+            insertV2Trip(this, "a")
+            execSQL("INSERT INTO cards (nfcUid, cardUuid, state, currentTripId, updatedAtMillis) VALUES ('UIDa', 'card-a', 'ASSIGNED_PAID', 'a', 1)")
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e1', 'dev', 'trip_created', '{\"tripId\":\"a\"}', 5)")
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e2', 'dev', 'card_state_changed', '{\"tripId\":\"a\",\"state\":\"ASSIGNED_PAID\"}', 6)")
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e3', 'dev', 'something_else', 'not json at all', 7)")
+            execSQL("INSERT INTO outbox (eventId, attemptCount) VALUES ('e2', 3)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(name, 3, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT id, fareCentavos, shiftId FROM trips").use {
+            assertTrue(it.moveToFirst()); assertEquals("a", it.getString(0)); assertEquals(1500, it.getInt(1)); assertTrue(it.isNull(2))
+        }
+        db.query("SELECT eventId, shiftId, tripId, cardState FROM events ORDER BY seq").use {
+            assertTrue(it.moveToNext()); assertEquals("e1", it.getString(0)); assertTrue(it.isNull(1)); assertEquals("a", it.getString(2)); assertTrue(it.isNull(3))
+            assertTrue(it.moveToNext()); assertEquals("e2", it.getString(0)); assertEquals("a", it.getString(2)); assertEquals("ASSIGNED_PAID", it.getString(3))
+            // An event the backfill cannot read is kept as it was, with nothing guessed.
+            assertTrue(it.moveToNext()); assertEquals("e3", it.getString(0)); assertTrue(it.isNull(2)); assertTrue(it.isNull(3))
+        }
+        db.query("SELECT attemptCount FROM outbox WHERE eventId = 'e2'").use { assertTrue(it.moveToFirst()); assertEquals(3, it.getInt(0)) }
+        db.query("SELECT COUNT(*) FROM shifts").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+    }
+
+    @Test fun `a version 2 database opened through Room can start a shift and keeps its old trip out of it`() = runBlocking {
+        helper.createDatabase(name, 2).apply {
+            insertV2Trip(this, "old")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 3, true, *ALL_MIGRATIONS).close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.databaseBuilder(context, TomsDatabase::class.java, name).addMigrations(*ALL_MIGRATIONS).allowMainThreadQueries().build()
+        try {
+            val repo = TripRepository(room, "dev")
+            val shift = (repo.startShift("juan", "v1", "r1") as StartShiftResult.Started).shift
+            val summary = repo.summaryFor(shift.id)
+            assertEquals(0, summary.tripCount)
+            assertEquals(0L, summary.faresChargedCentavos)
+            assertEquals(0, summary.carriedIn.stillUnpaidCount)
+            assertEquals("the old trip is still there", 1, repo.loadTrips().size)
+        } finally {
+            room.close()
+        }
+    }
+
     @Test fun `a group saved after the migration round-trips with every line`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val room = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()
