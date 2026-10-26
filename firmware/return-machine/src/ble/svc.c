@@ -7,6 +7,7 @@
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/printk.h> /* snprintk */
 LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 
 /* UUID base "TOMS RETURN MACHINE": 544F4D53-5245-5455-524E-414348494Exx,
@@ -110,7 +111,8 @@ static void make_name(char *out, size_t cap)
 	size_t count = 1;
 	char suffix[5] = "0000";
 
-	if (bt_id_get(addrs, &count) == 1) {
+	bt_id_get(addrs, &count); /* returns void in Zephyr 4.x */
+	if (count == 1) {
 		snprintk(suffix, sizeof(suffix), "%02X%02X", addrs[0].a.val[1], addrs[0].a.val[0]);
 	}
 	snprintk(out, cap, "TOMS-RM-%s", suffix);

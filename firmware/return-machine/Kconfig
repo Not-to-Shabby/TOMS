@@ -38,3 +38,7 @@ config TOMS_DEV_MODE
 		tests can run before enrollment is designed.
 
 endmenu
+
+# An app-level Kconfig is the root of the Kconfig universe, so the Zephyr
+# core must be sourced from here.
+source "Kconfig.zephyr"

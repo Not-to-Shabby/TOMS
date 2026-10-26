@@ -27,7 +27,10 @@ static const struct tone_step patterns[][8] = {
 static const struct tone_step *current;
 static uint8_t step;
 static bool sounding;
-static K_WORK_DELAYABLE_DEFINE(step_work, NULL);
+
+static void step_run(struct k_work *work);
+
+static K_WORK_DELAYABLE_DEFINE(step_work, step_run);
 
 static void step_run(struct k_work *work)
 {

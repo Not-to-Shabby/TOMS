@@ -12,7 +12,10 @@ LOG_MODULE_REGISTER(button, LOG_LEVEL_INF);
 static const struct gpio_dt_spec btn = GPIO_DT_SPEC_GET(TOMS_BUTTON_NODE, gpios);
 static struct gpio_callback btn_cb;
 static toms_button_cb_t user_cb;
-static K_WORK_DELAYABLE_DEFINE(debounce_work, NULL);
+
+static void debounce_run(struct k_work *work);
+
+static K_WORK_DELAYABLE_DEFINE(debounce_work, debounce_run);
 
 static void debounce_run(struct k_work *work)
 {

@@ -3,7 +3,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(return_machine LANGUAGES C)
 
 # Portable core shared with the host-side unit tests (firmware/lib/toms_core).
-set(TOMS_CORE ${CMAKE_CURRENT_LIST_DIR}/../../lib/toms_core)
+set(TOMS_CORE ${CMAKE_CURRENT_LIST_DIR}/../lib/toms_core)
 
 target_sources(app PRIVATE
   src/main.c

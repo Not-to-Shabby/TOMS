@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #include <toms/codec.h>
 #include <toms/state_table.h>
 
-#include <stdio.h>
+#include <zephyr/sys/printk.h> /* snprintk */
 
 #define NFC_STACK 4096
 #define NFC_PRIO 7

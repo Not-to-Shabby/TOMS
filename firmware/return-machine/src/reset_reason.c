@@ -9,9 +9,9 @@ LOG_MODULE_REGISTER(reset_reason, LOG_LEVEL_INF);
 #if defined(CONFIG_SOC_SERIES_ESP32S3)
 /* ESP32-S3 reset causes live in the ROM registers of the SoC. There is no
  * generic Zephyr reset-reason API (as of Zephyr 4.x), so read the SoC value
- * and map it onto the heartbeat's codes. Verified against hal_espressif's
- * esp32s3/rom/rtc.h during the first build. */
-#include <esp32s3/rom/rtc.h>
+ * and map it onto the heartbeat's codes. esp_rom_get_reset_reason is
+ * declared in the ROM layer's esp_rom_sys.h (hal_espressif). */
+#include <esp_rom_sys.h>
 
 static uint32_t soc_reset_reason(void)
 {
