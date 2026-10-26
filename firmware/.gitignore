@@ -1,0 +1,18 @@
+# Host unit test binary
+lib/toms_core/test/test_core
+lib/toms_core/test/test_core.exe
+
+# Zephyr build outputs (workspace lives outside the repo, but be safe)
+build/
+*.elf
+*.bin
+*.hex
+*.uf2
+
+# Keys and enrollment material — never in git
+*.pem
+*.key
+*private*
+
+# west / toolchain droppings
+.west/

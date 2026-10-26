@@ -1,0 +1,82 @@
+/*
+ * TOMS Return Machine — devicetree overlay
+ *
+ * Pins verified against the Fritzing netlist (firmware/HW_NOTES.md):
+ *   PN532 I2C SDA GPIO2, SCL GPIO7, IRQ GPIO5 (RSTO unconnected)
+ *   Button GPIO4 (10K pull-up + 100nF, active low)
+ *   Buzzer GPIO6 (low-side NPN, high = tone on)
+ *   LCD CS 10, MOSI 11, SCLK 12, DC 9, RST 8, backlight GPIO13
+ *   Battery sense hook: GPIO1 (nothing wired yet)
+ *
+ * The board is the closest upstream definition (esp32s3_devkitc); every pin
+ * above is set here, none is inherited from the devkit.
+ */
+
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <zephyr/dt-bindings/i2c/i2c.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <zephyr/dt-bindings/pinctrl/esp32-pinctrl.h>
+
+/ {
+	leds {
+		compatible = "gpio-leds";
+
+		buzzer: buzzer {
+			gpios = <&gpio0 6 GPIO_ACTIVE_HIGH>;
+		};
+
+		backlight: backlight {
+			gpios = <&gpio0 13 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	buttons {
+		compatible = "gpio-keys";
+
+		return_button: button_0 {
+			gpios = <&gpio0 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+			zephyr,code = <INPUT_KEY_0>;
+		};
+	};
+
+	/* Battery sense hook: GPIO1 (ADC1_CH0). Nothing is wired yet — add the
+	 * channel node together with the hardware divider (HW_NOTES.md). */
+};
+
+&pinctrl {
+	i2c0_default: i2c0_default {
+		pinmux = <I2C0_SDA_GPIO2>, <I2C0_SCL_GPIO7>;
+	};
+
+	spi3_default: spi3_default {
+		pinmux = <SPI3_MOSI_GPIO11>, <SPI3_SCLK_GPIO12>;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	pinctrl-0 = <&i2c0_default>;
+	pinctrl-names = "default";
+
+	pn532: pn532@24 {
+		compatible = "toms,pn532";
+		reg = <0x24>;
+		irq-gpios = <&gpio0 5 GPIO_ACTIVE_LOW>;
+	};
+};
+
+&spi3 {
+	status = "okay";
+	pinctrl-0 = <&spi3_default>;
+	pinctrl-names = "default";
+	cs-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+
+	lcd: st7735s@0 {
+		compatible = "sitronix,st7735r";
+		reg = <0>;
+		spi-max-frequency = <16000000>;
+		reset-gpios = <&gpio0 8 GPIO_ACTIVE_LOW>;
+		cmd-data-gpios = <&gpio0 9 GPIO_ACTIVE_HIGH>;
+	};
+};

@@ -1,0 +1,40 @@
+# TOMS Return Machine — application options
+
+mainmenu "TOMS Return Machine"
+
+menu "TOMS Return Machine"
+
+config TOMS_BACKLIGHT_ACTIVE_HIGH
+	bool "Backlight is on when GPIO13 is high"
+	default y
+	help
+		Polarity is NOT final: the sketch shows a low-side NPN (high = LED
+		pin pulled low), the parts list mentions a 2N3906 high-side switch.
+		The bench test decides; see firmware/HW_NOTES.md.
+
+config TOMS_PAID_TIMEOUT_MS
+	int "Paid-check timeout in milliseconds (brief allows 1000-2000)"
+	default 1500
+	range 1000 2000
+
+config TOMS_HEARTBEAT_INTERVAL_S
+	int "Heartbeat interval in seconds"
+	default 10
+	range 1 120
+
+config TOMS_RING_CAPACITY
+	int "Offline card-read ring capacity (entries)"
+	default 256
+
+config TOMS_STATE_TABLE_CAPACITY
+	int "Cached card state table capacity (entries)"
+	default 64
+
+config TOMS_DEV_MODE
+	bool "Development mode (unbonded centrals accepted, dev key)"
+	default n
+	help
+		Never enable in a field build. Exists only so the spike and bench
+		tests can run before enrollment is designed.
+
+endmenu

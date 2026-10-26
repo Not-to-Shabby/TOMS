@@ -1,0 +1,11 @@
+description: PN532 NFC controller on I2C, reader mode (TOMS Return Machine)
+
+compatible: "toms,pn532"
+
+include: i2c-device.yaml
+
+properties:
+  irq-gpios:
+    type: phandle-array
+    required: true
+    description: PN532 IRQ line, active low while a response is pending.
