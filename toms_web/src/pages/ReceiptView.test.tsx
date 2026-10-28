@@ -98,3 +98,18 @@ describe('ReceiptView', () => {
     });
   });
 });
+
+describe('ReceiptView card link', () => {
+  it('asks the server for JSON so a card with no trip shows the inactive message, not a redirected page', async () => {
+    const get = vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 404 } });
+    render(
+      <MemoryRouter initialEntries={['/r/11111111-2222-4333-8444-555555555555']}>
+        <Routes>
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/No active trip found for this card/)).toBeInTheDocument();
+    expect(get).toHaveBeenCalledWith(expect.stringContaining('/api/r/'), { headers: { Accept: 'application/json' } });
+  });
+});

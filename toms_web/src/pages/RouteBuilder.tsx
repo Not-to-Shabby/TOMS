@@ -345,7 +345,7 @@ export default function RouteBuilder() {
     const timer = setTimeout(async () => {
       try {
         const coords = stops.map(s => `${s.lon},${s.lat}`).join(';');
-        const res = await axios.get(`http://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+        const res = await axios.get(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
         if (res.data && res.data.routes && res.data.routes[0]) {
           const geo = res.data.routes[0].geometry;
           setOsrmGeoJSON(geo);
@@ -409,7 +409,7 @@ export default function RouteBuilder() {
         if (p.stops && p.stops.length >= 2) {
            const coords = p.stops.map((s: any) => `${s.lon},${s.lat}`).join(';');
            try {
-             const res = await axios.get(`http://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+             const res = await axios.get(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
              if (res.data?.routes?.[0]) newGeoJSONs[p.id.toString()] = res.data.routes[0].geometry;
            } catch (e) {}
         }

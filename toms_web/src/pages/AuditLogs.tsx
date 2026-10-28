@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Calendar, ChevronLeft, ChevronRight, RefreshCw, Eye } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
 import { eventLabel, partyText, pesos, shortId, stopRange } from '../lib/format';
 
 
@@ -48,10 +50,12 @@ export default function AuditLogs() {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEvent | null>(null);
 
   const fetchLogs = (pageToFetch: number = 1, forceSearch?: string) => {
     setLoading(true);
+    setLoadError(null);
     const searchQuery = forceSearch !== undefined ? forceSearch : search;
     let params: any = {
       page: pageToFetch,
@@ -68,7 +72,7 @@ export default function AuditLogs() {
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to fetch audit logs", err);
+        setLoadError(loadErrorMessage(err, 'the audit log'));
         setLoading(false);
       });
   };
@@ -164,6 +168,7 @@ export default function AuditLogs() {
           </button>
         </div>
       </header>
+      <LoadError message={loadError} onRetry={() => fetchLogs(1)} />
 
       {/* Filter and Search Panel */}
       <div className="glass-panel" style={{ padding: '20px' }}>

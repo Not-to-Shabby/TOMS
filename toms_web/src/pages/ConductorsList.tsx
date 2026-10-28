@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Search, Phone, Clock, ArrowRight, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
 import { api } from '../lib/api';
 
 
@@ -20,6 +22,7 @@ export default function ConductorsList() {
   const [conductors, setConductors] = useState<Conductor[]>([]);
   const [search, setSearch] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newStaff, setNewStaff] = useState({ name: '', username: '', password: '', assigned_vehicle: '', contact_number: '', address: '' });
   
@@ -29,13 +32,14 @@ export default function ConductorsList() {
 
   const fetchConductors = () => {
     setLoading(true);
+    setLoadError(null);
     api.get(`/conductors`)
       .then(res => {
         setConductors(res.data);
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to fetch conductors staff list", err);
+        setLoadError(loadErrorMessage(err, 'the conductor list'));
         setLoading(false);
       });
   };
@@ -151,6 +155,7 @@ export default function ConductorsList() {
           </button>
         </div>
       </header>
+      <LoadError message={loadError} onRetry={fetchConductors} />
 
       {/* Search and Filters */}
       <div className="glass-panel" style={{ padding: '20px' }}>

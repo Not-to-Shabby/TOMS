@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { TrendingUp, Users, Award, Calendar } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
 import { averagePartySize, categoryLabel, categoryShares, paidShare } from '../lib/format';
 
 
@@ -23,20 +25,23 @@ export default function AnalyticsHome() {
   const [days, setDays] = useState<number>(7);
   const [data, setData] = useState<DailyRevenue[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   useEffect(() => {
     setLoading(true);
+    setLoadError(null);
     api.get(`/analytics/revenue?days=${days}`)
       .then(res => {
         setData(res.data);
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to fetch analytics data", err);
+        setLoadError(loadErrorMessage(err, 'the analytics'));
         setLoading(false);
       });
-  }, [days]);
+  }, [days, reloadKey]);
 
   // Aggregate stats
   const shares = categoryShares(data);
@@ -109,6 +114,7 @@ export default function AnalyticsHome() {
           </select>
         </div>
       </header>
+      <LoadError message={loadError} onRetry={() => setReloadKey((k) => k + 1)} />
 
       {/* Summary KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '24px' }}>

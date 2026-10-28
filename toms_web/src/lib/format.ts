@@ -110,3 +110,17 @@ export function feedMessage(e: FeedEvent): string {
   }
   return `⚡ ${bus}: ${e.event_type.replace(/_/g, ' ')}`;
 }
+
+/** A blank box means the standard 20%. A typed 0 means no discount and must stay 0. */
+export function discountOrDefault(value: string): number {
+  if (value.trim() === '') return 20;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 20;
+}
+
+/** Today in the browser's own time zone. toISOString() is UTC and gives yesterday in the early morning in Manila. */
+export function localToday(now = new Date()): string {
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${m}-${d}`;
+}

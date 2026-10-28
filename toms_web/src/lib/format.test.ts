@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
+import { discountOrDefault, localToday, categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
 
 describe('pesos', () => {
   it('formats centavos as pesos', () => {
@@ -139,5 +139,29 @@ describe('feedMessage', () => {
   it('still produces a line for unknown events and a phone with no vehicle', () => {
     expect(feedMessage({ ...base, event_type: 'future_thing', vehicle_id: null })).toBe('⚡ Unassigned phone: future thing');
     expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'WEIRD_STATE' })).toBe('⚡ BUS-1: card weird state');
+  });
+});
+
+describe('discountOrDefault', () => {
+  it('keeps a typed 0 as no discount instead of turning it into 20', () => {
+    expect(discountOrDefault('0')).toBe(0);
+  });
+
+  it('uses 20 only for a blank box or text that is not a number', () => {
+    expect(discountOrDefault('')).toBe(20);
+    expect(discountOrDefault('  ')).toBe(20);
+    expect(discountOrDefault('abc')).toBe(20);
+  });
+
+  it('passes other numbers through', () => {
+    expect(discountOrDefault('15')).toBe(15);
+    expect(discountOrDefault('12.5')).toBe(12.5);
+  });
+});
+
+describe('localToday', () => {
+  it('uses the local calendar day, not the UTC day', () => {
+    expect(localToday(new Date(2026, 9, 27, 0, 30))).toBe('2026-10-27');
+    expect(localToday(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
   });
 });

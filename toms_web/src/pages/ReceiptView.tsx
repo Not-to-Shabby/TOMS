@@ -60,7 +60,9 @@ export default function ReceiptView() {
 
       // If accessed via /r/:cardUuid
       if (!targetToken && cardUuid) {
-        const resolveRes = await axios.get(`${API_BASE}/api/r/${cardUuid}`);
+        const resolveRes = await axios.get(`${API_BASE}/api/r/${cardUuid}`, {
+          headers: { Accept: 'application/json' },
+        });
         targetToken = resolveRes.data.receipt_token;
       }
 

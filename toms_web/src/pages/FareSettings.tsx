@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FileText, Upload, CheckCircle2, AlertCircle, ExternalLink, ShieldCheck } from 'lucide-react';
 import { api, API_BASE } from '../lib/api';
+import { discountOrDefault, localToday } from '../lib/format';
 
 interface RouteOption {
   id: number;
@@ -36,7 +37,7 @@ export default function FareSettings() {
   const [pwdDiscount, setPwdDiscount] = useState('20');
   const [seniorDiscount, setSeniorDiscount] = useState('20');
   const [orderReference, setOrderReference] = useState('');
-  const [effectiveDate, setEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [effectiveDate, setEffectiveDate] = useState(localToday);
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -79,7 +80,7 @@ export default function FareSettings() {
       setPwdDiscount(String(data.discounts?.pwd ?? 20));
       setSeniorDiscount(String(data.discounts?.senior ?? 20));
       setOrderReference(data.order_reference || '');
-      setEffectiveDate(data.effective_date ? data.effective_date.slice(0, 10) : new Date().toISOString().slice(0, 10));
+      setEffectiveDate(data.effective_date ? data.effective_date.slice(0, 10) : localToday());
       setPreviewUrl(data.document_url ? `${API_BASE}${data.document_url}` : null);
       setDocumentFile(null);
     } catch (err) {
@@ -111,9 +112,9 @@ export default function FareSettings() {
       formData.append(
         'discounts',
         JSON.stringify({
-          student: Number(studentDiscount) || 20,
-          pwd: Number(pwdDiscount) || 20,
-          senior: Number(seniorDiscount) || 20,
+          student: discountOrDefault(studentDiscount),
+          pwd: discountOrDefault(pwdDiscount),
+          senior: discountOrDefault(seniorDiscount),
         }),
       );
       if (orderReference.trim()) formData.append('order_reference', orderReference.trim());
