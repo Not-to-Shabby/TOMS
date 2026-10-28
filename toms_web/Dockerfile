@@ -7,8 +7,8 @@ RUN npm run build
 
 FROM nginx:alpine
 RUN apk add --no-cache openssl
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY docker-entrypoint-cert.sh /docker-entrypoint.d/40-selfsigned-cert.sh
-RUN sed -i 's/\r$//' /docker-entrypoint.d/40-selfsigned-cert.sh && chmod +x /docker-entrypoint.d/40-selfsigned-cert.sh
+COPY nginx.conf.template /etc/nginx/toms.conf.template
+COPY docker-entrypoint-config.sh /docker-entrypoint.d/40-toms-config.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/40-toms-config.sh && chmod +x /docker-entrypoint.d/40-toms-config.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 443
