@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Map as MapIcon, BarChart3, History, Settings, Users, Bus, LogOut, CreditCard, FileText } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, BarChart3, History, Settings, Users, Bus, LogOut, CreditCard, FileText, Menu, X } from 'lucide-react';
 import RouteBuilder from './pages/RouteBuilder';
 import DashboardHome from './pages/DashboardHome';
 import AnalyticsHome from './pages/AnalyticsHome';
@@ -9,16 +10,18 @@ import FleetManager from './pages/FleetManager';
 import CardRegistry from './pages/CardRegistry';
 import FareSettings from './pages/FareSettings';
 import ReceiptView from './pages/ReceiptView';
+import CardEntry from './pages/CardEntry';
+import CardDesigner from './pages/CardDesigner';
 import Login from './pages/Login';
 import { AuthProvider, useAuth } from './lib/auth';
 import './index.css';
 
-function Sidebar() {
+function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const location = useLocation();
   const { signOut } = useAuth();
 
   const getLinkStyle = (path: string) => {
-    const isActive = location.pathname === path;
+    const isActive = path === '/' ? location.pathname === '/' : location.pathname === path || location.pathname.startsWith(`${path}/`);
     return {
       display: 'flex',
       alignItems: 'center',
@@ -35,7 +38,7 @@ function Sidebar() {
   };
 
   return (
-    <div className="glass-panel" style={{ width: '280px', height: '100%', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div id="app-sidebar" className={`glass-panel sidebar${open ? ' sidebar-open' : ''}`} onClick={(e) => { if ((e.target as HTMLElement).closest('a')) onNavigate(); }}>
       <div style={{ padding: '0 12px 24px 12px', borderBottom: '1px solid var(--border)', marginBottom: '16px' }}>
         <h1 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--accent)', letterSpacing: '2px' }}>TOMS</h1>
         <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Transportation Occupancy Management System</div>
@@ -92,18 +95,33 @@ function Sidebar() {
 
 function AdminShell() {
   const { signedIn } = useAuth();
+  const [menuOpen, setMenuOpen] = useState(false);
   if (!signedIn) return <Login />;
 
   return (
-    <div style={{ display: 'flex', height: '100vh', padding: '16px', gap: '16px', overflow: 'hidden' }}>
-      <Sidebar />
-      <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
+    <div className="app-shell">
+      <div className="mobile-bar glass-panel">
+        <button
+          type="button"
+          aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+          aria-expanded={menuOpen}
+          aria-controls="app-sidebar"
+          onClick={() => setMenuOpen((o) => !o)}
+        >
+          {menuOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
+        <strong style={{ color: 'var(--accent)', letterSpacing: 2 }}>TOMS</strong>
+      </div>
+      {menuOpen && <div className="sidebar-backdrop" onClick={() => setMenuOpen(false)} />}
+      <Sidebar open={menuOpen} onNavigate={() => setMenuOpen(false)} />
+      <div className="app-content">
         <Routes>
           <Route path="/" element={<DashboardHome />} />
           <Route path="/routes" element={<RouteBuilder />} />
           <Route path="/conductors" element={<ConductorsList />} />
           <Route path="/vehicles" element={<FleetManager />} />
           <Route path="/cards" element={<CardRegistry />} />
+          <Route path="/cards/designer" element={<CardDesigner />} />
           <Route path="/fares" element={<FareSettings />} />
           <Route path="/analytics" element={<AnalyticsHome />} />
           <Route path="/audit" element={<AuditLogs />} />
@@ -122,7 +140,7 @@ function App() {
           {/* Public passenger routes (no admin auth required) */}
           <Route path="/receipt/:token" element={<ReceiptView />} />
           <Route path="/receipt/inactive" element={<ReceiptView />} />
-          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+          <Route path="/r/:cardUuid" element={<CardEntry />} />
 
           {/* Admin Management routes */}
           <Route path="/*" element={<AdminShell />} />

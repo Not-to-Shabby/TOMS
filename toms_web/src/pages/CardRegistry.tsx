@@ -1,13 +1,17 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Search, QrCode, Printer, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../lib/api';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
 
 interface CardItem {
   card_uuid: string;
-  nfc_uid: string;
+  nfc_uid: string | null;
+  serial: string | null;
   label: string | null;
-  status: 'active' | 'suspended' | 'retired' | 'lost';
+  status: 'unpaired' | 'active' | 'suspended' | 'retired' | 'lost';
   enrolled_at: string;
   notes: string | null;
   vehicle_id: string | null;
@@ -26,6 +30,7 @@ export default function CardRegistry() {
   const [cards, setCards] = useState<CardItem[]>([]);
   const [vehicles, setVehicles] = useState<VehicleItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [vehicleFilter, setVehicleFilter] = useState<string>('all');
@@ -66,21 +71,30 @@ export default function CardRegistry() {
       const res = await api.get('/vehicles');
       setVehicles(res.data || []);
     } catch (err) {
-      console.error('Failed to load vehicles:', err);
+      setLoadError(loadErrorMessage(err, 'the vehicle list'));
     }
   }
 
   async function loadCards() {
     try {
       setLoading(true);
+      setLoadError(null);
       const params: Record<string, string> = { limit: '200' };
       if (search.trim()) params.search = search.trim();
       if (statusFilter !== 'all') params.status = statusFilter;
       if (vehicleFilter !== 'all') params.vehicle_id = vehicleFilter;
-      const res = await api.get('/cards', { params });
-      setCards(res.data.cards || []);
+      const all: CardItem[] = [];
+      let page = 1;
+      let totalPages = 1;
+      do {
+        const res = await api.get('/cards', { params: { ...params, page: String(page) } });
+        all.push(...(res.data.cards || []));
+        totalPages = res.data.metadata?.totalPages ?? 1;
+        page += 1;
+      } while (page <= totalPages && page <= 50);
+      setCards(all);
     } catch (err) {
-      console.error('Failed to load cards:', err);
+      setLoadError(loadErrorMessage(err, 'the card list'));
     } finally {
       setLoading(false);
     }
@@ -239,6 +253,8 @@ export default function CardRegistry() {
     switch (status) {
       case 'active':
         return <span style={{ color: 'var(--success)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 700 }}><CheckCircle2 size={14} /> Active</span>;
+      case 'unpaired':
+        return <span style={{ color: 'var(--accent)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 700 }}><Radio size={14} /> Waiting for tap</span>;
       case 'suspended':
         return <span style={{ color: 'var(--warning)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 700 }}><AlertTriangle size={14} /> Suspended</span>;
       case 'lost':
@@ -310,21 +326,30 @@ export default function CardRegistry() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', position: 'relative', overflow: 'hidden' }}>
-      <header className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <header className="glass-panel" style={{ padding: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
           <h2 style={{ fontSize: '28px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Card Registry by Vehicle</h2>
           <div style={{ color: 'var(--text-secondary)', marginTop: '4px' }}>
             Bind physical RFID/NFC cards using Web NFC, manage vehicle card decks, and generate static QR receipt stickers
           </div>
         </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', flexShrink: 0 }}>
+        <Link
+          to="/cards/designer"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', border: '1px solid var(--accent)', color: 'var(--accent)', textDecoration: 'none', whiteSpace: 'nowrap' }}
+        >
+          <Printer size={18} />
+          <span>Print-ready cards</span>
+        </Link>
         <button
           onClick={() => openEnrollForVehicle()}
           className="btn-primary"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap' }}
         >
           <Plus size={18} />
           <span>Enroll New Card</span>
         </button>
+        </div>
       </header>
 
       {/* Filter & Vehicle Group Selector Bar */}
@@ -341,9 +366,9 @@ export default function CardRegistry() {
             />
           </div>
 
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Status:</span>
-            {['all', 'active', 'suspended', 'lost', 'retired'].map((s) => (
+            {['all', 'unpaired', 'active', 'suspended', 'lost', 'retired'].map((s) => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
@@ -423,6 +448,8 @@ export default function CardRegistry() {
           </button>
         </div>
       </div>
+
+      <LoadError message={loadError} onRetry={() => { loadVehicles(); loadCards(); }} />
 
       {/* Grouped Vehicle Card Decks */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '16px' }}>
@@ -520,10 +547,11 @@ export default function CardRegistry() {
                       {section.items.map((c) => (
                         <tr key={c.card_uuid} style={{ borderBottom: '1px solid var(--border)' }}>
                           <td style={{ padding: '14px 24px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
-                            {c.nfc_uid}
+                            {c.nfc_uid ?? '—'}
                           </td>
                           <td style={{ padding: '14px 24px', fontWeight: 600 }}>
-                            {c.label || '—'}
+                            {c.serial && <span style={{ fontFamily: 'monospace', marginRight: 6 }}>{c.serial}</span>}
+                            {c.label && c.label !== c.serial ? c.label : !c.serial ? '—' : ''}
                             {c.notes && <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 400 }}>{c.notes}</div>}
                           </td>
                           <td style={{ padding: '14px 24px' }}>
@@ -759,7 +787,7 @@ export default function CardRegistry() {
                 includeMargin={false}
               />
               <div style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700 }}>
-                {selectedCardForQr.label || `CARD #${selectedCardForQr.nfc_uid.slice(0, 8)}`}
+                {selectedCardForQr.serial || selectedCardForQr.label || `CARD #${(selectedCardForQr.nfc_uid ?? selectedCardForQr.card_uuid).slice(0, 8)}`}
               </div>
               <div style={{ fontSize: '10px', color: '#555', textAlign: 'center' }}>
                 Scan with camera or tap phone to view e-Receipt
