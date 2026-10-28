@@ -54,3 +54,127 @@ body {
   transform: translateY(-2px);
   box-shadow: 0 4px 24px var(--accent-glow);
 }
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  padding: 16px;
+  gap: 16px;
+  overflow: hidden;
+}
+
+.app-content {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  height: 100%;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.mobile-bar,
+.sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .app-shell {
+    flex-direction: column;
+    padding: 8px;
+    gap: 8px;
+  }
+
+  .mobile-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    flex-shrink: 0;
+  }
+
+  .mobile-bar button {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 60;
+    width: min(300px, 85vw);
+    height: auto;
+    border-radius: 0 16px 16px 0;
+    background: #0d1320;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+  }
+
+  .sidebar.sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.6);
+  }
+
+  .app-content {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+  }
+
+  .app-content table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .app-content .glass-panel {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  .app-content header {
+    flex-wrap: wrap !important;
+    gap: 12px !important;
+  }
+
+  .app-content header > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .app-content [style*="grid-template-columns"] {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .app-content select,
+  .app-content input[type='text'],
+  .app-content input[type='number'] {
+    max-width: 100%;
+  }
+}
