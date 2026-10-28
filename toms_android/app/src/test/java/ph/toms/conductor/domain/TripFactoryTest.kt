@@ -32,7 +32,8 @@ class TripFactoryTest {
         dest: String = "b",
         category: String? = null,
         override: TripOverride? = null,
-    ) = TripFactory.create("trip-1", uid, state, "a", dest, category, override, config, nowMillis = 1000)
+        passengers: List<PassengerLine> = listOf(PassengerLine(category, 1)),
+    ) = TripFactory.create("trip-1", uid, state, "a", dest, passengers, override, config, nowMillis = 1000)
 
     private fun created(r: TripResult) = r as TripResult.Created
 

@@ -34,6 +34,17 @@ const money = z.number().int().min(0).max(10_000_000);
 const shortText = z.string().min(1).max(64);
 const millis = z.number().int().min(0).max(MAX_MILLIS);
 
+export const MAX_GROUP_SIZE = 30;
+
+// One passenger type in a group. Money is per line: the per-person fare times the count.
+const passengerLine = z.object({
+  categoryId: shortText.nullable(),
+  count: z.number().int().min(1).max(MAX_GROUP_SIZE),
+  perPersonCentavos: money,
+  fareCentavos: money,
+  discountCentavos: money,
+});
+
 const tripCreatedPayload = z
   .object({
     tripId: z.guid(),
@@ -52,7 +63,26 @@ const tripCreatedPayload = z
     gpsLon: z.number().min(-180).max(180).nullish(),
     gpsAccuracyMeters: z.number().min(0).max(100_000).nullish(),
     gpsFixAtMillis: millis.nullish(),
+    // Absent from phones that predate groups: those trips are one passenger.
+    passengerCount: z.number().int().min(1).max(MAX_GROUP_SIZE).default(1),
+    passengers: z.array(passengerLine).max(MAX_GROUP_SIZE).default([]),
   })
+  .refine(
+    (p) => p.passengers.length === 0 || p.passengers.reduce((n, l) => n + l.count, 0) === p.passengerCount,
+    { message: 'passenger lines must add up to passengerCount' },
+  )
+  .refine(
+    (p) => p.passengers.length === 0 || new Set(p.passengers.map((l) => l.categoryId)).size === p.passengers.length,
+    { message: 'each passenger type may appear in only one line' },
+  )
+  .refine(
+    (p) => p.passengers.length === 0 || p.passengers.reduce((n, l) => n + l.fareCentavos, 0) === p.computedFareCentavos,
+    { message: 'passenger line fares must add up to computedFareCentavos' },
+  )
+  .refine(
+    (p) => p.passengers.length === 0 || p.passengers.reduce((n, l) => n + l.discountCentavos, 0) === p.discountCentavos,
+    { message: 'passenger line discounts must add up to discountCentavos' },
+  )
   .refine(
     (p) => {
       const present = [p.gpsLat, p.gpsLon, p.gpsFixAtMillis].map((v) => v != null);
@@ -143,6 +173,8 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
       gps_lon: t.gpsLon ?? null,
       gps_accuracy_m: t.gpsAccuracyMeters ?? null,
       gps_fix_at: t.gpsFixAtMillis == null ? null : new Date(t.gpsFixAtMillis).toISOString(),
+      passenger_count: t.passengerCount,
+      passengers: JSON.stringify(t.passengers),
     });
   } else if (e.type === 'card_state_changed') {
     const p = cardStatePayload.safeParse(e.payload);
@@ -166,7 +198,7 @@ async function insertOne(client: PoolClient, row: Prepared): Promise<Outcome> {
   const names = [...Object.keys(row.columns), 'payload'];
   const values = [...Object.values(row.columns), JSON.stringify(row.payload)];
   const deviceParam = names.indexOf('device_id') + 1;
-  const placeholders = names.map((n, i) => (n === 'payload' ? `$${i + 1}::jsonb` : `$${i + 1}`));
+  const placeholders = names.map((n, i) => (n === 'payload' || n === 'passengers' ? `$${i + 1}::jsonb` : `$${i + 1}`));
 
   // The vehicle comes from device enrollment, never from the phone's own claim.
   const inserted = await client.query(

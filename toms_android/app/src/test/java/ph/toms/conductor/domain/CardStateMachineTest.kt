@@ -39,6 +39,27 @@ class CardStateMachineTest {
         }
     }
 
+    @Test fun `release unpaid frees an assigned unpaid card and nothing else`() {
+        assertEquals(CardState.AVAILABLE, ok(CardState.ASSIGNED_UNPAID, CardEvent.CONDUCTOR_RELEASE_UNPAID))
+        for (s in CardState.entries.filter { it != CardState.ASSIGNED_UNPAID }) {
+            val r = CardStateMachine.apply(s, CardEvent.CONDUCTOR_RELEASE_UNPAID)
+            assertTrue("$s must reject a release", r is Transition.Rejected)
+            assertEquals(RejectReason.INVALID_TRANSITION, (r as Transition.Rejected).reason)
+        }
+    }
+
+    @Test fun `release is the only way from assigned unpaid to available without a payment or a terminal read`() {
+        // Payment and terminal reads are the events that move a card forward through the paid or returned path.
+        val paymentOrTerminal = setOf(CardEvent.MARK_PAID, CardEvent.RETURNED_AT_TERMINAL)
+        val reachingAvailable = CardEvent.entries.filter {
+            (CardStateMachine.apply(CardState.ASSIGNED_UNPAID, it) as? Transition.Ok)?.state == CardState.AVAILABLE
+        }
+        assertEquals(listOf(CardEvent.CONDUCTOR_RELEASE_UNPAID), reachingAvailable)
+        assertTrue(reachingAvailable.none { it in paymentOrTerminal })
+        // The terminal read still goes to the alarm state, so a write-off is never mistaken for a return.
+        assertEquals(CardState.RETURNED_UNPAID, ok(CardState.ASSIGNED_UNPAID, CardEvent.RETURNED_AT_TERMINAL))
+    }
+
     @Test fun `invalid transitions are rejected and state is unchanged`() {
         val r = CardStateMachine.apply(CardState.AVAILABLE, CardEvent.MARK_PAID)
         assertEquals(RejectReason.INVALID_TRANSITION, (r as Transition.Rejected).reason)

@@ -57,3 +57,70 @@ export function categoryShares(days: { by_category: Record<string, number> }[]):
 export function categoryLabel(category: string): string {
   return category === 'regular' ? 'Regular fare' : category.charAt(0).toUpperCase() + category.slice(1);
 }
+
+interface PartyLine {
+  categoryId: string | null;
+  count: number;
+}
+
+/** "2 regular, 1 student" for a group. An old trip with no lines is "1 regular" (or the count it had). */
+export function partyText(lines: PartyLine[] | null | undefined, count: number): string {
+  if (!lines || lines.length === 0) return count === 1 ? '1 passenger' : `${count} passengers`;
+  return lines.map((l) => `${l.count} ${(l.categoryId ?? 'regular').toLowerCase()}`).join(', ');
+}
+
+/** People per paid-or-unpaid trip over the period. 0 when there were no trips. */
+export function averagePartySize(days: { total_boardings: number; total_trips: number }[]): number {
+  const trips = days.reduce((n, d) => n + d.total_trips, 0);
+  return trips > 0 ? days.reduce((n, d) => n + d.total_boardings, 0) / trips : 0;
+}
+
+/** Percent of trips that have been paid. Trips, not people: one card is paid once for the whole group. */
+export function paidShare(days: { total_payments: number; total_trips: number }[]): number {
+  const trips = days.reduce((n, d) => n + d.total_trips, 0);
+  return trips > 0 ? (days.reduce((n, d) => n + d.total_payments, 0) / trips) * 100 : 0;
+}
+
+export interface FeedEvent {
+  event_type: string;
+  vehicle_id: string | null;
+  card_state: string | null;
+  passenger_count: number | null;
+  fare_centavos: number | null;
+  destination_stop_id: string | null;
+}
+
+/** One readable line for the Live Feed. Unknown event types still produce a line, so nothing is silently dropped. */
+export function feedMessage(e: FeedEvent): string {
+  const bus = e.vehicle_id ?? 'Unassigned phone';
+  const people = e.passenger_count && e.passenger_count > 1 ? `${e.passenger_count} passengers` : '1 passenger';
+  const fare = e.fare_centavos ? ` ${pesos(e.fare_centavos)}` : '';
+  if (e.event_type === 'trip_created') {
+    return `🚌 ${bus}: ${people} boarded${e.destination_stop_id ? ` for ${e.destination_stop_id}` : ''}${fare ? ` (${fare.trim()})` : ''}`;
+  }
+  if (e.event_type === 'card_state_changed') {
+    switch (e.card_state) {
+      case 'ASSIGNED_PAID': return `💰 ${bus}: paid${fare} for ${people}`;
+      case 'RETURNED': return `🚶 ${bus}: card returned, ${people} off`;
+      case 'RETURNED_UNPAID': return `⚠️ ${bus}: card returned UNPAID${fare}`;
+      case 'AVAILABLE': return `✅ ${bus}: card free again`;
+      case 'LOST': return `❗ ${bus}: card marked lost`;
+      default: return `⚡ ${bus}: card ${(e.card_state ?? 'changed').toLowerCase().replace(/_/g, ' ')}`;
+    }
+  }
+  return `⚡ ${bus}: ${e.event_type.replace(/_/g, ' ')}`;
+}
+
+/** A blank box means the standard 20%. A typed 0 means no discount and must stay 0. */
+export function discountOrDefault(value: string): number {
+  if (value.trim() === '') return 20;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 20;
+}
+
+/** Today in the browser's own time zone. toISOString() is UTC and gives yesterday in the early morning in Manila. */
+export function localToday(now = new Date()): string {
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${now.getFullYear()}-${m}-${d}`;
+}

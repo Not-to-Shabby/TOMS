@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Bus, Users, MapPin, X, Activity, Battery } from 'lucide-react';
+import { Bus, Users, MapPin, X, Activity } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { api, API_BASE, tokenStore } from '../lib/api';
+import { feedMessage, type FeedEvent } from '../lib/format';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -142,20 +143,13 @@ export default function DashboardHome() {
       }).catch(err => console.error("Failed to refresh fleet status after dispatch", err));
     });
 
-    socket.on('new_event', (event: any) => {
-      // Create a human readable ticker event
-      let msg = '';
-      if (event.event_type === 'boarding') msg = `🚌 ${event.vehicle_id}: Passenger Boarded at ${event.boarding_stop || 'Unknown'}`;
-      else if (event.event_type === 'payment') msg = `💰 ${event.vehicle_id}: ₱${((event.fare_centavos||0)/100).toFixed(2)} Collected`;
-      else if (event.event_type === 'release') msg = `🚶 ${event.vehicle_id}: Passenger Alighted at ${event.destination_stop || 'Unknown'}`;
-      else msg = `⚡ ${event.vehicle_id}: ${event.event_type}`;
-
+    socket.on('new_event', (event: FeedEvent) => {
       const newTicker = {
         id: Math.random().toString(36).substr(2, 9),
-        message: msg,
+        message: feedMessage(event),
         timestamp: new Date().toLocaleTimeString()
       };
-      
+
       setTicker(prev => [newTicker, ...prev].slice(0, 50));
     });
 
@@ -239,8 +233,6 @@ export default function DashboardHome() {
             {Object.values(fleet).map(bus => {
               const fillPct = bus.max_capacity > 0 ? (bus.occupancy_now / bus.max_capacity) * 100 : 0;
               const isFull = fillPct >= 100;
-              // Fake battery for demo: 80% to 100%
-              const battery = 80 + (bus.occupancy_now % 20);
 
             return (
               <div 
@@ -291,12 +283,7 @@ export default function DashboardHome() {
                     <span style={{ color: 'var(--text-secondary)' }}>Occupancy</span>
                     <span style={{ fontWeight: 600 }}>{bus.occupancy_now} / {bus.max_capacity}</span>
                   </div>
-                  
-                  {/* Battery Level */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '8px' }}>
-                    <span style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}><Battery size={12}/> Battery Level</span>
-                    <span style={{ fontWeight: 600, color: battery > 20 ? 'var(--success)' : 'var(--danger)' }}>{battery}%</span>
-                  </div>
+
 
                   <div style={{ height: '8px', background: 'var(--bg-dark)', borderRadius: '4px', overflow: 'hidden' }}>
                     <div style={{ 

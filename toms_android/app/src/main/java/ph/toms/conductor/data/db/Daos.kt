@@ -15,6 +15,25 @@ interface TripDao {
 
     @Query("SELECT * FROM trips ORDER BY createdAtMillis DESC")
     suspend fun all(): List<TripEntity>
+
+    @Query("SELECT * FROM trips WHERE id = :id")
+    suspend fun byId(id: String): TripEntity?
+}
+
+@Dao
+interface ShiftDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(shift: ShiftEntity)
+
+    @Query("SELECT * FROM shifts WHERE endedAtMillis IS NULL ORDER BY startedAtMillis DESC LIMIT 1")
+    suspend fun open(): ShiftEntity?
+
+    @Query("SELECT * FROM shifts WHERE id = :id")
+    suspend fun byId(id: String): ShiftEntity?
+
+    /** Closes the shift only if it is still open, so ending twice changes nothing the second time. */
+    @Query("UPDATE shifts SET endedAtMillis = :at, endedBy = :by, summaryJson = :summary WHERE id = :id AND endedAtMillis IS NULL")
+    suspend fun close(id: String, at: Long, by: String, summary: String): Int
 }
 
 @Dao
@@ -24,6 +43,10 @@ interface CardDao {
 
     @Query("SELECT * FROM cards")
     suspend fun all(): List<CardEntity>
+
+    /** The card whose latest trip is [tripId]. Null once the card has started another trip. */
+    @Query("SELECT * FROM cards WHERE currentTripId = :tripId")
+    suspend fun byTrip(tripId: String): CardEntity?
 }
 
 @Dao
@@ -34,6 +57,15 @@ interface EventDao {
 
     @Query("SELECT COUNT(*) FROM events")
     suspend fun count(): Int
+
+    @Query("SELECT * FROM events ORDER BY seq ASC")
+    suspend fun all(): List<EventEntity>
+
+    @Query("SELECT * FROM events WHERE tripId IS NOT NULL ORDER BY seq ASC")
+    suspend fun tripFacts(): List<EventEntity>
+
+    @Query("SELECT * FROM events WHERE type = :type ORDER BY seq ASC")
+    suspend fun ofType(type: String): List<EventEntity>
 }
 
 @Dao
@@ -86,11 +118,12 @@ interface ConfigDao {
 }
 
 @Database(
-    entities = [TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class],
-    version = 1,
-    exportSchema = false,
+    entities = [TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class, ShiftEntity::class],
+    version = 3,
+    exportSchema = true,
 )
 abstract class TomsDatabase : RoomDatabase() {
+    abstract fun shifts(): ShiftDao
     abstract fun trips(): TripDao
     abstract fun cards(): CardDao
     abstract fun events(): EventDao

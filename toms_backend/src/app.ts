@@ -5,6 +5,9 @@ import type { Pool } from 'pg';
 import { z } from 'zod';
 import { LoginLimiter, makeAuth, newDeviceCredential, verifyPassword } from './auth';
 import { fleetStatus, registerDashboardRoutes } from './dashboard';
+import { registerCardRoutes } from './cards';
+import { registerFareRoutes, FARES_UPLOAD_DIR } from './fares';
+import { registerReceiptRoutes } from './receipt';
 import { envelopeSchema, ingestEvents } from './ingest';
 
 export interface AppDeps {
@@ -168,6 +171,21 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
           const [status] = await fleetStatus(pool, reportTimezone, r.vehicle_id as string);
           if (status) emit('fleet_update', status);
         }
+        // One line per event for the Live Feed. A card-state change carries its trip's fare and party size,
+        // so "paid" can say how much. At most 20 per request, so a phone catching up on a long offline
+        // backlog does not flood the feed.
+        const feed = await pool.query(
+          `SELECT e.event_type, e.vehicle_id, e.card_state, e.effective_at,
+                  COALESCE(t.passenger_count, e.passenger_count)            AS passenger_count,
+                  COALESCE(t.fare_centavos, e.fare_centavos)                AS fare_centavos,
+                  COALESCE(t.declared_destination_stop_id, e.declared_destination_stop_id) AS destination_stop_id
+           FROM events e LEFT JOIN trip_status t ON t.trip_id = e.trip_id
+           WHERE e.event_id = ANY($1::uuid[]) AND e.event_type IN ('trip_created', 'card_state_changed')
+           ORDER BY e.device_id, e.local_seq DESC
+           LIMIT 20`,
+          [result.accepted],
+        );
+        for (const row of feed.rows.reverse()) emit('new_event', row);
         emit('events_ingested', { device_id: deviceId, accepted: result.accepted.length });
       } catch (err) {
         console.error('live update failed', err);
@@ -176,7 +194,13 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
     res.json(result);
   });
 
+  // Serve verified LTFRB document uploads
+  app.use('/uploads/fares', express.static(FARES_UPLOAD_DIR));
+
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
+  registerCardRoutes(app, { pool, admin, auth });
+  registerFareRoutes(app, { pool, admin });
+  registerReceiptRoutes(app, { pool });
 
   // --- Routes -------------------------------------------------------------------------------
 

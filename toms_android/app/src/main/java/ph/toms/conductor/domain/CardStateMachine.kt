@@ -14,6 +14,11 @@ enum class CardEvent {
     RELEASE_RETURNED,
     MARK_LOST,
     RECONCILE_LOST,
+    /**
+     * End of shift: the fare was not collected and the conductor writes it off. The card never reached
+     * the terminal, so this is not a terminal return and must not be recorded as one.
+     */
+    CONDUCTOR_RELEASE_UNPAID,
 }
 
 enum class RejectReason { CARD_NOT_AVAILABLE, INVALID_TRANSITION }
@@ -34,6 +39,7 @@ object CardStateMachine {
             CardState.ASSIGNED_UNPAID -> when (event) {
                 CardEvent.MARK_PAID -> CardState.ASSIGNED_PAID
                 CardEvent.RETURNED_AT_TERMINAL -> CardState.RETURNED_UNPAID
+                CardEvent.CONDUCTOR_RELEASE_UNPAID -> CardState.AVAILABLE
                 CardEvent.MARK_LOST -> CardState.LOST
                 else -> null
             }

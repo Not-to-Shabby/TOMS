@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
+import { discountOrDefault, localToday, categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
 
 describe('pesos', () => {
   it('formats centavos as pesos', () => {
@@ -80,5 +80,88 @@ describe('categoryShares', () => {
   it('is stable for equal revenue', () => {
     const shares = categoryShares([{ by_category: { b: 5, a: 5 } }]);
     expect(shares.map((s) => s.category)).toEqual(['a', 'b']);
+  });
+});
+
+import { averagePartySize, paidShare, partyText } from './format';
+
+describe('partyText', () => {
+  it('lists each type with its count', () => {
+    expect(partyText([{ categoryId: null, count: 2 }, { categoryId: 'student', count: 1 }], 3)).toBe('2 regular, 1 student');
+  });
+  it('falls back to the count for a trip saved before groups', () => {
+    expect(partyText([], 1)).toBe('1 passenger');
+    expect(partyText(null, 4)).toBe('4 passengers');
+    expect(partyText(undefined, 1)).toBe('1 passenger');
+  });
+});
+
+describe('group figures', () => {
+  const days = [
+    { total_boardings: 7, total_trips: 3, total_payments: 2 },
+    { total_boardings: 2, total_trips: 1, total_payments: 1 },
+  ];
+  it('averages people per trip, not per day', () => {
+    expect(averagePartySize(days)).toBeCloseTo(9 / 4);
+  });
+  it('measures paid trips against all trips', () => {
+    expect(paidShare(days)).toBeCloseTo(75);
+  });
+  it('is zero rather than NaN with no trips', () => {
+    expect(averagePartySize([])).toBe(0);
+    expect(paidShare([{ total_payments: 0, total_trips: 0 }])).toBe(0);
+  });
+});
+
+import { feedMessage } from './format';
+
+describe('feedMessage', () => {
+  const base = { vehicle_id: 'BUS-1', card_state: null, passenger_count: 1, fare_centavos: null, destination_stop_id: null };
+
+  it('says how many boarded, where to and for how much', () => {
+    expect(feedMessage({ ...base, event_type: 'trip_created', passenger_count: 3, fare_centavos: 8400, destination_stop_id: 's4' }))
+      .toBe('🚌 BUS-1: 3 passengers boarded for s4 (₱84.00)');
+    expect(feedMessage({ ...base, event_type: 'trip_created' })).toBe('🚌 BUS-1: 1 passenger boarded');
+  });
+
+  it('says what a paid group paid and who left when the card comes back', () => {
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'ASSIGNED_PAID', passenger_count: 2, fare_centavos: 5400 }))
+      .toBe('💰 BUS-1: paid ₱54.00 for 2 passengers');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'RETURNED', passenger_count: 4 }))
+      .toBe('🚶 BUS-1: card returned, 4 passengers off');
+  });
+
+  it('flags an unpaid return and a lost card so they stand out', () => {
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'RETURNED_UNPAID', fare_centavos: 2700 })).toContain('UNPAID');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'LOST' })).toContain('lost');
+  });
+
+  it('still produces a line for unknown events and a phone with no vehicle', () => {
+    expect(feedMessage({ ...base, event_type: 'future_thing', vehicle_id: null })).toBe('⚡ Unassigned phone: future thing');
+    expect(feedMessage({ ...base, event_type: 'card_state_changed', card_state: 'WEIRD_STATE' })).toBe('⚡ BUS-1: card weird state');
+  });
+});
+
+describe('discountOrDefault', () => {
+  it('keeps a typed 0 as no discount instead of turning it into 20', () => {
+    expect(discountOrDefault('0')).toBe(0);
+  });
+
+  it('uses 20 only for a blank box or text that is not a number', () => {
+    expect(discountOrDefault('')).toBe(20);
+    expect(discountOrDefault('  ')).toBe(20);
+    expect(discountOrDefault('abc')).toBe(20);
+  });
+
+  it('passes other numbers through', () => {
+    expect(discountOrDefault('15')).toBe(15);
+    expect(discountOrDefault('12.5')).toBe(12.5);
+  });
+});
+
+describe('localToday', () => {
+  it('uses the local calendar day, not the UTC day', () => {
+    expect(localToday(new Date(2026, 9, 27, 0, 30))).toBe('2026-10-27');
+    expect(localToday(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
   });
 });

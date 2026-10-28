@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Plus, Trash2, Bus, Search, RefreshCw } from 'lucide-react';
 import { api } from '../lib/api';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
 
 
 interface Vehicle {
@@ -18,6 +20,7 @@ export default function FleetManager() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newVehicle, setNewVehicle] = useState({ id: '', plate_number: '', max_capacity: 20 });
   
@@ -29,13 +32,14 @@ export default function FleetManager() {
 
   const fetchVehicles = () => {
     setLoading(true);
+    setLoadError(null);
     api.get(`/vehicles`)
       .then(res => {
         setVehicles(res.data);
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to fetch vehicles", err);
+        setLoadError(loadErrorMessage(err, 'the fleet'));
         setLoading(false);
       });
   };
@@ -49,7 +53,7 @@ export default function FleetManager() {
       setRoutes(rRes.data);
       setConductors(cRes.data);
     } catch (err) {
-      console.error("Failed to fetch dependencies", err);
+      setLoadError(loadErrorMessage(err, 'routes and conductors'));
     }
   }
 
@@ -138,6 +142,7 @@ export default function FleetManager() {
           </button>
         </div>
       </header>
+      <LoadError message={loadError} onRetry={() => { fetchVehicles(); fetchDependencies(); }} />
 
       <div className="glass-panel" style={{ padding: '20px' }}>
         <div style={{ position: 'relative', width: '100%', maxWidth: '400px' }}>

@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, Calendar, ChevronLeft, ChevronRight, RefreshCw, Eye } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
-import { eventLabel, pesos, shortId, stopRange } from '../lib/format';
+import LoadError from '../components/LoadError';
+import { loadErrorMessage } from '../lib/loadError';
+import { eventLabel, partyText, pesos, shortId, stopRange } from '../lib/format';
 
 
 interface LogEvent {
@@ -29,6 +31,8 @@ interface LogEvent {
   gps_lat: number | null;
   gps_lon: number | null;
   gps_accuracy_m: number | null;
+  passenger_count: number;
+  passengers: { categoryId: string | null; count: number; fareCentavos: number }[];
 }
 
 interface PaginationMetadata {
@@ -46,10 +50,12 @@ export default function AuditLogs() {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [selectedLog, setSelectedLog] = useState<LogEvent | null>(null);
 
   const fetchLogs = (pageToFetch: number = 1, forceSearch?: string) => {
     setLoading(true);
+    setLoadError(null);
     const searchQuery = forceSearch !== undefined ? forceSearch : search;
     let params: any = {
       page: pageToFetch,
@@ -66,7 +72,7 @@ export default function AuditLogs() {
         setLoading(false);
       })
       .catch(err => {
-        console.error("Failed to fetch audit logs", err);
+        setLoadError(loadErrorMessage(err, 'the audit log'));
         setLoading(false);
       });
   };
@@ -162,6 +168,7 @@ export default function AuditLogs() {
           </button>
         </div>
       </header>
+      <LoadError message={loadError} onRetry={() => fetchLogs(1)} />
 
       {/* Filter and Search Panel */}
       <div className="glass-panel" style={{ padding: '20px' }}>
@@ -426,8 +433,8 @@ export default function AuditLogs() {
                 <span>{selectedLog.card_state ?? '-'}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-                <span style={{ color: 'var(--text-secondary)' }}>Passenger type</span>
-                <span>{selectedLog.discount_category_id ?? 'regular'}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>Passengers</span>
+                <span>{partyText(selectedLog.passengers, selectedLog.passenger_count)}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
                 <span style={{ color: 'var(--text-secondary)' }}>Fare charged</span>
