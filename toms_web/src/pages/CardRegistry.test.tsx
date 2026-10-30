@@ -161,4 +161,20 @@ describe('CardRegistry row actions', () => {
     await screen.findByRole('button', { name: 'Actions for TOMS-0001' });
     expect(screen.queryByRole('button', { name: 'Suspend' })).not.toBeInTheDocument();
   });
+
+  it('opens the replace-chip dialog for a card that already has a chip', async () => {
+    load();
+    renderPage();
+    await openMenu();
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Replace chip' }));
+    expect(screen.getByRole('dialog', { name: 'Replace chip on TOMS-0001' })).toBeInTheDocument();
+    expect(screen.getByTestId('pair-heading')).toHaveTextContent('Replace the chip on TOMS-0001');
+  });
+
+  it('does not offer replace on a card with no chip yet', async () => {
+    load([card(1)]);
+    renderPage();
+    await openMenu();
+    expect(screen.queryByRole('menuitem', { name: 'Replace chip' })).not.toBeInTheDocument();
+  });
 });

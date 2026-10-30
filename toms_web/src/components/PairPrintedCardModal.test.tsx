@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
 import * as qrScan from '../lib/qrScan';
 import PairPrintedCardModal from './PairPrintedCardModal';
+import PairPanel from './PairPanel';
 
 const ID_A = '11111111-2222-4333-8444-555555555555';
 const ID_B = '66666666-7777-4888-8999-000000000000';
@@ -129,5 +130,74 @@ describe('PairPrintedCardModal', () => {
     const props = renderModal();
     await userEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(props.onClose).toHaveBeenCalled();
+  });
+});
+
+describe('PairPanel in replace mode', () => {
+  const info = { card_uuid: ID_A, serial: 'TOMS-0001', label: 'TOMS-0001', status: 'lost', nfc_uid: '04OLD0001' };
+
+  const tap = async () => {
+    await userEvent.click(screen.getByRole('button', { name: /Tap card to scan/ }));
+    await screen.findByTestId('scanned-uid');
+  };
+
+  it('says the old chip will stop and that the QR stays', () => {
+    render(<PairPanel info={info} mode="replace" />);
+    expect(screen.getByTestId('pair-heading')).toHaveTextContent('Replace the chip on TOMS-0001');
+    expect(screen.getByText(/04OLD0001/)).toBeInTheDocument();
+    expect(screen.getByText(/keeps its printed QR and serial/)).toBeInTheDocument();
+  });
+
+  it('sends the new chip and the reason to the replace endpoint', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+    const onPaired = vi.fn();
+    render(<PairPanel info={info} mode="replace" onPaired={onPaired} />);
+    await tap();
+    await userEvent.type(screen.getByLabelText('Reason'), 'Chip cracked');
+    await userEvent.click(screen.getByRole('button', { name: /Use 04A1B2C3 for TOMS-0001/ }));
+    await waitFor(() => expect(onPaired).toHaveBeenCalled());
+    expect(post).toHaveBeenCalledWith(`/cards/${ID_A}/replace`, { nfc_uid: '04A1B2C3', reason: 'Chip cracked', confirm: undefined });
+    expect(await screen.findByText(/now uses chip 04A1B2C3/)).toBeInTheDocument();
+  });
+
+  it('warns about an open trip and only goes ahead on a second click', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockRejectedValueOnce({ response: { status: 409, data: { open_trips: 1 } } })
+      .mockResolvedValueOnce({ data: {} });
+    render(<PairPanel info={info} mode="replace" />);
+    await tap();
+    await userEvent.click(screen.getByRole('button', { name: /Use 04A1B2C3/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('1 open trip, so a passenger may still be aboard');
+    await userEvent.click(screen.getByRole('button', { name: /Replace anyway with 04A1B2C3/ }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post).toHaveBeenLastCalledWith(`/cards/${ID_A}/replace`, { nfc_uid: '04A1B2C3', reason: undefined, confirm: true });
+  });
+
+  it('shows the server message when the chip belongs to another card', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue({ response: { status: 409, data: { error: 'That NFC card is already paired to another card.' } } });
+    render(<PairPanel info={info} mode="replace" />);
+    await tap();
+    await userEvent.click(screen.getByRole('button', { name: /Use 04A1B2C3/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('already paired to another card');
+  });
+
+  it('has no Undo button, because replacing is not a first pairing', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+    render(<PairPanel info={info} mode="replace" />);
+    await tap();
+    await userEvent.click(screen.getByRole('button', { name: /Use 04A1B2C3/ }));
+    await screen.findByText(/now uses chip/);
+    expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument();
+  });
+
+  it('keeps the first-pairing flow unchanged by default', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: {} });
+    render(<PairPanel info={{ ...info, status: 'unpaired', nfc_uid: null }} />);
+    expect(screen.getByTestId('pair-heading')).toHaveTextContent('Pair card TOMS-0001');
+    expect(screen.queryByLabelText('Reason')).not.toBeInTheDocument();
+    await tap();
+    await userEvent.click(screen.getByRole('button', { name: /Pair 04A1B2C3 to TOMS-0001/ }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(`/cards/${ID_A}/pair`, { nfc_uid: '04A1B2C3' }));
   });
 });

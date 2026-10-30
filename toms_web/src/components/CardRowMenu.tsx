@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { MoreVertical } from 'lucide-react';
-import { canUnpair, statusActions, type ActionInfo, type CardStatus, type RowAction } from '../lib/cardLifecycle';
+import { canReplaceChip, canUnpair, statusActions, type ActionInfo, type CardStatus, type RowAction } from '../lib/cardLifecycle';
 
 interface Props {
   serial: string;
@@ -33,6 +33,7 @@ export default function CardRowMenu({ serial, status, hasChip, onAction }: Props
   const items: ActionInfo[] = [
     { action: 'edit', label: 'Edit label and notes', tone: 'normal' },
     { action: 'history', label: 'History', tone: 'normal' },
+    ...(canReplaceChip(status, hasChip) ? [{ action: 'replace', label: 'Replace chip', tone: 'normal' } as ActionInfo] : []),
     ...statusActions(status, hasChip),
     ...(canUnpair(status, hasChip) ? [{ action: 'unpair', label: 'Take chip off', tone: 'warning' } as ActionInfo] : []),
   ];

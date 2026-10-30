@@ -11,7 +11,23 @@ export interface PairingInfo {
   nfc_uid: string | null;
 }
 
-export default function PairPanel({ info, onPaired, onUnpaired }: { info: PairingInfo; onPaired?: () => void; onUnpaired?: () => void }) {
+interface PanelProps {
+  info: PairingInfo;
+  onPaired?: () => void;
+  onUnpaired?: () => void;
+  /**
+   * pair: put a first chip on a card that has none (the default).
+   * replace: swap the chip on a card that already has one; the printed QR and serial stay the same.
+   */
+  mode?: 'pair' | 'replace';
+}
+
+type ApiError = { response?: { status?: number; data?: { error?: string; open_trips?: number } } };
+
+export default function PairPanel({ info, onPaired, onUnpaired, mode = 'pair' }: PanelProps) {
+  const replacing = mode === 'replace';
+  const [openTrips, setOpenTrips] = useState<number | null>(null);
+  const [reason, setReason] = useState('');
   const [uid, setUid] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,12 +55,24 @@ export default function PairPanel({ info, onPaired, onUnpaired }: { info: Pairin
     setSaving(true);
     setError(null);
     try {
-      await api.post(`/cards/${info.card_uuid}/pair`, { nfc_uid: uid });
+      if (replacing) {
+        await api.post(`/cards/${info.card_uuid}/replace`, {
+          nfc_uid: uid,
+          reason: reason.trim() || undefined,
+          confirm: openTrips !== null ? true : undefined,
+        });
+      } else {
+        await api.post(`/cards/${info.card_uuid}/pair`, { nfc_uid: uid });
+      }
       setDone(true);
       onPaired?.();
     } catch (err) {
-      const e = err as { response?: { data?: { error?: string } } };
-      setError(e.response?.data?.error ?? 'Could not pair this card.');
+      const e = err as ApiError;
+      if (replacing && e.response?.status === 409 && typeof e.response.data?.open_trips === 'number') {
+        setOpenTrips(e.response.data.open_trips);
+      } else {
+        setError(e.response?.data?.error ?? (replacing ? 'Could not replace the chip.' : 'Could not pair this card.'));
+      }
     } finally {
       setSaving(false);
     }
@@ -52,9 +80,18 @@ export default function PairPanel({ info, onPaired, onUnpaired }: { info: Pairin
 
   return (
     <div style={{ width: '100%' }}>
-      <h3 data-testid="pair-heading" style={{ marginTop: 0 }}>Pair card {name}</h3>
+      <h3 data-testid="pair-heading" style={{ marginTop: 0 }}>{replacing ? 'Replace the chip on' : 'Pair card'} {name}</h3>
       <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: '0 0 16px' }}>
-        Check that <strong>{name}</strong> is the number printed on the card in your hand, then tap that card to the back of this phone.
+        {replacing ? (
+          <>
+            Tap the <strong>new</strong> chip to the back of this phone. <strong>{name}</strong> keeps its printed QR and serial, and
+            {info.nfc_uid ? <> the old chip <span style={{ fontFamily: 'monospace' }}>{info.nfc_uid}</span> stops working.</> : ' the old chip stops working.'}
+          </>
+        ) : (
+          <>
+            Check that <strong>{name}</strong> is the number printed on the card in your hand, then tap that card to the back of this phone.
+          </>
+        )}
       </p>
 
       {!hasWebNfc() && (
@@ -65,7 +102,7 @@ export default function PairPanel({ info, onPaired, onUnpaired }: { info: Pairin
 
       {done ? (
         <div style={{ color: 'var(--success)', fontWeight: 700 }}>
-          <CheckCircle2 size={16} /> {name} is now paired to {uid}.
+          <CheckCircle2 size={16} /> {replacing ? `${name} now uses chip ${uid}.` : `${name} is now paired to ${uid}.`}
         </div>
       ) : (
         <>
@@ -91,8 +128,23 @@ export default function PairPanel({ info, onPaired, onUnpaired }: { info: Pairin
                 className="btn-primary"
                 style={{ width: '100%', padding: 12, borderRadius: 8, marginTop: 12 }}
               >
-                {saving ? 'Saving…' : `Pair ${uid} to ${name}`}
+                {saving ? 'Saving…' : openTrips !== null ? `Replace anyway with ${uid}` : replacing ? `Use ${uid} for ${name}` : `Pair ${uid} to ${name}`}
               </button>
+              {replacing && (
+                <input
+                  aria-label="Reason"
+                  value={reason}
+                  maxLength={300}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why? e.g. chip cracked, card lost (optional)"
+                  style={{ width: '100%', marginTop: 10, padding: 10, background: 'var(--bg-dark)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-primary)' }}
+                />
+              )}
+              {openTrips !== null && (
+                <div role="alert" style={{ marginTop: 10, color: 'var(--warning)', fontSize: 13 }}>
+                  This card has {openTrips} open trip{openTrips === 1 ? '' : 's'}, so a passenger may still be aboard with it. Replacing the chip now will not close the trip.
+                </div>
+              )}
             </div>
           )}
         </>
@@ -100,7 +152,7 @@ export default function PairPanel({ info, onPaired, onUnpaired }: { info: Pairin
 
       {error && <div role="alert" style={{ color: 'var(--danger)', marginTop: 12, fontSize: 13 }}>{error}</div>}
 
-      {done && (
+      {done && !replacing && (
         <button
           type="button"
           onClick={async () => {

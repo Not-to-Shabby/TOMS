@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CARD_STATUSES, allowedMoves, canUnpair, confirmationFor, describeEvent, statusActions } from './cardLifecycle';
+import { CARD_STATUSES, allowedMoves, canReplaceChip, canUnpair, confirmationFor, describeEvent, statusActions } from './cardLifecycle';
 
 describe('the status table matches the server', () => {
   // These are the same expectations as toms_backend/test/cardLifecycle.test.ts. If one side changes, both must.
@@ -54,6 +54,19 @@ describe('canUnpair', () => {
     expect(canUnpair('active', true)).toBe(true);
     expect(canUnpair('lost', true)).toBe(true);
     expect(canUnpair('unpaired', false)).toBe(false);
+  });
+});
+
+describe('canReplaceChip', () => {
+  it('is for a card that has a chip and is not retired', () => {
+    expect(canReplaceChip('active', true)).toBe(true);
+    expect(canReplaceChip('lost', true)).toBe(true);
+    expect(canReplaceChip('suspended', true)).toBe(true);
+  });
+
+  it('is not for a card with no chip, or a retired one', () => {
+    expect(canReplaceChip('unpaired', false)).toBe(false);
+    expect(canReplaceChip('retired', true)).toBe(false);
   });
 });
 

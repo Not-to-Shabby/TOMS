@@ -19,7 +19,7 @@ export function allowedMoves(from: CardStatus, hasChip: boolean): CardStatus[] {
 
 export const NEEDS_REASON: readonly CardStatus[] = ['lost', 'retired'];
 
-export type RowAction = 'edit' | 'suspend' | 'activate' | 'lost' | 'found' | 'retire' | 'restore' | 'unpair' | 'history' | 'qr';
+export type RowAction = 'edit' | 'replace' | 'suspend' | 'activate' | 'lost' | 'found' | 'retire' | 'restore' | 'unpair' | 'history' | 'qr';
 
 export interface ActionInfo {
   action: RowAction;
@@ -59,6 +59,11 @@ export function statusActions(status: CardStatus, hasChip: boolean): ActionInfo[
 /** Cards with a chip can have it taken off (wrong card, or a chip being replaced). */
 export function canUnpair(status: CardStatus, hasChip: boolean): boolean {
   return hasChip && status !== 'unpaired';
+}
+
+/** A chip can be swapped on any card that has one, except a retired card (restore it first). */
+export function canReplaceChip(status: CardStatus, hasChip: boolean): boolean {
+  return hasChip && status !== 'unpaired' && status !== 'retired';
 }
 
 export interface Confirmation {

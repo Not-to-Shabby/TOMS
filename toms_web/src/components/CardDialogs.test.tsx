@@ -21,7 +21,7 @@ describe('CardRowMenu', () => {
 
   it('lists edit, history, and only the moves an active card can make', async () => {
     await open('active');
-    expect(items()).toEqual(['Edit label and notes', 'History', 'Suspend', 'Mark lost', 'Retire', 'Take chip off']);
+    expect(items()).toEqual(['Edit label and notes', 'History', 'Replace chip', 'Suspend', 'Mark lost', 'Retire', 'Take chip off']);
   });
 
   it('offers "Found it" on a lost card and "Restore" on a retired one', async () => {

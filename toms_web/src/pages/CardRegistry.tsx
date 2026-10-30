@@ -9,6 +9,8 @@ import CardActionDialog from '../components/CardActionDialog';
 import { changeStatus } from '../lib/cardRequests';
 import CardEditDialog from '../components/CardEditDialog';
 import CardHistoryDrawer from '../components/CardHistoryDrawer';
+import Modal from '../components/Modal';
+import PairPanel from '../components/PairPanel';
 import CardRowMenu from '../components/CardRowMenu';
 import { confirmationFor, type CardStatus, type Confirmation, type RowAction } from '../lib/cardLifecycle';
 import { loadErrorMessage } from '../lib/loadError';
@@ -45,6 +47,7 @@ export default function CardRegistry() {
   const [showPairModal, setShowPairModal] = useState(false);
   const [editing, setEditing] = useState<CardItem | null>(null);
   const [historyOf, setHistoryOf] = useState<CardItem | null>(null);
+  const [replacingChip, setReplacingChip] = useState<CardItem | null>(null);
   const [pending, setPending] = useState<{
     confirmation: Confirmation;
     run: (reason: string, confirm: boolean) => Promise<unknown>;
@@ -252,6 +255,7 @@ export default function CardRegistry() {
     const name = card.serial ?? card.label ?? card.card_uuid.slice(0, 8);
     if (action === 'edit') return void setEditing(card);
     if (action === 'history') return void setHistoryOf(card);
+    if (action === 'replace') return void setReplacingChip(card);
 
     const confirmation = confirmationFor(action, name);
     if (action === 'unpair' && confirmation) {
@@ -665,6 +669,15 @@ export default function CardRegistry() {
         <CardEditDialog card={editing} onDone={() => { setEditing(null); loadCards(); }} onClose={() => setEditing(null)} />
       )}
       {historyOf && <CardHistoryDrawer card={historyOf} onClose={() => setHistoryOf(null)} />}
+      {replacingChip && (
+        <Modal title={`Replace chip on ${replacingChip.serial ?? 'card'}`} onClose={() => { setReplacingChip(null); loadCards(); }}>
+          <PairPanel
+            mode="replace"
+            info={{ card_uuid: replacingChip.card_uuid, serial: replacingChip.serial, label: replacingChip.label, status: replacingChip.status, nfc_uid: replacingChip.nfc_uid }}
+            onPaired={loadCards}
+          />
+        </Modal>
+      )}
       {showPairModal && (
         <PairPrintedCardModal
           waiting={unpairedCards.map((c) => ({ card_uuid: c.card_uuid, serial: c.serial, label: c.label, status: c.status, nfc_uid: c.nfc_uid }))}
