@@ -23,6 +23,9 @@ export function validateBatch(rule: BatchRule, count: number): string | null {
   return null;
 }
 
+/** Blank modules a QR code needs on every side to be read reliably. The placed box includes them. */
+export const QR_QUIET_MODULES = 4;
+
 export function cardUrl(baseUrl: string, cardUuid: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/r/${cardUuid}`;
 }

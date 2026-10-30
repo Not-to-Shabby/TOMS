@@ -5,6 +5,7 @@ import { ArrowLeft, Download, Upload, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../lib/api';
 import { getPublicBase } from '../lib/publicBase';
 import {
+  QR_QUIET_MODULES,
   cardUrl,
   clampPlacement,
   DEFAULT_PLACEMENT,
@@ -16,6 +17,7 @@ import {
   validateBatch,
   type Placement,
 } from '../lib/cardDesign';
+import SheetExport from '../components/SheetExport';
 import { buildExportZip, loadDesignImage, saveBlob, type DesignImage, type ExportCard } from '../lib/cardRender';
 
 type Side = 'front' | 'back';
@@ -23,6 +25,7 @@ type Drag = { side: Side; target: 'qr' | 'text'; dx: number; dy: number } | null
 
 interface SideState {
   design: DesignImage;
+  file: File;
   src: string;
   placement: Placement | null;
 }
@@ -90,7 +93,7 @@ export default function CardDesigner() {
       const src = URL.createObjectURL(file);
       setSides((s) => ({
         ...s,
-        [side]: { design: { image, width, height }, src, placement: side === qrSide ? clampPlacement(DEFAULT_PLACEMENT, width, height) : null },
+        [side]: { design: { image, width, height }, file, src, placement: side === qrSide ? clampPlacement(DEFAULT_PLACEMENT, width, height) : null },
       }));
     } catch (err) {
       setError((err as Error).message);
@@ -274,7 +277,7 @@ export default function CardDesigner() {
                               outline: '2px dashed var(--accent)',
                             }}
                           >
-                            <QRCodeSVG value={cardUrl(baseUrl, sampleUuid)} size={256} level="M" marginSize={0} style={{ width: '100%', height: '100%', display: 'block' }} />
+                            <QRCodeSVG value={cardUrl(baseUrl, sampleUuid)} size={256} level="M" marginSize={QR_QUIET_MODULES} style={{ width: '100%', height: '100%', display: 'block' }} />
                           </div>
                           <div
                             data-testid={`text-box-${side}`}
@@ -329,7 +332,7 @@ export default function CardDesigner() {
       </section>
 
       <section className="glass-panel" style={{ padding: 24, display: 'grid', gap: 12 }}>
-        <h3 style={{ margin: 0 }}>3. Download for the print shop</h3>
+        <h3 style={{ margin: 0 }}>3. Download one image per card (ZIP)</h3>
         <button
           type="button"
           className="btn-primary"
@@ -341,6 +344,13 @@ export default function CardDesigner() {
         </button>
         {busy && <div role="status">{busy}{progress ? ` ${progress[0]} / ${progress[1]}` : ''}</div>}
       </section>
+
+      <SheetExport
+        cards={cards}
+        baseUrl={baseUrl}
+        front={sides.front ? { file: sides.front.file, image: sides.front.design.image, width: sides.front.design.width, height: sides.front.design.height, src: sides.front.src, placement: sides.front.placement } : undefined}
+        back={sides.back ? { file: sides.back.file, image: sides.back.design.image, width: sides.back.design.width, height: sides.back.design.height, src: sides.back.src, placement: sides.back.placement } : undefined}
+      />
 
       {error && <div role="alert" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>

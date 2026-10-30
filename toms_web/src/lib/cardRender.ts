@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import QRCode from 'qrcode';
-import { buildCsv, cardFileName, cardUrl, toPixels, type Placement } from './cardDesign';
+import { QR_QUIET_MODULES, buildCsv, cardFileName, cardUrl, toPixels, type Placement } from './cardDesign';
 
 export interface DesignImage {
   image: HTMLImageElement;
@@ -49,7 +49,7 @@ export async function renderCard(
     const qrCanvas = document.createElement('canvas');
     await QRCode.toCanvas(qrCanvas, cardUrl(baseUrl, card.card_uuid), {
       errorCorrectionLevel: 'M',
-      margin: 0,
+      margin: QR_QUIET_MODULES,
       width: px.qrSize,
       color: { dark: '#000000', light: '#ffffff' },
     });
