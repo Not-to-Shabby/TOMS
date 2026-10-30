@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import ph.toms.conductor.data.db.PendingEvent
+import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.settings.DeviceConfigStore
 import retrofit2.HttpException
 import retrofit2.Retrofit
@@ -51,6 +52,8 @@ data class IngestRejection(
 @Serializable
 data class ApprovedCardsResponse(
     val cards: Map<String, String> = emptyMap(),
+    /** Chips of cards that exist but must not be used, with why. Missing from an older server, so it defaults to none. */
+    val statuses: Map<String, String> = emptyMap(),
     val count: Int = 0,
     val timestamp: String = "",
 )
@@ -69,7 +72,7 @@ interface TomsApiService {
 }
 
 interface CardRegistrySync {
-    suspend fun fetchApprovedCards(): Result<Map<String, String>>
+    suspend fun fetchApprovedCards(): Result<ApprovedCardList>
 }
 
 @Singleton
@@ -130,7 +133,7 @@ class RetrofitEventUploader @Inject constructor(
         }
     }
 
-    override suspend fun fetchApprovedCards(): Result<Map<String, String>> {
+    override suspend fun fetchApprovedCards(): Result<ApprovedCardList> {
         val token = config.deviceToken.value
         if (token.isNullOrBlank()) {
             return Result.failure(IllegalStateException("device not enrolled (no token configured)"))
@@ -138,7 +141,7 @@ class RetrofitEventUploader @Inject constructor(
         val api = createApi() ?: return Result.failure(IllegalStateException("invalid server URL"))
         return try {
             val res = api.fetchApprovedCards("Bearer $token")
-            Result.success(res.cards)
+            Result.success(ApprovedCardList(res.cards, res.statuses))
         } catch (e: Exception) {
             Result.failure(e)
         }

@@ -14,6 +14,9 @@ sealed interface TapOutcome {
     /** The card is not on the approved list. */
     data class UnknownCard(val nfcUid: String) : TapOutcome
 
+    /** The registry knows this card but it must not be used: it is [status] (suspended, lost or retired). */
+    data class CardBlocked(val nfcUid: String, val status: String) : TapOutcome
+
     /** The card is lost or in an alarm state and needs the conductor to resolve it first. */
     data class NeedsAttention(val trip: Trip?, val state: CardState) : TapOutcome
 }
@@ -31,8 +34,16 @@ object TapResolver {
         tripFor: (String) -> Trip?,
     ): TapOutcome {
         val uid = ApprovedCards.normalizeUid(nfcUid)
-        if (config.approvedCards.cardUuidFor(uid) == null) return TapOutcome.UnknownCard(uid)
         val state = stateOf(uid)
+        val approved = config.approvedCards.cardUuidFor(uid) != null
+        if (!approved) {
+            // Not on the approved list: either the registry knows it and has taken it out of service (say why),
+            // or it is not a TOMS card at all.
+            val blocked = config.approvedCards.blockedStatusFor(uid) ?: return TapOutcome.UnknownCard(uid)
+            // A card taken out of service while a passenger is still aboard with it stays readable, so the
+            // conductor can still see the trip and collect the fare. Only a free card is refused.
+            if (state == CardState.AVAILABLE) return TapOutcome.CardBlocked(uid, blocked)
+        }
         return when (state) {
             CardState.AVAILABLE -> TapOutcome.StartTrip(uid)
             CardState.ASSIGNED_UNPAID, CardState.ASSIGNED_PAID, CardState.RETURNED -> {

@@ -133,9 +133,9 @@ class ConductorViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            trips.loadApprovedCards()?.let { cached ->
-                if (cached.isNotEmpty()) {
-                    _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached))) }
+            trips.loadApprovedCardList()?.let { cached ->
+                if (cached.cards.isNotEmpty() || cached.statuses.isNotEmpty()) {
+                    _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached.cards, cached.statuses))) }
                 }
             }
             if (_state.value.isEnrolled) {
@@ -333,11 +333,20 @@ class ConductorViewModel @Inject constructor(
                 _state.update { it.copy(result = BoardResult.Existing(result.trip, result.cardState)) }
             }
             is TapResult.UnknownCard -> refuse("Card not recognised")
+            is TapResult.CardBlocked -> refuse(blockedCardText(result.status))
             is TapResult.NeedsAttention -> refuse(
                 if (result.cardState == CardState.LOST) "Card marked lost. See Collect." else "Unpaid return. See Collect.",
             )
             is TapResult.Invalid -> refuse(reasonText(result.reason))
         }
+    }
+
+    /** What the conductor reads when a card that the office has taken out of service is tapped. */
+    private fun blockedCardText(status: String): String = when (status) {
+        "lost" -> "Card reported lost. Keep it and tell the office."
+        "retired" -> "Card retired. Do not use."
+        "suspended" -> "Card suspended. Do not use."
+        else -> "Card not in service."
     }
 
     private fun refuse(message: String) {
@@ -425,13 +434,14 @@ class ConductorViewModel @Inject constructor(
 
     fun syncApprovedCards() {
         viewModelScope.launch {
+            // Only a successful answer changes the list. A failed fetch (no signal, server down) leaves the saved
+            // list alone, so the conductor keeps working. An answer with no cards is real: every card was taken
+            // out of service, and the phone must stop accepting them.
             cardSync.fetchApprovedCards()
-                .onSuccess { cardsMap ->
-                    if (cardsMap.isNotEmpty()) {
-                        trips.saveApprovedCards(cardsMap)
-                        _state.update {
-                            it.copy(config = it.config.copy(approvedCards = ApprovedCards(cardsMap)))
-                        }
+                .onSuccess { list ->
+                    trips.saveApprovedCardList(list)
+                    _state.update {
+                        it.copy(config = it.config.copy(approvedCards = ApprovedCards(list.cards, list.statuses)))
                     }
                 }
         }

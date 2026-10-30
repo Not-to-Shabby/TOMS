@@ -131,14 +131,54 @@ class RetrofitEventUploaderTest {
         val res = uploader.fetchApprovedCards()
 
         assertTrue(res.isSuccess)
-        val cards = res.getOrThrow()
+        val list = res.getOrThrow()
+        val cards = list.cards
         assertEquals(2, cards.size)
         assertEquals("uuid-123", cards["AABBCCDD"])
         assertEquals("uuid-456", cards["11223344"])
+        // An older server sends no statuses: that is "none", not a failure.
+        assertTrue(list.statuses.isEmpty())
 
         val recorded = server.takeRequest()
         assertEquals("/api/cards/approved", recorded.path)
         assertEquals("Bearer dev-test-1.secret123", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `fetchApprovedCards reads the statuses of cards that must not be used`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"cards":{"AABBCCDD":"uuid-123"},"statuses":{"11223344":"lost","55667788":"suspended"},"count":1,"timestamp":"x"}""",
+                ),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val list = RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().getOrThrow()
+
+        assertEquals(mapOf("AABBCCDD" to "uuid-123"), list.cards)
+        assertEquals(mapOf("11223344" to "lost", "55667788" to "suspended"), list.statuses)
+    }
+
+    @Test
+    fun `fetchApprovedCards copes with an empty list from the server`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("""{"cards":{},"statuses":{},"count":0}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val list = RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().getOrThrow()
+
+        assertTrue(list.cards.isEmpty())
+        assertTrue(list.statuses.isEmpty())
+    }
+
+    @Test
+    fun `fetchApprovedCards fails, rather than returning an empty list, when the server errors`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        assertTrue(RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().isFailure)
     }
 
     @Test

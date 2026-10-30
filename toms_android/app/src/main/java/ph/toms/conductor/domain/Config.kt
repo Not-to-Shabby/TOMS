@@ -30,11 +30,25 @@ data class FareConfig(
     val roundingStepCentavos: Int,
 )
 
+/**
+ * What the server's card registry says: the cards that may be used (chip to card UUID), and the cards that
+ * exist but must not be used, with why ("suspended", "lost" or "retired"). [statuses] is empty when the
+ * server is an older one that does not send it.
+ */
+data class ApprovedCardList(
+    val cards: Map<String, String>,
+    val statuses: Map<String, String> = emptyMap(),
+)
+
 /** Maps the NFC UID read from a card to the printed QR card UUID. Set from the card registry. */
-class ApprovedCards(entries: Map<String, String>) {
+class ApprovedCards(entries: Map<String, String>, statuses: Map<String, String> = emptyMap()) {
     private val byUid = entries.mapKeys { normalizeUid(it.key) }
+    private val blockedByUid = statuses.mapKeys { normalizeUid(it.key) }.filterKeys { it !in byUid }
 
     fun cardUuidFor(uid: String): String? = byUid[normalizeUid(uid)]
+
+    /** Why a card that the registry knows must not be used ("lost", "suspended", "retired"), or null. */
+    fun blockedStatusFor(uid: String): String? = blockedByUid[normalizeUid(uid)]
 
     val size: Int get() = byUid.size
 

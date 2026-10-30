@@ -13,6 +13,7 @@ import ph.toms.conductor.data.db.OutboxEntity
 import ph.toms.conductor.data.db.ShiftEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.db.TripEntity
+import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.data.db.PassengerJson
 import ph.toms.conductor.data.db.PassengerLineRecord
@@ -280,21 +281,30 @@ class TripRepository(
     suspend fun writtenOffTripIds(): Set<String> =
         db.events().ofType(EventTypes.FARE_WRITTEN_OFF).mapNotNull { it.tripId }.toSet()
 
-    suspend fun loadApprovedCards(): Map<String, String>? {
-        val cached = db.config().get("approved_cards") ?: return null
-        return runCatching { json.decodeFromString<Map<String, String>>(cached.json) }.getOrNull()
+    /**
+     * The saved card list, or null if there is none yet. The statuses live under their own key, so a phone that
+     * saved only the card map before this existed still loads it (with no statuses) instead of losing it.
+     */
+    suspend fun loadApprovedCardList(): ApprovedCardList? {
+        val cards = db.config().get("approved_cards")
+            ?.let { runCatching { json.decodeFromString<Map<String, String>>(it.json) }.getOrNull() }
+            ?: return null
+        val statuses = db.config().get("approved_card_statuses")
+            ?.let { runCatching { json.decodeFromString<Map<String, String>>(it.json) }.getOrNull() }
+            ?: emptyMap()
+        return ApprovedCardList(cards, statuses)
     }
 
-    suspend fun saveApprovedCards(cards: Map<String, String>) {
-        db.config().put(
-            ConfigCacheEntity(
-                key = "approved_cards",
-                version = 1,
-                json = json.encodeToString(cards),
-                fetchedAtMillis = System.currentTimeMillis(),
-            ),
-        )
+    suspend fun loadApprovedCards(): Map<String, String>? = loadApprovedCardList()?.cards
+
+    /** Saves the list exactly as the server sent it, including an empty one: when the server has no cards left, the phone must too. */
+    suspend fun saveApprovedCardList(list: ApprovedCardList) {
+        val now = System.currentTimeMillis()
+        db.config().put(ConfigCacheEntity(key = "approved_cards", version = 1, json = json.encodeToString(list.cards), fetchedAtMillis = now))
+        db.config().put(ConfigCacheEntity(key = "approved_card_statuses", version = 1, json = json.encodeToString(list.statuses), fetchedAtMillis = now))
     }
+
+    suspend fun saveApprovedCards(cards: Map<String, String>) = saveApprovedCardList(ApprovedCardList(cards))
 
     private suspend fun appendEvent(
         type: String,

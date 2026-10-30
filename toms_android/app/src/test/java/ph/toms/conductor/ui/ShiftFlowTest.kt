@@ -33,6 +33,7 @@ import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
+import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
@@ -67,7 +68,8 @@ class ShiftFlowTest {
     }
 
     private class NoCardSync : CardRegistrySync {
-        override suspend fun fetchApprovedCards(): Result<Map<String, String>> = Result.success(emptyMap())
+        // "No card sync" means the server is never heard from, not that it answers with no cards.
+        override suspend fun fetchApprovedCards(): Result<ApprovedCardList> = Result.failure(java.io.IOException("not used in this test"))
     }
 
     @Before fun setUp() {
