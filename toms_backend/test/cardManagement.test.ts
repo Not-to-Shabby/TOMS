@@ -423,3 +423,230 @@ describe('replacing a chip', () => {
     expect((await request(app).post(`/api/cards/${uuid}/replace`).send({ nfc_uid: '04BB0002' })).status).toBe(401);
   });
 });
+
+describe('searching treats percent, underscore and backslash as plain characters', () => {
+  const find = async (q: string) =>
+    (await request(app).get('/api/cards').query({ search: q }).set(auth())).body.cards.map((c: { serial: string }) => c.serial);
+
+  it('does not let a % or _ act as a wildcard', async () => {
+    await post('/api/cards', { nfc_uid: '04000001', serial: 'AB-1', label: 'plain' });
+    await post('/api/cards', { nfc_uid: '04000002', serial: 'AB-2', label: '50% off' });
+    await post('/api/cards', { nfc_uid: '04000003', serial: 'AB-3', label: 'under_score' });
+    expect(await find('%')).toEqual(['AB-2']);
+    expect(await find('_')).toEqual(['AB-3']);
+    expect(await find('50%')).toEqual(['AB-2']);
+  });
+
+  it('matches a backslash literally instead of treating it as an escape', async () => {
+    await post('/api/cards', { nfc_uid: '04000004', serial: 'BS-1', label: 'plain' });
+    await post('/api/cards', { nfc_uid: '04000005', serial: 'BS-2', label: 'back\\slash' });
+    expect(await find('\\')).toEqual(['BS-2']);
+    expect(await find('back\\slash')).toEqual(['BS-2']);
+  });
+});
+
+/** Several paired, active cards: BK-1 .. BK-n. */
+async function cards(n: number, prefix = 'BK-') {
+  const ids: string[] = [];
+  for (let i = 1; i <= n; i++) {
+    const r = await post('/api/cards', { nfc_uid: `04${prefix.charCodeAt(0).toString(16).padStart(2, '0')}${String(i).padStart(4, '0')}`, serial: `${prefix}${i}`, label: `Card ${i}` });
+    expect(r.status).toBe(201);
+    ids.push(r.body.card_uuid);
+  }
+  return ids;
+}
+const statusOf = async (uuid: string) => (await pool.query('SELECT status FROM cards WHERE card_uuid = $1', [uuid])).rows[0].status as string;
+
+describe('bulk changes', () => {
+  const bulk = (body: object) => post('/api/cards/bulk', body);
+
+  it('changes the status of many cards at once and records each in its history', async () => {
+    const ids = await cards(3);
+    const res = await bulk({ card_uuids: ids, action: 'status', status: 'suspended' });
+    expect(res.status).toBe(200);
+    expect(res.body.changed).toBe(3);
+    for (const id of ids) {
+      expect(await statusOf(id)).toBe('suspended');
+      expect((await history(id))[0]).toMatchObject({ action: 'status_changed', to_status: 'suspended', admin_username: 'boss' });
+    }
+  });
+
+  it('moves many cards to a vehicle, and back to the spare pool with null', async () => {
+    await pool.query("INSERT INTO vehicles (id, plate_number) VALUES ('BUS-1', 'AAA-111')");
+    const ids = await cards(2);
+    expect((await bulk({ card_uuids: ids, action: 'vehicle', vehicle_id: 'BUS-1' })).body.changed).toBe(2);
+    const rows = await pool.query('SELECT vehicle_id FROM cards WHERE card_uuid = ANY($1)', [ids]);
+    expect(rows.rows.every((r) => r.vehicle_id === 'BUS-1')).toBe(true);
+    expect((await history(ids[0]))[0]).toMatchObject({ action: 'vehicle_changed' });
+    await bulk({ card_uuids: ids, action: 'vehicle', vehicle_id: null });
+    expect((await pool.query('SELECT vehicle_id FROM cards WHERE card_uuid = $1', [ids[0]])).rows[0].vehicle_id).toBeNull();
+  });
+
+  it('is all or nothing: one card that cannot move leaves every card untouched', async () => {
+    const ids = await cards(3);
+    await post(`/api/cards/${ids[1]}/status`, { status: 'lost', reason: 'misplaced' }); // lost cannot become suspended
+    const before = (await history(ids[0])).length;
+
+    const res = await bulk({ card_uuids: ids, action: 'status', status: 'suspended' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('1 of 3 cards could not be changed. Nothing was changed.');
+    expect(res.body.problems).toEqual([{ card_uuid: ids[1], serial: 'BK-2', error: 'A lost card cannot be changed to suspended.' }]);
+    expect(await statusOf(ids[0])).toBe('active');
+    expect(await statusOf(ids[2])).toBe('active');
+    expect((await history(ids[0])).length).toBe(before);
+  });
+
+  it('lists every problem card, not only the first', async () => {
+    const ids = await cards(3);
+    await post(`/api/cards/${ids[0]}/status`, { status: 'lost', reason: 'x' });
+    await post(`/api/cards/${ids[2]}/status`, { status: 'lost', reason: 'x' });
+    const res = await bulk({ card_uuids: ids, action: 'status', status: 'suspended' });
+    expect(res.body.problems.map((p: { serial: string }) => p.serial)).toEqual(['BK-1', 'BK-3']);
+  });
+
+  it('requires a reason for lost and retired, and applies it to every card', async () => {
+    const ids = await cards(2);
+    const no = await bulk({ card_uuids: ids, action: 'status', status: 'lost' });
+    expect(no.status).toBe(409);
+    expect(no.body.problems).toHaveLength(2);
+    const ok = await bulk({ card_uuids: ids, action: 'status', status: 'lost', reason: 'Box lost in a flood' });
+    expect(ok.status).toBe(200);
+    expect((await history(ids[0]))[0].reason).toBe('Box lost in a flood');
+    expect((await history(ids[1]))[0].reason).toBe('Box lost in a flood');
+  });
+
+  it('warns about open trips across the whole group, then goes ahead when confirmed', async () => {
+    const ids = await cards(2);
+    await openTrip(ids[0], '04420001', 1);
+    const warned = await bulk({ card_uuids: ids, action: 'status', status: 'suspended' });
+    expect(warned.status).toBe(409);
+    expect(warned.body.open_trips).toBe(1);
+    expect(await statusOf(ids[1])).toBe('active');
+    expect((await bulk({ card_uuids: ids, action: 'status', status: 'suspended', confirm: true })).status).toBe(200);
+  });
+
+  it('works on everything matching a filter', async () => {
+    await cards(2, 'AA-');
+    await cards(2, 'BB-');
+    const res = await bulk({ filter: { search: 'BB-' }, action: 'status', status: 'suspended' });
+    expect(res.body.changed).toBe(2);
+    const rows = await pool.query("SELECT serial, status FROM cards ORDER BY serial");
+    expect(rows.rows.map((r) => `${r.serial}:${r.status}`)).toEqual(['AA-1:active', 'AA-2:active', 'BB-1:suspended', 'BB-2:suspended']);
+  });
+
+  it('refuses a filter that matches more than the limit, and one that matches nothing', async () => {
+    await post('/api/cards/batch', { count: 500, prefix: 'M-' });
+    await post('/api/cards/batch', { count: 3, prefix: 'N-' });
+    const big = await bulk({ filter: {}, action: 'status', status: 'retired', reason: 'x' });
+    expect(big.status).toBe(400);
+    expect(big.body.error).toMatch(/more than 500 cards/);
+    expect((await bulk({ filter: { search: 'zzz-no-such' }, action: 'status', status: 'suspended' })).status).toBe(404);
+  });
+
+  it('ignores duplicate ids and unknown ids', async () => {
+    const [id] = await cards(1);
+    const res = await bulk({ card_uuids: [id, id, randomUUID()], action: 'status', status: 'suspended' });
+    expect(res.status).toBe(200);
+    expect(res.body.changed).toBe(1);
+  });
+
+  it('rejects a malformed request with 400 and the reason', async () => {
+    const [id] = await cards(1);
+    expect((await bulk({ action: 'status', status: 'suspended' })).status).toBe(400);
+    expect((await bulk({ card_uuids: [id], filter: {}, action: 'status', status: 'suspended' })).status).toBe(400);
+    expect((await bulk({ card_uuids: [id], action: 'status' })).status).toBe(400);
+    expect((await bulk({ card_uuids: [id], action: 'vehicle' })).status).toBe(400);
+    expect((await bulk({ card_uuids: ['nope'], action: 'status', status: 'suspended' })).status).toBe(400);
+    expect((await bulk({ card_uuids: [], action: 'status', status: 'suspended' })).status).toBe(400);
+    expect((await request(app).post('/api/cards/bulk').send({})).status).toBe(401);
+  });
+
+  it('refuses an unknown vehicle and changes nothing', async () => {
+    const ids = await cards(2);
+    const res = await bulk({ card_uuids: ids, action: 'vehicle', vehicle_id: 'NO-SUCH-BUS' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/does not exist/);
+  });
+
+  it('does nothing and writes nothing for cards already in the asked state', async () => {
+    const ids = await cards(2);
+    const res = await bulk({ card_uuids: ids, action: 'status', status: 'active' });
+    expect(res.status).toBe(200);
+    expect((await history(ids[0])).map((e) => e.action)).toEqual(['enrolled']);
+  });
+});
+
+describe('looking up cards for a reprint', () => {
+  const lookup = (body: object) => post('/api/cards/lookup', body);
+
+  it('returns the chosen cards in serial order', async () => {
+    const ids = await cards(3);
+    const res = await lookup({ card_uuids: [ids[2], ids[0]] });
+    expect(res.body.cards.map((c: { serial: string }) => c.serial)).toEqual(['BK-1', 'BK-3']);
+    expect(res.body.count).toBe(2);
+  });
+
+  it('returns what matches a filter, including cards still waiting for a chip', async () => {
+    await post('/api/cards/batch', { count: 3, prefix: 'LK-' });
+    const res = await lookup({ filter: { search: 'LK-', status: 'unpaired' } });
+    expect(res.body.cards.map((c: { serial: string }) => c.serial)).toEqual(['LK-0001', 'LK-0002', 'LK-0003']);
+    expect(Object.keys(res.body.cards[0]).sort()).toEqual(['card_uuid', 'label', 'nfc_uid', 'serial', 'status', 'vehicle_id']);
+  });
+
+  it('is empty, not an error, when nothing matches, and needs an admin', async () => {
+    expect((await lookup({ filter: { search: 'zzz-none' } })).body).toEqual({ cards: [], count: 0 });
+    expect((await lookup({})).status).toBe(400);
+    expect((await request(app).post('/api/cards/lookup').send({ filter: {} })).status).toBe(401);
+  });
+});
+
+describe('exporting the card list', () => {
+  const csv = (qs = '') => request(app).get(`/api/cards/export${qs}`).set(auth());
+  const rowsOf = (text: string) => text.trim().split('\r\n');
+
+  it('downloads a CSV with a header and one row per card', async () => {
+    await cards(2);
+    const res = await csv();
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toBe('attachment; filename="toms_cards.csv"');
+    const lines = rowsOf(res.text);
+    expect(lines[0]).toBe('serial,status,nfc_uid,vehicle,plate,label,notes,card_uuid,enrolled_at,updated_at,last_used_at');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toMatch(/^"BK-1","active","04/);
+  });
+
+  it('uses the same filters as the registry list', async () => {
+    await cards(2, 'AA-');
+    await cards(2, 'BB-');
+    const res = await csv('?search=BB-');
+    expect(rowsOf(res.text).slice(1).map((l) => l.split(',')[0])).toEqual(['"BB-1"', '"BB-2"']);
+    expect(rowsOf((await csv('?status=lost')).text)).toHaveLength(1);
+  });
+
+  it('shows when a card was last used', async () => {
+    const [id] = await cards(1);
+    await openTrip(id, '04420001', 1);
+    const row = rowsOf((await csv()).text)[1].split(',');
+    expect(row[10]).toMatch(/^"\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('is not fooled by a label that starts like a spreadsheet formula', async () => {
+    await post('/api/cards', { nfc_uid: '04EE0001', serial: 'CSV-1', label: '=HYPERLINK("http://evil")', notes: 'a, "quoted" note' });
+    const text = (await csv('?search=CSV-1')).text;
+    expect(text).toContain(`"'=HYPERLINK(""http://evil"")"`);
+    expect(text).toContain('"a, ""quoted"" note"');
+  });
+
+  it('says whether the export was cut short, and needs an admin', async () => {
+    expect((await csv()).headers['x-export-truncated']).toBe('false');
+    expect((await request(app).get('/api/cards/export')).status).toBe(401);
+    expect((await csv('?status=broken')).status).toBe(400);
+  });
+
+  it('is not captured by the :card_uuid routes', async () => {
+    expect((await csv()).status).toBe(200);
+    expect((await request(app).post('/api/cards/bulk').set(auth()).send({})).status).toBe(400);
+    expect((await request(app).post('/api/cards/lookup').set(auth()).send({})).status).toBe(400);
+  });
+});

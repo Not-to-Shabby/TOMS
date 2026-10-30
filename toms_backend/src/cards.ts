@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 import type { Auth } from './auth';
 import { CARD_STATUSES, NEEDS_REASON, WARNS_OPEN_TRIPS, checkMove, type CardStatus } from './cardLifecycle';
-import { OPEN_STATES, OPEN_TRIP_WINDOW_HOURS } from './dashboard';
+import { EXPORT_ROW_LIMIT, OPEN_STATES, OPEN_TRIP_WINDOW_HOURS, csvText } from './dashboard';
 
 export const nfcUidSchema = z
   .string()
@@ -45,6 +45,43 @@ const updateCardSchema = z.object({
 const statusChangeSchema = z.object({
   reason: reasonSchema.nullish(),
   confirm: z.boolean().optional(),
+});
+
+export const BULK_LIMIT = 500;
+
+/** Which cards a bulk change or lookup applies to: an explicit list, or everything matching the registry filters. */
+const targetSchema = z.object({
+  card_uuids: z.array(z.string().uuid()).min(1).max(BULK_LIMIT).optional(),
+  filter: z
+    .object({
+      search: z.string().trim().max(100).optional(),
+      status: z.enum(CARD_STATUSES).optional(),
+      vehicle_id: z.string().trim().optional(),
+    })
+    .optional(),
+});
+
+const bulkSchema = targetSchema
+  .extend({
+    action: z.enum(['status', 'vehicle']),
+    status: z.enum(CARD_STATUSES).optional(),
+    /** For action "vehicle": a vehicle id, or null for the spare pool. */
+    vehicle_id: z.string().trim().min(1).max(64).nullable().optional(),
+    reason: reasonSchema.nullish(),
+    confirm: z.boolean().optional(),
+  })
+  .refine((b) => !!b.card_uuids !== !!b.filter, { message: 'Give either card_uuids or filter, not both and not neither.' })
+  .refine((b) => b.action !== 'status' || !!b.status, { message: 'status is required for a status change.' })
+  .refine((b) => b.action !== 'vehicle' || 'vehicle_id' in b, { message: 'vehicle_id is required for a vehicle change (null for the spare pool).' });
+
+const lookupSchema = targetSchema.refine((b) => !!b.card_uuids !== !!b.filter, {
+  message: 'Give either card_uuids or filter, not both and not neither.',
+});
+
+const exportQuery = z.object({
+  search: z.string().trim().max(100).default(''),
+  status: z.enum(CARD_STATUSES).optional(),
+  vehicle_id: z.string().trim().optional(),
 });
 
 const cardsQuery = z.object({
@@ -182,6 +219,35 @@ function sendCardError(res: Response, err: unknown): void {
   }
   throw err;
 }
+
+type CardFilter = { search?: string; status?: string; vehicle_id?: string };
+
+/** The WHERE clause the list, the export and bulk-by-filter all share, so they can never disagree. */
+function cardWhere(f: CardFilter): { sql: string; params: unknown[] } {
+  const clauses: string[] = ['1=1'];
+  const params: unknown[] = [];
+  if (f.search) {
+    params.push(`%${f.search.replace(/[\\%_]/g, '\\$&')}%`);
+    const p = `$${params.length}`;
+    clauses.push(`(c.nfc_uid ILIKE ${p} OR c.serial ILIKE ${p} OR c.card_uuid::text ILIKE ${p} OR c.label ILIKE ${p} OR c.vehicle_id ILIKE ${p} OR v.plate_number ILIKE ${p})`);
+  }
+  if (f.status) {
+    params.push(f.status);
+    clauses.push(`c.status = $${params.length}`);
+  }
+  if (f.vehicle_id) {
+    if (f.vehicle_id.toLowerCase() === 'unassigned') {
+      clauses.push('c.vehicle_id IS NULL');
+    } else {
+      params.push(f.vehicle_id);
+      clauses.push(`c.vehicle_id = $${params.length}`);
+    }
+  }
+  return { sql: clauses.join(' AND '), params };
+}
+
+const CARD_ORDER = `ORDER BY (c.vehicle_id IS NOT NULL) DESC, c.vehicle_id ASC, regexp_replace(c.serial, '[0-9]+$', '') ASC NULLS LAST,
+                (substring(c.serial from '[0-9]+$'))::numeric ASC NULLS LAST, c.serial ASC, c.enrolled_at DESC`;
 
 const adminName = (res: Response): string => (res.locals.auth as { username: string }).username;
 
@@ -412,27 +478,10 @@ export function registerCardRoutes(
     }
     const { page, limit, search, status, vehicle_id } = q.data;
 
-    const clauses: string[] = ['1=1'];
-    const params: unknown[] = [];
+    const where = cardWhere({ search, status, vehicle_id });
+    const params = where.params;
 
-    if (search) {
-      params.push(`%${search.replace(/[\\%_]/g, '\\$&')}%`);
-      clauses.push(`(c.nfc_uid ILIKE $${params.length} OR c.serial ILIKE $${params.length} OR c.card_uuid::text ILIKE $${params.length} OR c.label ILIKE $${params.length} OR c.vehicle_id ILIKE $${params.length} OR v.plate_number ILIKE $${params.length})`);
-    }
-    if (status) {
-      params.push(status);
-      clauses.push(`c.status = $${params.length}`);
-    }
-    if (vehicle_id) {
-      if (vehicle_id.toLowerCase() === 'unassigned') {
-        clauses.push('c.vehicle_id IS NULL');
-      } else {
-        params.push(vehicle_id);
-        clauses.push(`c.vehicle_id = $${params.length}`);
-      }
-    }
-
-    const whereSql = clauses.join(' AND ');
+    const whereSql = where.sql;
     const countRes = await pool.query(
       `SELECT count(*) AS total
        FROM cards c
@@ -449,8 +498,7 @@ export function registerCardRoutes(
        FROM cards c
        LEFT JOIN vehicles v ON v.id = c.vehicle_id
        WHERE ${whereSql}
-       ORDER BY (c.vehicle_id IS NOT NULL) DESC, c.vehicle_id ASC, regexp_replace(c.serial, '[0-9]+$', '') ASC NULLS LAST,
-                (substring(c.serial from '[0-9]+$'))::numeric ASC NULLS LAST, c.serial ASC, c.enrolled_at DESC
+       ${CARD_ORDER}
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params,
     );
@@ -464,6 +512,143 @@ export function registerCardRoutes(
         totalPages: Math.ceil(total / limit) || 1,
       },
     });
+  });
+
+  /** Resolves a target (list or filter) to card ids, in registry order. Throws CardError past the bulk limit. */
+  async function resolveTargets(client: Pool | PoolClient, t: z.infer<typeof targetSchema>): Promise<string[]> {
+    if (t.card_uuids) {
+      const { rows } = await client.query(
+        `SELECT c.card_uuid FROM cards c LEFT JOIN vehicles v ON v.id = c.vehicle_id
+         WHERE c.card_uuid = ANY($1::uuid[]) ${CARD_ORDER}`,
+        [[...new Set(t.card_uuids)]],
+      );
+      return rows.map((r) => r.card_uuid as string);
+    }
+    const where = cardWhere(t.filter ?? {});
+    const { rows } = await client.query(
+      `SELECT c.card_uuid FROM cards c LEFT JOIN vehicles v ON v.id = c.vehicle_id
+       WHERE ${where.sql} ${CARD_ORDER} LIMIT ${BULK_LIMIT + 1}`,
+      where.params,
+    );
+    if (rows.length > BULK_LIMIT) {
+      throw new CardError(400, `That matches more than ${BULK_LIMIT} cards. Narrow the filter and try again.`);
+    }
+    return rows.map((r) => r.card_uuid as string);
+  }
+
+  // POST /api/cards/bulk - Admin changes the status or vehicle of many cards at once. All or nothing:
+  // if any one card cannot make the move, nothing changes and the answer says which cards were the problem.
+  app.post('/api/cards/bulk', admin, async (req: Request, res: Response) => {
+    const parsed = bulkSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return void res.status(400).json({
+        error: 'Invalid request',
+        issues: parsed.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      });
+    }
+    const b = parsed.data;
+    const who = adminName(res);
+    try {
+      const result = await inTransaction(pool, async (client) => {
+        const ids = await resolveTargets(client, b);
+        if (ids.length === 0) throw new CardError(404, 'No cards matched.');
+
+        const problems: { card_uuid: string; serial: string | null; error: string; open_trips?: number }[] = [];
+        const done: string[] = [];
+        for (const id of ids) {
+          // Each card runs in its own savepoint, so one refusal does not abort the transaction and we can
+          // collect every problem before rolling the whole thing back.
+          await client.query('SAVEPOINT one_card');
+          try {
+            if (b.action === 'status') {
+              await changeStatus(client, id, who, { to: b.status as CardStatus, reason: b.reason, confirm: b.confirm });
+            } else {
+              const cur = await client.query('SELECT vehicle_id FROM cards WHERE card_uuid = $1::uuid FOR UPDATE', [id]);
+              const from = cur.rows[0].vehicle_id as string | null;
+              const to = b.vehicle_id ?? null;
+              if (from !== to) {
+                await client.query('UPDATE cards SET vehicle_id = $2, updated_at = now() WHERE card_uuid = $1::uuid', [id, to]);
+                await recordCardEvent(client, id, who, { action: 'vehicle_changed', reason: b.reason?.trim() || null, details: { vehicle_id: { from, to } } });
+              }
+            }
+            await client.query('RELEASE SAVEPOINT one_card');
+            done.push(id);
+          } catch (err) {
+            await client.query('ROLLBACK TO SAVEPOINT one_card');
+            await client.query('RELEASE SAVEPOINT one_card');
+            const serial = (await client.query('SELECT serial FROM cards WHERE card_uuid = $1::uuid', [id])).rows[0]?.serial ?? null;
+            if (err instanceof CardError) {
+              problems.push({ card_uuid: id, serial, error: err.message, ...(typeof err.extra.open_trips === 'number' ? { open_trips: err.extra.open_trips } : {}) });
+            } else if ((err as { code?: string }).code === '23503') {
+              throw new CardError(400, `Vehicle "${b.vehicle_id}" does not exist.`);
+            } else {
+              throw err;
+            }
+          }
+        }
+        if (problems.length > 0) {
+          const openTrips = problems.reduce((n, p) => n + (p.open_trips ?? 0), 0);
+          throw new CardError(409, `${problems.length} of ${ids.length} cards could not be changed. Nothing was changed.`, {
+            problems,
+            ...(openTrips > 0 ? { open_trips: openTrips } : {}),
+          });
+        }
+        return { changed: done.length };
+      });
+      res.json(result);
+    } catch (err) {
+      sendCardError(res, err);
+    }
+  });
+
+  // POST /api/cards/lookup - Admin fetches the full cards for a list or a filter (used to reprint existing cards)
+  app.post('/api/cards/lookup', admin, async (req: Request, res: Response) => {
+    const parsed = lookupSchema.safeParse(req.body);
+    if (!parsed.success) return void res.status(400).json({ error: 'Invalid request' });
+    try {
+      const ids = await resolveTargets(pool, parsed.data);
+      const { rows } = ids.length
+        ? await pool.query(
+            `SELECT c.card_uuid, c.nfc_uid, c.serial, c.label, c.status, c.vehicle_id
+             FROM cards c LEFT JOIN vehicles v ON v.id = c.vehicle_id
+             WHERE c.card_uuid = ANY($1::uuid[]) ${CARD_ORDER}`,
+            [ids],
+          )
+        : { rows: [] };
+      res.json({ cards: rows, count: rows.length });
+    } catch (err) {
+      sendCardError(res, err);
+    }
+  });
+
+  // GET /api/cards/export - The card list as a CSV, with the same filters as the registry
+  app.get('/api/cards/export', admin, async (req: Request, res: Response) => {
+    const q = exportQuery.safeParse(req.query);
+    if (!q.success) return void res.status(400).json({ error: 'Invalid query parameters' });
+    const where = cardWhere(q.data);
+    const { rows } = await pool.query(
+      `SELECT c.serial, c.status, c.nfc_uid, c.vehicle_id, v.plate_number, c.label, c.notes, c.card_uuid,
+              c.enrolled_at, c.updated_at,
+              (SELECT max(e.occurred_at) FROM events e WHERE e.card_uuid = c.card_uuid) AS last_used_at
+       FROM cards c LEFT JOIN vehicles v ON v.id = c.vehicle_id
+       WHERE ${where.sql} ${CARD_ORDER}
+       LIMIT ${EXPORT_ROW_LIMIT + 1}`,
+      where.params,
+    );
+    const truncated = rows.length > EXPORT_ROW_LIMIT;
+    const data = truncated ? rows.slice(0, EXPORT_ROW_LIMIT) : rows;
+    const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : '');
+    const header = ['serial', 'status', 'nfc_uid', 'vehicle', 'plate', 'label', 'notes', 'card_uuid', 'enrolled_at', 'updated_at', 'last_used_at'];
+    const lines = data.map((r) =>
+      [r.serial, r.status, r.nfc_uid, r.vehicle_id, r.plate_number, r.label, r.notes, r.card_uuid, iso(r.enrolled_at), iso(r.updated_at), iso(r.last_used_at)]
+        .map(csvText)
+        .join(','),
+    );
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="toms_cards.csv"');
+    res.setHeader('Access-Control-Expose-Headers', 'X-Export-Truncated, Content-Disposition');
+    res.setHeader('X-Export-Truncated', String(truncated));
+    res.send([header.join(','), ...lines].join('\r\n') + '\r\n');
   });
 
   // PATCH /api/cards/:card_uuid - Admin updates card status, label, notes, or vehicle assignment
