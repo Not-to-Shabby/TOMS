@@ -124,3 +124,29 @@ export function localToday(now = new Date()): string {
   const d = String(now.getDate()).padStart(2, '0');
   return `${now.getFullYear()}-${m}-${d}`;
 }
+
+/** "Never", "just now", "3 h ago", "yesterday", "5 days ago", or the date once it is more than a month old. */
+export function lastUsedText(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return 'Never';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return 'Never';
+  const minutes = Math.max(0, Math.round((now - then) / 60000));
+  if (minutes < 2) return 'just now';
+  if (minutes < 90) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  if (days < 31) return `${days} days ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+/** The state of a trip in words an admin recognises. */
+export function tripStateText(state: string, paid: boolean): string {
+  if (state === 'ASSIGNED_UNPAID') return 'Aboard, not paid';
+  if (state === 'ASSIGNED_PAID') return 'Aboard, paid';
+  if (state === 'RETURNED') return 'Returned';
+  if (state === 'RETURNED_UNPAID') return 'Returned unpaid';
+  if (state === 'LOST') return 'Card lost';
+  return paid ? 'Paid' : state.toLowerCase().replace(/_/g, ' ');
+}

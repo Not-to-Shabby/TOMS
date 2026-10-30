@@ -3,6 +3,7 @@ import { Plus, Search, QrCode, Printer, Download, Radio, CheckCircle2, AlertTria
 import { Link, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { api, downloadFile } from '../lib/api';
+import { lastUsedText } from '../lib/format';
 import BulkBar from '../components/BulkBar';
 import BulkDialog, { type BulkChoice, type BulkTarget } from '../components/BulkDialog';
 import { checkState, commonMoves, statusCounts, toggle, toggleAll } from '../lib/cardSelection';
@@ -28,6 +29,8 @@ interface CardItem {
   notes: string | null;
   vehicle_id: string | null;
   vehicle_plate: string | null;
+  last_used_at: string | null;
+  open_trips: number;
 }
 
 interface VehicleItem {
@@ -659,7 +662,7 @@ export default function CardRegistry() {
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>NFC UID</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Card Label</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Assigned Vehicle</th>
-                        <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Static QR Link</th>
+                        <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Last used</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Status</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center' }}>Actions</th>
                       </tr>
@@ -712,8 +715,15 @@ export default function CardRegistry() {
                               ))}
                             </select>
                           </td>
-                          <td style={{ padding: '14px 24px', fontSize: '12px', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
-                            /r/{c.card_uuid.slice(0, 8)}...
+                          <td style={{ padding: '14px 24px', fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                            <span title={c.last_used_at ? new Date(c.last_used_at).toLocaleString() : 'This card has not been used yet'}>
+                              {lastUsedText(c.last_used_at)}
+                            </span>
+                            {c.open_trips > 0 && (
+                              <div data-testid="open-trips" style={{ color: 'var(--warning)', fontWeight: 600, marginTop: 2 }}>
+                                {c.open_trips} trip{c.open_trips === 1 ? '' : 's'} open
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '14px 24px' }}>{getStatusBadge(c.status)}</td>
                           <td style={{ padding: '14px 24px', textAlign: 'center' }}>

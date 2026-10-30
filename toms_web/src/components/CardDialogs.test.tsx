@@ -190,3 +190,71 @@ describe('CardHistoryDrawer', () => {
     expect(get).toHaveBeenCalledWith('/cards/abc-123/history');
   });
 });
+
+describe('CardHistoryDrawer trips tab', () => {
+  const trip = (id: string, over: object = {}) => ({
+    trip_id: id, vehicle_id: 'BUS-1', boarding_stop_id: 'Buru-un', declared_destination_stop_id: 'City', actual_destination_stop_id: null,
+    passenger_count: 2, fare_centavos: 3600, current_state: 'ASSIGNED_UNPAID', paid: false, effective_at: '2026-10-30T08:00:00Z', ...over,
+  });
+  const card = { card_uuid: 'u1', serial: 'TOMS-0001' };
+
+  function mockGet(trips: object[] | 'fail' = []) {
+    return vi.spyOn(api, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/history')) return { data: { events: [] } };
+      if (trips === 'fail') throw { response: { status: 500 } };
+      return { data: { trips, count: trips.length } };
+    });
+  }
+
+  it('does not ask for trips until the tab is opened', async () => {
+    const get = mockGet([trip('t1')]);
+    render(<CardHistoryDrawer card={card} onClose={vi.fn()} />);
+    await screen.findByText(/Nothing recorded yet/);
+    expect(get).not.toHaveBeenCalledWith('/cards/u1/trips');
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    await screen.findAllByTestId('trip-row');
+    expect(get).toHaveBeenCalledWith('/cards/u1/trips');
+  });
+
+  it('shows each trip with its route, state, fare, passengers, vehicle and time', async () => {
+    mockGet([trip('t1'), trip('t2', { current_state: 'RETURNED', paid: true, passenger_count: 1, fare_centavos: 1800 })]);
+    render(<CardHistoryDrawer card={card} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    const rows = await screen.findAllByTestId('trip-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent('Buru-un');
+    expect(rows[0]).toHaveTextContent('Aboard, not paid');
+    expect(rows[0]).toHaveTextContent('₱36.00');
+    expect(rows[0]).toHaveTextContent('2 passengers');
+    expect(rows[0]).toHaveTextContent('BUS-1');
+    expect(rows[1]).toHaveTextContent('Returned');
+    expect(rows[1]).toHaveTextContent('1 passenger');
+    expect(rows[1]).not.toHaveTextContent('1 passengers');
+  });
+
+  it('says so when the card has not been on a trip', async () => {
+    mockGet([]);
+    render(<CardHistoryDrawer card={card} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    expect(await screen.findByText('This card has not been on a trip yet.')).toBeInTheDocument();
+  });
+
+  it('shows an error when the trips cannot load', async () => {
+    mockGet('fail');
+    render(<CardHistoryDrawer card={card} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the trips');
+  });
+
+  it('switches back to the changes without asking again', async () => {
+    const get = mockGet([trip('t1')]);
+    render(<CardHistoryDrawer card={card} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    await screen.findAllByTestId('trip-row');
+    await userEvent.click(screen.getByRole('tab', { name: 'Changes' }));
+    expect(screen.getByText(/Nothing recorded yet/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Trips' }));
+    expect(get.mock.calls.filter(([u]) => String(u).endsWith('/trips'))).toHaveLength(1);
+  });
+});
+

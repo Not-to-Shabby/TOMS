@@ -320,3 +320,30 @@ describe('CardRegistry selection, bulk and export', () => {
     expect(down).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('CardRegistry usage column', () => {
+  const used = (over: object) => ({ ...card(1), status: 'active', nfc_uid: '04AA0001', last_used_at: null, open_trips: 0, ...over });
+  const load = (rows: object[]) =>
+    vi.spyOn(api, 'get').mockImplementation(async (url: string) => (url === '/vehicles' ? { data: [] } : { data: { cards: rows, metadata: { total: rows.length, page: 1, limit: 200, totalPages: 1 } } }));
+
+  it('shows Never for a card that has not been used, and no trip badge', async () => {
+    load([used({})]);
+    renderPage();
+    expect(await screen.findByText('Never')).toBeInTheDocument();
+    expect(screen.queryByTestId('open-trips')).not.toBeInTheDocument();
+  });
+
+  it('shows how long ago a card was used', async () => {
+    load([used({ last_used_at: new Date(Date.now() - 3 * 3600_000).toISOString() })]);
+    renderPage();
+    expect(await screen.findByText('3 h ago')).toBeInTheDocument();
+  });
+
+  it('flags a card that has passengers aboard, singular and plural', async () => {
+    load([used({ open_trips: 1 }), { ...used({ open_trips: 3 }), card_uuid: 'x2', serial: 'TOMS-0002' }]);
+    renderPage();
+    const badges = await screen.findAllByTestId('open-trips');
+    expect(badges.map((b) => b.textContent)).toEqual(['1 trip open', '3 trips open']);
+  });
+});
+

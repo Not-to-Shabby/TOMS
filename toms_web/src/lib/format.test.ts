@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { discountOrDefault, localToday, categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
+import { tripStateText, lastUsedText, discountOrDefault, localToday, categoryLabel, categoryShares, eventLabel, fixAge, pesos, shortId, stopRange } from './format';
 
 describe('pesos', () => {
   it('formats centavos as pesos', () => {
@@ -163,5 +163,50 @@ describe('localToday', () => {
   it('uses the local calendar day, not the UTC day', () => {
     expect(localToday(new Date(2026, 9, 27, 0, 30))).toBe('2026-10-27');
     expect(localToday(new Date(2026, 0, 5, 23, 59))).toBe('2026-01-05');
+  });
+});
+
+describe('lastUsedText', () => {
+  const now = Date.parse('2026-10-30T12:00:00Z');
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+
+  it('says Never for a card with no use, and for a value that is not a date', () => {
+    expect(lastUsedText(null, now)).toBe('Never');
+    expect(lastUsedText(undefined, now)).toBe('Never');
+    expect(lastUsedText('not a date', now)).toBe('Never');
+  });
+
+  it('counts minutes, then hours, then days', () => {
+    expect(lastUsedText(ago(30_000), now)).toBe('just now');
+    expect(lastUsedText(ago(10 * MIN), now)).toBe('10 min ago');
+    expect(lastUsedText(ago(5 * HOUR), now)).toBe('5 h ago');
+    expect(lastUsedText(ago(30 * HOUR), now)).toBe('yesterday');
+    expect(lastUsedText(ago(5 * DAY), now)).toBe('5 days ago');
+  });
+
+  it('does not show a negative time when the clock is a little ahead', () => {
+    expect(lastUsedText(new Date(now + 5 * MIN).toISOString(), now)).toBe('just now');
+  });
+
+  it('switches to a date after about a month', () => {
+    expect(lastUsedText(ago(60 * DAY), now)).toBe(new Date(ago(60 * DAY)).toLocaleDateString());
+  });
+});
+
+describe('tripStateText', () => {
+  it('words each state a trip can be in', () => {
+    expect(tripStateText('ASSIGNED_UNPAID', false)).toBe('Aboard, not paid');
+    expect(tripStateText('ASSIGNED_PAID', true)).toBe('Aboard, paid');
+    expect(tripStateText('RETURNED', true)).toBe('Returned');
+    expect(tripStateText('RETURNED_UNPAID', false)).toBe('Returned unpaid');
+    expect(tripStateText('LOST', false)).toBe('Card lost');
+  });
+
+  it('falls back to readable words for a state it does not know', () => {
+    expect(tripStateText('SOMETHING_NEW', false)).toBe('something new');
+    expect(tripStateText('SOMETHING_NEW', true)).toBe('Paid');
   });
 });
