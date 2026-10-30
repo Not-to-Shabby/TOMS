@@ -650,3 +650,144 @@ describe('exporting the card list', () => {
     expect((await request(app).post('/api/cards/lookup').set(auth()).send({})).status).toBe(400);
   });
 });
+
+describe('how a card is used', () => {
+  const list = async (q = '') => (await request(app).get(`/api/cards${q}`).set(auth())).body.cards as {
+    serial: string; last_used_at: string | null; open_trips: number;
+  }[];
+
+  it('says when a card was last used, and null for a card never used', async () => {
+    const [used, unused] = await cards(2);
+    await openTrip(used, '04420001', 1);
+    const rows = await list('?search=BK-');
+    const byId = Object.fromEntries(rows.map((r) => [r.serial, r]));
+    expect(byId['BK-1'].last_used_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(byId['BK-2'].last_used_at).toBeNull();
+    expect(unused).toBeDefined();
+  });
+
+  it('counts the open trips on each card', async () => {
+    const [a, b] = await cards(2);
+    await openTrip(a, '04420001', 1);
+    const rows = Object.fromEntries((await list('?search=BK-')).map((r) => [r.serial, r.open_trips]));
+    expect(rows).toEqual({ 'BK-1': 1, 'BK-2': 0 });
+    expect(b).toBeDefined();
+  });
+
+  it('keeps the fields the registry already used', async () => {
+    await cards(1);
+    const [row] = await list();
+    expect(Object.keys(row)).toEqual(expect.arrayContaining(['card_uuid', 'nfc_uid', 'serial', 'label', 'status', 'enrolled_at', 'notes', 'vehicle_id', 'vehicle_plate']));
+  });
+});
+
+describe('a card\u2019s trips', () => {
+  const trips = (uuid: string, qs = '') => request(app).get(`/api/cards/${uuid}/trips${qs}`).set(auth());
+
+  it('lists the trips newest first with the fields an admin needs', async () => {
+    const [id] = await cards(1);
+    await openTrip(id, '04420001', 1);
+    await openTrip(id, '04420001', 2);
+    const res = await trips(id);
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+    expect(Object.keys(res.body.trips[0]).sort()).toEqual(
+      ['actual_destination_stop_id', 'boarding_stop_id', 'current_state', 'declared_destination_stop_id', 'effective_at', 'fare_centavos', 'paid', 'passenger_count', 'trip_id', 'vehicle_id'],
+    );
+    expect(res.body.trips[0].current_state).toBe('ASSIGNED_UNPAID');
+    expect(res.body.trips[0].fare_centavos).toBe(1500);
+    expect(res.body.trips[0].passenger_count).toBe(1);
+  });
+
+  it('only shows this card\u2019s trips', async () => {
+    const [a, b] = await cards(2);
+    await openTrip(a, '04420001', 1);
+    expect((await trips(b)).body.count).toBe(0);
+    expect((await trips(a)).body.count).toBe(1);
+  });
+
+  it('respects a limit, and refuses a bad one', async () => {
+    const [id] = await cards(1);
+    await openTrip(id, '04420001', 1);
+    await openTrip(id, '04420001', 2);
+    expect((await trips(id, '?limit=1')).body.count).toBe(1);
+    expect((await trips(id, '?limit=0')).status).toBe(400);
+    expect((await trips(id, '?limit=101')).status).toBe(400);
+  });
+
+  it('answers 404 for an unknown card, 400 for a bad id, 401 without an admin', async () => {
+    expect((await trips(randomUUID())).status).toBe(404);
+    expect((await trips('nope')).status).toBe(400);
+    const [id] = await cards(1);
+    expect((await request(app).get(`/api/cards/${id}/trips`)).status).toBe(401);
+  });
+});
+
+describe('telling the phone why a card is refused', () => {
+  const approved = (token = deviceToken, qs = '') => request(app).get(`/api/cards/approved${qs}`).set('Authorization', `Bearer ${token}`);
+
+  it('keeps the old card map exactly as it was: only active, paired cards', async () => {
+    const [active, suspended, lost, retired] = await cards(4);
+    await post(`/api/cards/${suspended}/status`, { status: 'suspended' });
+    await post(`/api/cards/${lost}/status`, { status: 'lost', reason: 'x' });
+    await post(`/api/cards/${retired}/status`, { status: 'retired', reason: 'x' });
+    const res = await approved();
+    expect(Object.values(res.body.cards)).toEqual([active]);
+    expect(res.body.count).toBe(1);
+  });
+
+  it('adds a statuses field for suspended, lost and retired cards', async () => {
+    const [, suspended, lost, retired] = await cards(4);
+    await post(`/api/cards/${suspended}/status`, { status: 'suspended' });
+    await post(`/api/cards/${lost}/status`, { status: 'lost', reason: 'x' });
+    await post(`/api/cards/${retired}/status`, { status: 'retired', reason: 'x' });
+    const row = async (id: string) => (await pool.query('SELECT nfc_uid FROM cards WHERE card_uuid = $1', [id])).rows[0].nfc_uid as string;
+    const { statuses } = (await approved()).body;
+    expect(statuses).toEqual({ [await row(suspended)]: 'suspended', [await row(lost)]: 'lost', [await row(retired)]: 'retired' });
+  });
+
+  it('leaves out cards with no chip and cards that are simply active', async () => {
+    await cards(1);
+    await post('/api/cards/batch', { count: 2, prefix: 'WAIT-' });
+    expect((await approved()).body.statuses).toEqual({});
+  });
+
+  it('is empty, not missing, when every card is fine', async () => {
+    const res = await approved();
+    expect(res.body.statuses).toEqual({});
+    expect(res.body.cards).toEqual({});
+  });
+
+  it('follows a card through lost and found', async () => {
+    const [id] = await cards(1);
+    const nfc = (await pool.query('SELECT nfc_uid FROM cards WHERE card_uuid = $1', [id])).rows[0].nfc_uid as string;
+    await post(`/api/cards/${id}/status`, { status: 'lost', reason: 'x' });
+    expect((await approved()).body.statuses[nfc]).toBe('lost');
+    await post(`/api/cards/${id}/status`, { status: 'active' });
+    const back = (await approved()).body;
+    expect(back.statuses[nfc]).toBeUndefined();
+    expect(back.cards[nfc]).toBe(id);
+  });
+
+  it('is scoped to the phone\u2019s vehicle plus the spare pool, like the card map', async () => {
+    await pool.query("INSERT INTO vehicles (id, plate_number) VALUES ('BUS-1', 'AAA-111'), ('BUS-2', 'BBB-222')");
+    const mine = (await post('/api/cards', { nfc_uid: '04110001', serial: 'V-1', vehicle_id: 'BUS-1' })).body.card_uuid;
+    const other = (await post('/api/cards', { nfc_uid: '04110002', serial: 'V-2', vehicle_id: 'BUS-2' })).body.card_uuid;
+    const spare = (await post('/api/cards', { nfc_uid: '04110003', serial: 'V-3' })).body.card_uuid;
+    for (const id of [mine, other, spare]) await post(`/api/cards/${id}/status`, { status: 'lost', reason: 'x' });
+    await pool.query("UPDATE devices SET vehicle_id = 'BUS-1' WHERE device_id = 'dev-1'");
+    const { statuses } = (await approved()).body;
+    expect(Object.keys(statuses).sort()).toEqual(['04110001', '04110003']);
+  });
+
+  it('still needs authentication', async () => {
+    expect((await request(app).get('/api/cards/approved')).status).toBe(401);
+  });
+});
+
+describe('migration 010', () => {
+  it('adds the index that trip lookups use', async () => {
+    const { rows } = await pool.query("SELECT 1 FROM pg_indexes WHERE indexname = 'events_card_time_idx'");
+    expect(rows).toHaveLength(1);
+  });
+});

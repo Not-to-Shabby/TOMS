@@ -494,7 +494,11 @@ export function registerCardRoutes(
     params.push(limit, (page - 1) * limit);
     const { rows } = await pool.query(
       `SELECT c.card_uuid, c.nfc_uid, c.serial, c.label, c.status, c.enrolled_at, c.notes,
-              c.vehicle_id, v.plate_number AS vehicle_plate
+              c.vehicle_id, v.plate_number AS vehicle_plate,
+              (SELECT max(e.effective_at) FROM events e WHERE e.card_uuid = c.card_uuid) AS last_used_at,
+              (SELECT count(*)::int FROM trip_status t
+                WHERE t.card_uuid = c.card_uuid AND t.current_state IN ${OPEN_STATES}
+                  AND t.effective_at > now() - interval '${OPEN_TRIP_WINDOW_HOURS} hours') AS open_trips
        FROM cards c
        LEFT JOIN vehicles v ON v.id = c.vehicle_id
        WHERE ${whereSql}
@@ -649,6 +653,23 @@ export function registerCardRoutes(
     res.setHeader('Access-Control-Expose-Headers', 'X-Export-Truncated, Content-Disposition');
     res.setHeader('X-Export-Truncated', String(truncated));
     res.send([header.join(','), ...lines].join('\r\n') + '\r\n');
+  });
+
+  // GET /api/cards/:card_uuid/trips - The trips a card has been on, newest first (to see how a card is used)
+  app.get('/api/cards/:card_uuid/trips', admin, async (req: Request, res: Response) => {
+    const uuid = z.string().uuid().safeParse(req.params.card_uuid);
+    const q = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).safeParse(req.query);
+    if (!uuid.success || !q.success) return void res.status(400).json({ error: 'Invalid request' });
+    const exists = await pool.query('SELECT 1 FROM cards WHERE card_uuid = $1::uuid', [uuid.data]);
+    if (exists.rowCount === 0) return void res.status(404).json({ error: 'Card not found' });
+    const { rows } = await pool.query(
+      `SELECT trip_id, vehicle_id, boarding_stop_id, declared_destination_stop_id, actual_destination_stop_id,
+              passenger_count, fare_centavos, current_state, paid, effective_at
+       FROM trip_status WHERE card_uuid = $1::uuid
+       ORDER BY effective_at DESC LIMIT $2`,
+      [uuid.data, q.data.limit],
+    );
+    res.json({ trips: rows, count: rows.length });
   });
 
   // PATCH /api/cards/:card_uuid - Admin updates card status, label, notes, or vehicle assignment
@@ -828,8 +849,20 @@ export function registerCardRoutes(
       map[r.nfc_uid] = r.card_uuid;
     }
 
+    // Cards that exist but must not be used, with the reason, so the phone can say "lost" instead of "unknown".
+    // This is an extra field: phones that do not know about it keep working on `cards` as before.
+    const blocked = await pool.query<{ nfc_uid: string; status: string }>(
+      queryVehicleId
+        ? `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL AND (vehicle_id = $1 OR vehicle_id IS NULL)`
+        : `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL`,
+      queryVehicleId ? [queryVehicleId] : [],
+    );
+    const statuses: Record<string, string> = {};
+    for (const r of blocked.rows) statuses[r.nfc_uid] = r.status;
+
     res.json({
       cards: map,
+      statuses,
       count: rows.length,
       vehicle_id: queryVehicleId ?? null,
       timestamp: new Date().toISOString(),
