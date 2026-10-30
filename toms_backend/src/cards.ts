@@ -1,7 +1,9 @@
 import type { Express, Request, RequestHandler, Response } from 'express';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 import type { Auth } from './auth';
+import { CARD_STATUSES, NEEDS_REASON, WARNS_OPEN_TRIPS, checkMove, type CardStatus } from './cardLifecycle';
+import { OPEN_STATES, OPEN_TRIP_WINDOW_HOURS } from './dashboard';
 
 export const nfcUidSchema = z
   .string()
@@ -27,11 +29,22 @@ const batchSchema = z.object({
 
 const pairSchema = z.object({ nfc_uid: nfcUidSchema });
 
+const reasonSchema = z.string().trim().min(1).max(300);
+
 const updateCardSchema = z.object({
+  // null or an empty string clears the field; leaving it out keeps what is there.
   label: z.string().trim().max(100).nullish(),
   notes: z.string().trim().max(500).nullish(),
-  status: z.enum(['active', 'suspended', 'retired', 'lost']).optional(),
+  status: z.enum(CARD_STATUSES).optional(),
   vehicle_id: z.string().trim().min(1).max(64).nullable().optional(),
+  reason: reasonSchema.nullish(),
+  /** The admin has seen the open-trip warning and wants to go ahead. */
+  confirm: z.boolean().optional(),
+});
+
+const statusChangeSchema = z.object({
+  reason: reasonSchema.nullish(),
+  confirm: z.boolean().optional(),
 });
 
 const cardsQuery = z.object({
@@ -41,6 +54,136 @@ const cardsQuery = z.object({
   status: z.enum(['unpaired', 'active', 'suspended', 'retired', 'lost']).optional(),
   vehicle_id: z.string().trim().optional(),
 });
+
+export type CardAction = 'enrolled' | 'created' | 'paired' | 'unpaired' | 'replaced' | 'status_changed' | 'edited' | 'vehicle_changed';
+
+export interface CardEventInput {
+  action: CardAction;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  fromNfcUid?: string | null;
+  toNfcUid?: string | null;
+  reason?: string | null;
+  details?: Record<string, unknown>;
+}
+
+/** Writes one history row. Call it on the same client as the change so both succeed or neither does. */
+export async function recordCardEvent(client: Pool | PoolClient, cardUuid: string, admin: string, e: CardEventInput) {
+  await client.query(
+    `INSERT INTO card_events (card_uuid, action, from_status, to_status, from_nfc_uid, to_nfc_uid, reason, admin_username, details)
+     VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)`,
+    [
+      cardUuid,
+      e.action,
+      e.fromStatus ?? null,
+      e.toStatus ?? null,
+      e.fromNfcUid ?? null,
+      e.toNfcUid ?? null,
+      e.reason ?? null,
+      admin,
+      JSON.stringify(e.details ?? {}),
+    ],
+  );
+}
+
+/** Runs fn in a transaction. A thrown error rolls everything back, including the history rows. */
+export async function inTransaction<T>(pool: Pool, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** A deliberate refusal that becomes an HTTP answer. */
+export class CardError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly extra: Record<string, unknown> = {},
+  ) {
+    super(message);
+  }
+}
+
+const CARD_COLUMNS = 'card_uuid, nfc_uid, serial, label, status, enrolled_at, notes, vehicle_id, updated_at';
+
+/** Trips still open on this card: the passenger may still be aboard with it. */
+export async function openTripCount(client: Pool | PoolClient, cardUuid: string): Promise<number> {
+  const { rows } = await client.query(
+    `SELECT count(*)::int AS n FROM trip_status
+     WHERE card_uuid = $1::uuid AND current_state IN ${OPEN_STATES}
+       AND effective_at > now() - interval '${OPEN_TRIP_WINDOW_HOURS} hours'`,
+    [cardUuid],
+  );
+  return rows[0].n as number;
+}
+
+export interface StatusChange {
+  to: CardStatus;
+  reason?: string | null;
+  confirm?: boolean;
+}
+
+/**
+ * The single place a card's status changes. Checks the move is allowed, asks for a reason when one is
+ * needed, warns about open trips unless confirmed, then writes the change and its history together.
+ * Returns the updated card. Throws CardError for anything the admin has to fix first.
+ */
+export async function changeStatus(client: PoolClient, cardUuid: string, who: string, change: StatusChange) {
+  const { rows } = await client.query(`SELECT ${CARD_COLUMNS} FROM cards WHERE card_uuid = $1::uuid FOR UPDATE`, [cardUuid]);
+  const card = rows[0];
+  if (!card) throw new CardError(404, 'Card not found');
+  const from = card.status as CardStatus;
+
+  if (from === change.to) return card;
+  const move = checkMove(from, change.to, card.nfc_uid !== null);
+  if (!move.ok) throw new CardError(409, move.error);
+
+  const reason = change.reason?.trim() || null;
+  if (NEEDS_REASON.includes(change.to) && !reason) {
+    throw new CardError(400, `Say why this card is being marked ${change.to}.`, { needs_reason: true });
+  }
+  if (WARNS_OPEN_TRIPS.includes(change.to) && !change.confirm) {
+    const open = await openTripCount(client, cardUuid);
+    if (open > 0) {
+      throw new CardError(409, `This card has ${open} open trip${open === 1 ? '' : 's'}. Confirm to continue.`, { open_trips: open });
+    }
+  }
+
+  const keepChip = change.to !== 'unpaired';
+  const updated = await client.query(
+    `UPDATE cards SET status = $2, nfc_uid = CASE WHEN $3::boolean THEN nfc_uid ELSE NULL END, updated_at = now()
+     WHERE card_uuid = $1::uuid RETURNING ${CARD_COLUMNS}`,
+    [cardUuid, change.to, keepChip],
+  );
+  await recordCardEvent(client, cardUuid, who, {
+    action: 'status_changed',
+    fromStatus: from,
+    toStatus: change.to,
+    fromNfcUid: card.nfc_uid,
+    toNfcUid: updated.rows[0].nfc_uid,
+    reason,
+  });
+  return updated.rows[0];
+}
+
+/** Turns a CardError into its HTTP answer; anything else is a real fault and is rethrown. */
+function sendCardError(res: Response, err: unknown): void {
+  if (err instanceof CardError) {
+    return void res.status(err.status).json({ error: err.message, ...err.extra });
+  }
+  throw err;
+}
+
+const adminName = (res: Response): string => (res.locals.auth as { username: string }).username;
 
 export function registerCardRoutes(
   app: Express,
@@ -58,13 +201,22 @@ export function registerCardRoutes(
 
     const { nfc_uid, card_uuid, serial, label, notes, vehicle_id } = parseRes.data;
     try {
-      const { rows } = await pool.query(
-        `INSERT INTO cards (nfc_uid, card_uuid, label, notes, vehicle_id, serial)
-         VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6)
-         RETURNING card_uuid, nfc_uid, serial, label, status, enrolled_at, notes, vehicle_id`,
-        [nfc_uid, card_uuid ?? null, label ?? null, notes ?? null, vehicle_id ?? null, serial ?? null],
-      );
-      res.status(201).json(rows[0]);
+      const card = await inTransaction(pool, async (client) => {
+        const { rows } = await client.query(
+          `INSERT INTO cards (nfc_uid, card_uuid, label, notes, vehicle_id, serial)
+           VALUES ($1, COALESCE($2::uuid, gen_random_uuid()), $3, $4, $5, $6)
+           RETURNING ${CARD_COLUMNS}`,
+          [nfc_uid, card_uuid ?? null, label ?? null, notes ?? null, vehicle_id ?? null, serial ?? null],
+        );
+        await recordCardEvent(client, rows[0].card_uuid, adminName(res), {
+          action: 'enrolled',
+          toStatus: rows[0].status,
+          toNfcUid: nfc_uid,
+          details: { vehicle_id: vehicle_id ?? null, label: label ?? null },
+        });
+        return rows[0];
+      });
+      res.status(201).json(card);
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code === '23505') {
@@ -95,13 +247,22 @@ export function registerCardRoutes(
     const serials = Array.from({ length: count }, (_, i) => `${prefix}${String(start + i).padStart(digits, '0')}`);
 
     try {
-      const { rows } = await pool.query(
-        `INSERT INTO cards (serial, label, status, vehicle_id)
-         SELECT s, s, 'unpaired', $2 FROM unnest($1::text[]) WITH ORDINALITY AS t(s, n)
-         ORDER BY n
-         RETURNING card_uuid, serial, label, status, vehicle_id`,
-        [serials, vehicle_id ?? null],
-      );
+      const rows = await inTransaction(pool, async (client) => {
+        const made = await client.query(
+          `INSERT INTO cards (serial, label, status, vehicle_id)
+           SELECT s, s, 'unpaired', $2 FROM unnest($1::text[]) WITH ORDINALITY AS t(s, n)
+           ORDER BY n
+           RETURNING card_uuid, serial, label, status, vehicle_id`,
+          [serials, vehicle_id ?? null],
+        );
+        await client.query(
+          `INSERT INTO card_events (card_uuid, action, to_status, admin_username, details)
+           SELECT x, 'created', 'unpaired', $2, jsonb_build_object('batch_size', $3::int)
+           FROM unnest($1::uuid[]) AS x`,
+          [made.rows.map((r) => r.card_uuid), adminName(res), made.rows.length],
+        );
+        return made.rows;
+      });
       rows.sort((a, b) => serials.indexOf(a.serial) - serials.indexOf(b.serial));
       res.status(201).json({ cards: rows, count: rows.length });
     } catch (err) {
@@ -135,13 +296,24 @@ export function registerCardRoutes(
     if (!uuid.success || !body.success) return void res.status(400).json({ error: 'Invalid request' });
 
     try {
-      const { rows } = await pool.query(
-        `UPDATE cards SET nfc_uid = $1, status = 'active'
-         WHERE card_uuid = $2::uuid AND status = 'unpaired' AND nfc_uid IS NULL
-         RETURNING card_uuid, nfc_uid, serial, label, status, vehicle_id`,
-        [body.data.nfc_uid, uuid.data],
-      );
-      if (rows.length === 1) return void res.json(rows[0]);
+      const paired = await inTransaction(pool, async (client) => {
+        const { rows } = await client.query(
+          `UPDATE cards SET nfc_uid = $1, status = 'active', updated_at = now()
+           WHERE card_uuid = $2::uuid AND status = 'unpaired' AND nfc_uid IS NULL
+           RETURNING ${CARD_COLUMNS}`,
+          [body.data.nfc_uid, uuid.data],
+        );
+        if (rows.length === 1) {
+          await recordCardEvent(client, uuid.data, adminName(res), {
+            action: 'paired',
+            fromStatus: 'unpaired',
+            toStatus: 'active',
+            toNfcUid: body.data.nfc_uid,
+          });
+        }
+        return rows[0] ?? null;
+      });
+      if (paired) return void res.json(paired);
     } catch (err) {
       if ((err as { code?: string }).code === '23505') {
         return void res.status(409).json({ error: 'That NFC card is already paired to another card.' });
@@ -157,14 +329,34 @@ export function registerCardRoutes(
   app.post('/api/cards/:card_uuid/unpair', admin, async (req: Request, res: Response) => {
     const uuid = z.string().uuid().safeParse(req.params.card_uuid);
     if (!uuid.success) return void res.status(400).json({ error: 'Invalid card UUID' });
-    const { rows } = await pool.query(
-      `UPDATE cards SET nfc_uid = NULL, status = 'unpaired'
-       WHERE card_uuid = $1::uuid AND nfc_uid IS NOT NULL
-       RETURNING card_uuid, nfc_uid, serial, label, status, vehicle_id`,
-      [uuid.data],
-    );
-    if (rows.length === 0) return void res.status(404).json({ error: 'Card not found or not paired' });
-    res.json(rows[0]);
+    const body = statusChangeSchema.safeParse(req.body ?? {});
+    if (!body.success) return void res.status(400).json({ error: 'Invalid request' });
+    try {
+      const card = await inTransaction(pool, async (client) => {
+        const { rows } = await client.query('SELECT status, nfc_uid FROM cards WHERE card_uuid = $1::uuid FOR UPDATE', [uuid.data]);
+        if (rows.length === 0 || rows[0].nfc_uid === null) throw new CardError(404, 'Card not found or not paired');
+        if (!body.data.confirm) {
+          const open = await openTripCount(client, uuid.data);
+          if (open > 0) throw new CardError(409, `This card has ${open} open trip${open === 1 ? '' : 's'}. Confirm to continue.`, { open_trips: open });
+        }
+        const updated = await client.query(
+          `UPDATE cards SET nfc_uid = NULL, status = 'unpaired', updated_at = now()
+           WHERE card_uuid = $1::uuid RETURNING ${CARD_COLUMNS}`,
+          [uuid.data],
+        );
+        await recordCardEvent(client, uuid.data, adminName(res), {
+          action: 'unpaired',
+          fromStatus: rows[0].status,
+          toStatus: 'unpaired',
+          fromNfcUid: rows[0].nfc_uid,
+          reason: body.data.reason?.trim() || null,
+        });
+        return updated.rows[0];
+      });
+      res.json(card);
+    } catch (err) {
+      sendCardError(res, err);
+    }
   });
 
   // GET /api/cards - Admin lists cards, with search, status filtering, and vehicle filtering
@@ -238,32 +430,48 @@ export function registerCardRoutes(
     if (!parseRes.success) {
       return void res.status(400).json({ error: 'Invalid update payload' });
     }
-    const { label, notes, status, vehicle_id } = parseRes.data;
-    const hasVehicleUpdate = 'vehicle_id' in parseRes.data;
+    const { status, vehicle_id, reason, confirm } = parseRes.data;
+    const body = parseRes.data as Record<string, unknown>;
+    const hasLabel = 'label' in body;
+    const hasNotes = 'notes' in body;
+    const hasVehicleUpdate = 'vehicle_id' in body;
+    // An empty box means "clear it".
+    const blankToNull = (v: string | null | undefined) => (v === undefined || v === null || v.trim() === '' ? null : v.trim());
+    const who = adminName(res);
 
     try {
-      const { rows } = await pool.query(
-        `UPDATE cards SET
-           label = COALESCE($1, label),
-           notes = COALESCE($2, notes),
-           status = COALESCE($3, status),
-           vehicle_id = CASE WHEN $4::boolean THEN $5 ELSE vehicle_id END
-         WHERE card_uuid = $6::uuid
-         RETURNING card_uuid, nfc_uid, serial, label, status, enrolled_at, notes, vehicle_id`,
-        [
-          label ?? null,
-          notes ?? null,
-          status ?? null,
-          hasVehicleUpdate,
-          vehicle_id ?? null,
-          cardUuid,
-        ],
-      );
+      const card = await inTransaction(pool, async (client) => {
+        const found = await client.query(`SELECT ${CARD_COLUMNS} FROM cards WHERE card_uuid = $1::uuid FOR UPDATE`, [cardUuid]);
+        const before = found.rows[0];
+        if (!before) throw new CardError(404, 'Card not found');
 
-      if (rows.length === 0) {
-        return void res.status(404).json({ error: 'Card not found' });
-      }
-      res.json(rows[0]);
+        // The status goes first: it can refuse (409 / needs a reason / open trips) before anything else is saved.
+        if (status && status !== before.status) {
+          await changeStatus(client, cardUuid, who, { to: status, reason, confirm });
+        }
+
+        const newLabel = hasLabel ? blankToNull(parseRes.data.label) : before.label;
+        const newNotes = hasNotes ? blankToNull(parseRes.data.notes) : before.notes;
+        const newVehicle = hasVehicleUpdate ? (vehicle_id ?? null) : before.vehicle_id;
+        const edits: Record<string, unknown> = {};
+        if (newLabel !== before.label) edits.label = { from: before.label, to: newLabel };
+        if (newNotes !== before.notes) edits.notes = { from: before.notes, to: newNotes };
+
+        const updated = await client.query(
+          `UPDATE cards SET label = $2, notes = $3, vehicle_id = $4, updated_at = now()
+           WHERE card_uuid = $1::uuid RETURNING ${CARD_COLUMNS}`,
+          [cardUuid, newLabel, newNotes, newVehicle],
+        );
+        if (Object.keys(edits).length > 0) await recordCardEvent(client, cardUuid, who, { action: 'edited', details: edits });
+        if (newVehicle !== before.vehicle_id) {
+          await recordCardEvent(client, cardUuid, who, {
+            action: 'vehicle_changed',
+            details: { vehicle_id: { from: before.vehicle_id, to: newVehicle } },
+          });
+        }
+        return updated.rows[0];
+      });
+      res.json(card);
     } catch (err) {
       const code = (err as { code?: string }).code;
       if (code === '23503') {
@@ -272,8 +480,37 @@ export function registerCardRoutes(
       if (code === '23514') {
         return void res.status(409).json({ error: 'A card with no NFC chip paired cannot be made active or suspended. Pair it first.' });
       }
-      throw err;
+      sendCardError(res, err);
     }
+  });
+
+  // POST /api/cards/:card_uuid/status - Admin changes status through the lifecycle rules (lost, retired, restore ...)
+  app.post('/api/cards/:card_uuid/status', admin, async (req: Request, res: Response) => {
+    const uuid = z.string().uuid().safeParse(req.params.card_uuid);
+    const body = statusChangeSchema.extend({ status: z.enum(CARD_STATUSES) }).safeParse(req.body);
+    if (!uuid.success || !body.success) return void res.status(400).json({ error: 'Invalid request' });
+    try {
+      const card = await inTransaction(pool, (client) =>
+        changeStatus(client, uuid.data, adminName(res), { to: body.data.status, reason: body.data.reason, confirm: body.data.confirm }),
+      );
+      res.json(card);
+    } catch (err) {
+      sendCardError(res, err);
+    }
+  });
+
+  // GET /api/cards/:card_uuid/history - Everything that happened to a card, newest first
+  app.get('/api/cards/:card_uuid/history', admin, async (req: Request, res: Response) => {
+    const uuid = z.string().uuid().safeParse(req.params.card_uuid);
+    if (!uuid.success) return void res.status(400).json({ error: 'Invalid card UUID' });
+    const exists = await pool.query('SELECT 1 FROM cards WHERE card_uuid = $1::uuid', [uuid.data]);
+    if (exists.rowCount === 0) return void res.status(404).json({ error: 'Card not found' });
+    const { rows } = await pool.query(
+      `SELECT id, action, from_status, to_status, from_nfc_uid, to_nfc_uid, reason, admin_username, details, at
+       FROM card_events WHERE card_uuid = $1::uuid ORDER BY at DESC, id DESC LIMIT 500`,
+      [uuid.data],
+    );
+    res.json({ events: rows });
   });
 
   // DELETE /api/cards/:card_uuid - Admin retires a card
@@ -281,14 +518,24 @@ export function registerCardRoutes(
     const uuidRes = z.string().uuid().safeParse(req.params.card_uuid);
     if (!uuidRes.success) return void res.status(400).json({ error: 'Invalid card UUID' });
     const cardUuid = uuidRes.data;
-    const r = await pool.query(
-      `UPDATE cards SET status = 'retired' WHERE card_uuid = $1::uuid AND status <> 'retired'`,
-      [cardUuid],
-    );
-    if (r.rowCount === 0) {
-      return void res.status(404).json({ error: 'Card not found or already retired' });
+    const body = statusChangeSchema.safeParse(req.body ?? {});
+    if (!body.success) return void res.status(400).json({ error: 'Invalid request' });
+    try {
+      const current = await pool.query('SELECT status FROM cards WHERE card_uuid = $1::uuid', [cardUuid]);
+      if (current.rows.length === 0) return void res.status(404).json({ error: 'Card not found or already retired' });
+      if (current.rows[0].status === 'retired') return void res.status(404).json({ error: 'Card not found or already retired' });
+      await inTransaction(pool, (client) =>
+        changeStatus(client, cardUuid, adminName(res), {
+          to: 'retired',
+          // A plain DELETE has always retired a card without asking why, so keep that working but say so in the history.
+          reason: body.data.reason ?? 'Retired through the API',
+          confirm: body.data.confirm,
+        }),
+      );
+      res.json({ status: 'success', message: 'Card retired' });
+    } catch (err) {
+      sendCardError(res, err);
     }
-    res.json({ status: 'success', message: 'Card retired' });
   });
 
   // GET /api/cards/approved - Conductor app / admin fetches active mapping { [nfc_uid]: card_uuid }

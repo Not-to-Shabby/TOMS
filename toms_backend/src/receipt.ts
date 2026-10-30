@@ -19,6 +19,16 @@ export function registerReceiptRoutes(app: Express, { pool }: { pool: Pool }) {
 
     const cardUuid = parseRes.data;
 
+    // A card that is lost, retired or suspended must not show a passenger's old receipt to whoever holds it.
+    const card = await pool.query('SELECT status FROM cards WHERE card_uuid = $1::uuid', [cardUuid]);
+    const cardStatus = card.rows[0]?.status as string | undefined;
+    if (cardStatus === 'lost' || cardStatus === 'retired' || cardStatus === 'suspended') {
+      if (req.accepts('html')) {
+        return void res.redirect(`/receipt/inactive?card=${encodeURIComponent(cardUuid)}&state=${cardStatus}`);
+      }
+      return void res.status(410).json({ active: false, card_status: cardStatus, message: 'This card is no longer in use.', card_uuid: cardUuid });
+    }
+
     // Look up the latest trip associated with this card
     const { rows } = await pool.query(
       `SELECT trip_id, receipt_token, current_state, paid, effective_at
