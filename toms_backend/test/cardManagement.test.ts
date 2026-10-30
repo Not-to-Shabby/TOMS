@@ -338,3 +338,88 @@ describe('a card that is no longer in use', () => {
     expect((await request(app).get(`/r/${uuid}`).set('Accept', 'application/json')).status).toBe(200);
   });
 });
+
+describe('replacing a chip', () => {
+  const replace = (uuid: string, body: object) => post(`/api/cards/${uuid}/replace`, body);
+
+  it('swaps the chip and keeps the serial, label and QR id', async () => {
+    const batch = await post('/api/cards/batch', { count: 1, prefix: 'RP-' });
+    const uuid = batch.body.cards[0].card_uuid;
+    await post(`/api/cards/${uuid}/pair`, { nfc_uid: '04AA0001' });
+
+    const res = await replace(uuid, { nfc_uid: '04:bb:00:02', reason: 'Chip cracked' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ card_uuid: uuid, serial: 'RP-0001', nfc_uid: '04BB0002', status: 'active' });
+  });
+
+  it('records the old and new chip together in the history', async () => {
+    const uuid = await activeCard('04AA0001');
+    await replace(uuid, { nfc_uid: '04BB0002', reason: 'Chip cracked' });
+    const [e] = await history(uuid);
+    expect(e).toMatchObject({ action: 'replaced', from_nfc_uid: '04AA0001', to_nfc_uid: '04BB0002', reason: 'Chip cracked', admin_username: 'boss' });
+  });
+
+  it('brings a lost card back into service with its new chip', async () => {
+    const uuid = await activeCard('04AA0001');
+    await post(`/api/cards/${uuid}/status`, { status: 'lost', reason: 'misplaced' });
+    const res = await replace(uuid, { nfc_uid: '04BB0002' });
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('active');
+    expect((await history(uuid))[0]).toMatchObject({ from_status: 'lost', to_status: 'active' });
+  });
+
+  it('leaves a suspended card suspended', async () => {
+    const uuid = await activeCard('04AA0001');
+    await post(`/api/cards/${uuid}/status`, { status: 'suspended' });
+    expect((await replace(uuid, { nfc_uid: '04BB0002' })).body.status).toBe('suspended');
+  });
+
+  it('lets the new chip work and the old one stop, on the phones list', async () => {
+    const uuid = await activeCard('04AA0001');
+    await replace(uuid, { nfc_uid: '04BB0002' });
+    const list = await request(app).get('/api/cards/approved').set('Authorization', `Bearer ${deviceToken}`);
+    expect(list.body.cards).toEqual({ '04BB0002': uuid });
+  });
+
+  it('refuses a chip that already belongs to another card, and changes nothing', async () => {
+    const a = await activeCard('04AA0001');
+    await activeCard('04CC0003');
+    const res = await replace(a, { nfc_uid: '04CC0003' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/already paired to another card/);
+    expect((await pool.query('SELECT nfc_uid FROM cards WHERE card_uuid = $1', [a])).rows[0].nfc_uid).toBe('04AA0001');
+    expect((await history(a)).map((e) => e.action)).toEqual(['enrolled']);
+  });
+
+  it('refuses the same chip, a card with no chip, and a retired card', async () => {
+    const uuid = await activeCard('04AA0001');
+    expect((await replace(uuid, { nfc_uid: '04AA0001' })).body.error).toMatch(/already the one on this card/);
+
+    const batch = await post('/api/cards/batch', { count: 1, prefix: 'NC-' });
+    const bare = await replace(batch.body.cards[0].card_uuid, { nfc_uid: '04DD0004' });
+    expect(bare.status).toBe(409);
+    expect(bare.body.error).toMatch(/Pair one instead/);
+
+    await post(`/api/cards/${uuid}/status`, { status: 'retired', reason: 'worn' });
+    const retired = await replace(uuid, { nfc_uid: '04BB0002' });
+    expect(retired.status).toBe(409);
+    expect(retired.body.error).toMatch(/Restore it first/);
+  });
+
+  it('warns about an open trip first, then goes ahead when confirmed', async () => {
+    const uuid = await activeCard('04A1B2C3');
+    await openTrip(uuid);
+    const warned = await replace(uuid, { nfc_uid: '04BB0002' });
+    expect(warned.status).toBe(409);
+    expect(warned.body.open_trips).toBe(1);
+    expect((await replace(uuid, { nfc_uid: '04BB0002', confirm: true })).status).toBe(200);
+  });
+
+  it('answers 404 for an unknown card, 400 for bad input, and needs an admin', async () => {
+    expect((await replace(randomUUID(), { nfc_uid: '04BB0002' })).status).toBe(404);
+    expect((await replace('nope', { nfc_uid: '04BB0002' })).status).toBe(400);
+    const uuid = await activeCard();
+    expect((await replace(uuid, { nfc_uid: 'xyz' })).status).toBe(400);
+    expect((await request(app).post(`/api/cards/${uuid}/replace`).send({ nfc_uid: '04BB0002' })).status).toBe(401);
+  });
+});

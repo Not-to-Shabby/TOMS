@@ -325,6 +325,51 @@ export function registerCardRoutes(
     res.status(409).json({ error: 'This card is already paired. Unpair it first to pair it again.' });
   });
 
+  // POST /api/cards/:card_uuid/replace - Admin swaps the chip on a card that already has one (chip lost or broken),
+  // keeping the printed QR, serial and history. One step, so the card is never left without a chip.
+  app.post('/api/cards/:card_uuid/replace', admin, async (req: Request, res: Response) => {
+    const uuid = z.string().uuid().safeParse(req.params.card_uuid);
+    const body = pairSchema.extend({ reason: reasonSchema.nullish(), confirm: z.boolean().optional() }).safeParse(req.body);
+    if (!uuid.success || !body.success) return void res.status(400).json({ error: 'Invalid request' });
+    const newUid = body.data.nfc_uid;
+
+    try {
+      const card = await inTransaction(pool, async (client) => {
+        const { rows } = await client.query(`SELECT ${CARD_COLUMNS} FROM cards WHERE card_uuid = $1::uuid FOR UPDATE`, [uuid.data]);
+        const before = rows[0];
+        if (!before) throw new CardError(404, 'Card not found');
+        if (before.nfc_uid === null) throw new CardError(409, 'This card has no chip yet. Pair one instead of replacing.');
+        if (before.status === 'retired') throw new CardError(409, 'A retired card cannot get a new chip. Restore it first.');
+        if (before.nfc_uid === newUid) throw new CardError(409, 'That chip is already the one on this card.');
+        if (!body.data.confirm) {
+          const open = await openTripCount(client, uuid.data);
+          if (open > 0) throw new CardError(409, `This card has ${open} open trip${open === 1 ? '' : 's'}. Confirm to continue.`, { open_trips: open });
+        }
+        // A lost card that gets a new chip is back in service. A suspended one stays suspended on purpose.
+        const status = before.status === 'lost' ? 'active' : before.status;
+        const updated = await client.query(
+          `UPDATE cards SET nfc_uid = $2, status = $3, updated_at = now() WHERE card_uuid = $1::uuid RETURNING ${CARD_COLUMNS}`,
+          [uuid.data, newUid, status],
+        );
+        await recordCardEvent(client, uuid.data, adminName(res), {
+          action: 'replaced',
+          fromStatus: before.status,
+          toStatus: status,
+          fromNfcUid: before.nfc_uid,
+          toNfcUid: newUid,
+          reason: body.data.reason?.trim() || null,
+        });
+        return updated.rows[0];
+      });
+      res.json(card);
+    } catch (err) {
+      if ((err as { code?: string }).code === '23505') {
+        return void res.status(409).json({ error: 'That NFC card is already paired to another card.' });
+      }
+      sendCardError(res, err);
+    }
+  });
+
   // POST /api/cards/:card_uuid/unpair - Admin clears a wrong pairing so the card can be paired again
   app.post('/api/cards/:card_uuid/unpair', admin, async (req: Request, res: Response) => {
     const uuid = z.string().uuid().safeParse(req.params.card_uuid);
