@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { ArrowLeft, Download, Upload, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../lib/api';
@@ -49,10 +49,39 @@ export default function CardDesigner() {
   const [progress, setProgress] = useState<[number, number] | null>(null);
   const dragRef = useRef<Drag>(null);
   const previewRefs = useRef<Partial<Record<Side, HTMLDivElement | null>>>({});
+  const location = useLocation();
+  // Set when the admin chose Reprint in the registry: the cards to load instead of making a new batch.
+  const reprintRequest = (location.state as { reprint?: { card_uuids?: string[]; filter?: object } } | null)?.reprint ?? null;
+  const [reprintNote, setReprintNote] = useState<string | null>(null);
 
   useEffect(() => {
     getPublicBase().then(setBase);
     api.get('/vehicles').then((r) => setVehicles(r.data || [])).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!reprintRequest) return;
+    let cancelled = false;
+    api
+      .post<{ cards: (ExportCard & { status: string; nfc_uid: string | null })[] }>('/cards/lookup', reprintRequest)
+      .then((r) => {
+        if (cancelled) return;
+        // A card with no serial cannot be named on the print, so it is left out and the admin is told.
+        const usable = r.data.cards.filter((c) => c.serial);
+        const skipped = r.data.cards.length - usable.length;
+        setCards(usable.map((c) => ({ serial: c.serial as string, card_uuid: c.card_uuid })));
+        setReprintNote(
+          `Reprinting ${usable.length} existing card${usable.length === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} without a serial left out)` : ''}. Their QR codes stay the same.`,
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.response?.data?.error ?? 'Could not load the cards to reprint.');
+      });
+    return () => {
+      cancelled = true;
+    };
+    // The request arrives once, with the navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const baseUrl = (baseOverride.trim() || base?.url || window.location.origin).replace(/\/+$/, '');
@@ -218,7 +247,9 @@ export default function CardDesigner() {
           {base && !base.fromServer && ' The server has no PUBLIC_BASE_URL set, so this is the address you have open right now.'}
         </div>
 
-        {cards.length === 0 ? (
+        {reprintNote ? (
+          <div role="status" style={{ color: 'var(--success)' }}>{reprintNote}</div>
+        ) : cards.length === 0 ? (
           <button type="button" className="btn-primary" onClick={generate} disabled={busy !== null} style={{ padding: '12px 20px', borderRadius: 8, justifySelf: 'start' }}>
             Create {count} unpaired cards
           </button>

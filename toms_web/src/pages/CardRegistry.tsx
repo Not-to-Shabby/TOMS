@@ -1,8 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Search, QrCode, Printer, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Plus, Search, QrCode, Printer, Download, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { api } from '../lib/api';
+import { api, downloadFile } from '../lib/api';
+import BulkBar from '../components/BulkBar';
+import BulkDialog, { type BulkChoice, type BulkTarget } from '../components/BulkDialog';
+import { checkState, commonMoves, statusCounts, toggle, toggleAll } from '../lib/cardSelection';
 import LoadError from '../components/LoadError';
 import PairPrintedCardModal from '../components/PairPrintedCardModal';
 import CardActionDialog from '../components/CardActionDialog';
@@ -48,6 +51,11 @@ export default function CardRegistry() {
   const [editing, setEditing] = useState<CardItem | null>(null);
   const [historyOf, setHistoryOf] = useState<CardItem | null>(null);
   const [replacingChip, setReplacingChip] = useState<CardItem | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<{ choice: BulkChoice; target: BulkTarget } | null>(null);
+  const [allMatching, setAllMatching] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const navigate = useNavigate();
   const [pending, setPending] = useState<{
     confirmation: Confirmation;
     run: (reason: string, confirm: boolean) => Promise<unknown>;
@@ -299,6 +307,45 @@ export default function CardRegistry() {
     }
   }
 
+  // Only cards still in the list count as selected, so a filter or reload cannot leave a hidden selection behind.
+  const picked = useMemo(() => cards.filter((c) => selected.has(c.card_uuid)), [cards, selected]);
+  const moves = useMemo(() => commonMoves(picked.map((c) => ({ card_uuid: c.card_uuid, status: c.status, nfc_uid: c.nfc_uid }))), [picked]);
+  const filterNow = useMemo(
+    () => ({
+      search: search.trim() || undefined,
+      status: statusFilter !== 'all' ? statusFilter : undefined,
+      vehicle_id: vehicleFilter !== 'all' ? vehicleFilter : undefined,
+    }),
+    [search, statusFilter, vehicleFilter],
+  );
+  const everythingPicked = allMatching ? cards : picked;
+
+  function targetNow(): BulkTarget {
+    return allMatching
+      ? { filter: filterNow, count: cards.length, counts: statusCounts(cards) }
+      : { ids: picked.map((c) => c.card_uuid), count: picked.length, counts: statusCounts(picked) };
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    setAllMatching(false);
+  }
+
+  function exportCsv() {
+    const qs = new URLSearchParams();
+    if (filterNow.search) qs.set('search', filterNow.search);
+    if (filterNow.status) qs.set('status', filterNow.status);
+    if (filterNow.vehicle_id) qs.set('vehicle_id', filterNow.vehicle_id);
+    downloadFile(`/cards/export${qs.toString() ? `?${qs}` : ''}`, 'toms_cards.csv')
+      .then(({ truncated }) => setNotice(truncated ? 'The export was cut at 50,000 rows. Narrow the filter for the rest.' : null))
+      .catch(() => setRowError('Could not export the card list.'));
+  }
+
+  function reprint() {
+    const t = targetNow();
+    navigate('/cards/designer', { state: { reprint: t.ids ? { card_uuids: t.ids } : { filter: t.filter } } });
+  }
+
   const unpairedCards = useMemo(() => cards.filter((c) => c.status === 'unpaired'), [cards]);
   const unpairedCount = unpairedCards.length;
 
@@ -378,6 +425,14 @@ export default function CardRegistry() {
           <Printer size={18} />
           <span>Print-ready cards</span>
         </Link>
+        <button
+          onClick={exportCsv}
+          title="Download the card list as a CSV, with the filters you have set"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}
+        >
+          <Download size={18} />
+          <span>Export CSV</span>
+        </button>
         <button
           onClick={() => setShowPairModal(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap', border: '1px solid var(--accent)', background: 'rgba(0, 210, 255, 0.12)', color: 'var(--accent)', cursor: 'pointer', fontWeight: 700 }}
@@ -494,6 +549,17 @@ export default function CardRegistry() {
       </div>
 
       <LoadError message={loadError} onRetry={() => { loadVehicles(); loadCards(); }} />
+      {notice && <div role="status" style={{ color: 'var(--warning)', fontSize: 13 }}>{notice}</div>}
+      <BulkBar
+        count={allMatching ? cards.length : picked.length}
+        counts={statusCounts(everythingPicked)}
+        moves={allMatching ? commonMoves(cards.map((c) => ({ card_uuid: c.card_uuid, status: c.status, nfc_uid: c.nfc_uid }))) : moves}
+        vehicles={vehicles}
+        allMatching={!allMatching && picked.length > 0 && picked.length < cards.length ? { total: cards.length, onSelect: () => setAllMatching(true) } : null}
+        onChoose={(choice) => setBulk({ choice, target: targetNow() })}
+        onReprint={reprint}
+        onClear={clearSelection}
+      />
 
       {/* Grouped Vehicle Card Decks */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '16px' }}>
@@ -579,6 +645,17 @@ export default function CardRegistry() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+                        <th style={{ padding: '12px 0 12px 24px', width: 24 }}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select all in ${section.title}`}
+                            checked={checkState(selected, section.items.map((i) => i.card_uuid)) === 'all'}
+                            ref={(el) => {
+                              if (el) el.indeterminate = checkState(selected, section.items.map((i) => i.card_uuid)) === 'some';
+                            }}
+                            onChange={() => { setAllMatching(false); setSelected((s) => toggleAll(s, section.items.map((i) => i.card_uuid))); }}
+                          />
+                        </th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>NFC UID</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Card Label</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Assigned Vehicle</th>
@@ -589,7 +666,23 @@ export default function CardRegistry() {
                     </thead>
                     <tbody>
                       {section.items.map((c) => (
-                        <tr key={c.card_uuid} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <tr key={c.card_uuid} style={{ borderBottom: '1px solid var(--border)', background: selected.has(c.card_uuid) || allMatching ? 'rgba(0, 210, 255, 0.07)' : undefined }}>
+                          <td style={{ padding: '14px 0 14px 24px', width: 24 }}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${c.serial ?? c.label ?? c.card_uuid.slice(0, 8)}`}
+                              checked={allMatching || selected.has(c.card_uuid)}
+                              onChange={() => {
+                                if (allMatching) {
+                                  // Leaving "everything that matches": keep every card ticked except this one.
+                                  setAllMatching(false);
+                                  setSelected(new Set(cards.map((x) => x.card_uuid).filter((id) => id !== c.card_uuid)));
+                                } else {
+                                  setSelected((s) => toggle(s, c.card_uuid));
+                                }
+                              }}
+                            />
+                          </td>
                           <td style={{ padding: '14px 24px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
                             {c.nfc_uid ?? '—'}
                           </td>
@@ -677,6 +770,19 @@ export default function CardRegistry() {
             onPaired={loadCards}
           />
         </Modal>
+      )}
+      {bulk && (
+        <BulkDialog
+          choice={bulk.choice}
+          target={bulk.target}
+          onClose={() => setBulk(null)}
+          onDone={(changed) => {
+            setBulk(null);
+            clearSelection();
+            setNotice(`Changed ${changed} card${changed === 1 ? '' : 's'}.`);
+            loadCards();
+          }}
+        />
       )}
       {showPairModal && (
         <PairPrintedCardModal

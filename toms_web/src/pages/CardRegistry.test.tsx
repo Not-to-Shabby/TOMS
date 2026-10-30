@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as apiModule from '../lib/api';
 import { api } from '../lib/api';
 import CardRegistry from './CardRegistry';
 
@@ -19,7 +20,26 @@ const card = (n: number) => ({
   vehicle_plate: null,
 });
 
-const renderPage = () => render(<MemoryRouter><CardRegistry /></MemoryRouter>);
+/** Stands in for the designer, so a test can see what the registry sent it. */
+function DesignerStub() {
+  const state = useLocation().state as { reprint?: { card_uuids?: string[] } } | null;
+  return (
+    <div>
+      designer opened
+      <div>{`reprint:${state?.reprint?.card_uuids?.join(',') ?? ''}`}</div>
+    </div>
+  );
+}
+
+const renderPage = () =>
+  render(
+    <MemoryRouter initialEntries={['/cards']}>
+      <Routes>
+        <Route path="/cards" element={<CardRegistry />} />
+        <Route path="/cards/designer" element={<DesignerStub />} />
+      </Routes>
+    </MemoryRouter>,
+  );
 
 describe('CardRegistry loading', () => {
   it('fetches every page so a batch larger than one page is not cut off', async () => {
@@ -176,5 +196,127 @@ describe('CardRegistry row actions', () => {
     renderPage();
     await openMenu();
     expect(screen.queryByRole('menuitem', { name: 'Replace chip' })).not.toBeInTheDocument();
+  });
+});
+
+describe('CardRegistry selection, bulk and export', () => {
+  const act = (n: number, status = 'active') => ({ ...card(n), status, nfc_uid: `04AA00${String(n).padStart(2, '0')}` });
+  const rows = [act(1), act(2), act(3)];
+
+  function load(list: object[] = rows) {
+    vi.spyOn(api, 'get').mockImplementation(async (url: string) => {
+      if (url === '/vehicles') return { data: [{ id: 'BUS-1', plate_number: 'AAA-111', max_capacity: 20, status: 'ok' }] };
+      return { data: { cards: list, metadata: { total: list.length, page: 1, limit: 200, totalPages: 1 } } };
+    });
+  }
+  const tick = (serial: string) => userEvent.click(screen.getByRole('checkbox', { name: `Select ${serial}` }));
+  /** The confirm button inside the bulk dialog, not the same-named button in the bar behind it. */
+  const confirmInDialog = (name: string) => userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name }));
+
+  it('shows no bulk bar until a card is ticked, then the count and what they are', async () => {
+    load();
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    expect(screen.queryByRole('region', { name: 'Selected cards' })).not.toBeInTheDocument();
+    await tick('TOMS-0001');
+    await tick('TOMS-0002');
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    expect(screen.getByText('(2 active)')).toBeInTheDocument();
+  });
+
+  it('offers only the changes every ticked card can make', async () => {
+    load([act(1), act(2, 'lost'), act(3)]);
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await tick('TOMS-0001');
+    expect(screen.getByRole('button', { name: 'Suspend' })).toBeInTheDocument();
+    await tick('TOMS-0002'); // lost: can only be found again or retired
+    expect(screen.queryByRole('button', { name: 'Suspend' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retire' })).toBeInTheDocument();
+  });
+
+  it('selects and clears a whole group with its header checkbox', async () => {
+    load();
+    renderPage();
+    const all = await screen.findByRole('checkbox', { name: /Select all in/ });
+    await userEvent.click(all);
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+    await userEvent.click(all);
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+  });
+
+  it('suspends the ticked cards in one request, then reloads and reports', async () => {
+    load();
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { changed: 2 } });
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await tick('TOMS-0001');
+    await tick('TOMS-0003');
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend' }));
+    await confirmInDialog('Suspend');
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post).toHaveBeenCalledWith('/cards/bulk', expect.objectContaining({ action: 'status', status: 'suspended', card_uuids: [rows[0].card_uuid, rows[2].card_uuid] }));
+    expect(await screen.findByText('Changed 2 cards.')).toBeInTheDocument();
+    expect(screen.queryByText(/selected/)).not.toBeInTheDocument();
+  });
+
+  it('can switch to everything that matches the filter, and sends the filter, not the ids', async () => {
+    load();
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { changed: 3 } });
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await tick('TOMS-0001');
+    await userEvent.click(screen.getByRole('button', { name: 'Select all 3 that match' }));
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Suspend' }));
+    await confirmInDialog('Suspend');
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    const sent = post.mock.calls[0][1] as Record<string, unknown>;
+    expect(sent.filter).toEqual({});
+    expect(sent.card_uuids).toBeUndefined();
+  });
+
+  it('unticking one card after "all that match" keeps the others selected', async () => {
+    load();
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await tick('TOMS-0001');
+    await userEvent.click(screen.getByRole('button', { name: 'Select all 3 that match' }));
+    await tick('TOMS-0002');
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+  });
+
+  it('hands the ticked cards to the designer when Reprint is chosen', async () => {
+    load();
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await tick('TOMS-0002');
+    await userEvent.click(screen.getByRole('button', { name: /Reprint/ }));
+    expect(await screen.findByText('designer opened')).toBeInTheDocument();
+    expect(await screen.findByText(`reprint:${rows[1].card_uuid}`)).toBeInTheDocument();
+  });
+
+  it('downloads the list with the filters currently set', async () => {
+    load();
+    const down = vi.spyOn(apiModule, 'downloadFile').mockResolvedValue({ truncated: false });
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await userEvent.type(screen.getByPlaceholderText(/Search by NFC UID/), 'TOMS');
+    await userEvent.click(screen.getByRole('button', { name: 'active' }));
+    await userEvent.click(screen.getByRole('button', { name: /Export CSV/ }));
+    await waitFor(() => expect(down).toHaveBeenCalled());
+    expect(down).toHaveBeenLastCalledWith('/cards/export?search=TOMS&status=active', 'toms_cards.csv');
+  });
+
+  it('warns when the export was cut short, and reports a failed export', async () => {
+    load();
+    const down = vi.spyOn(apiModule, 'downloadFile').mockResolvedValueOnce({ truncated: true }).mockRejectedValueOnce(new Error('x'));
+    renderPage();
+    await screen.findByRole('checkbox', { name: 'Select TOMS-0001' });
+    await userEvent.click(screen.getByRole('button', { name: /Export CSV/ }));
+    expect(await screen.findByText(/cut at 50,000 rows/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Export CSV/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not export the card list.');
+    expect(down).toHaveBeenCalledTimes(2);
   });
 });
