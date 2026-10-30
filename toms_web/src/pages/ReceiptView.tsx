@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, CheckCircle2, Clock, Bus, MapPin, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../lib/api';
+import { notInUseMessage } from '../lib/notInUse';
 
 interface PassengerLine {
   categoryId: string | null;
@@ -68,7 +69,10 @@ export default function ReceiptView() {
 
       if (!targetToken) {
         const inactiveCard = searchParams.get('card');
-        if (inactiveCard) {
+        const notInUse = notInUseMessage(searchParams.get('state'));
+        if (notInUse) {
+          setError(notInUse);
+        } else if (inactiveCard) {
           setError('This passenger card is in circulation, but has no active trip recorded right now.');
         } else {
           setError('Receipt not found or link has expired.');
@@ -79,7 +83,9 @@ export default function ReceiptView() {
       const res = await axios.get(`${API_BASE}/api/receipt/${targetToken}`);
       setReceipt(res.data);
     } catch (err: any) {
-      if (err.response?.status === 404) {
+      if (err.response?.status === 410) {
+        setError(notInUseMessage(err.response?.data?.card_status) ?? 'This card is no longer in use.');
+      } else if (err.response?.status === 404) {
         setError('No active trip found for this card right now. Receipts become active once your boarding is recorded.');
       } else {
         setError('Could not load receipt. Please check your internet connection.');

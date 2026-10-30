@@ -113,3 +113,32 @@ describe('ReceiptView card link', () => {
     expect(get).toHaveBeenCalledWith(expect.stringContaining('/api/r/'), { headers: { Accept: 'application/json' } });
   });
 });
+
+describe('ReceiptView for a card that is out of service', () => {
+  const at = (path: string) =>
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/receipt/inactive" element={<ReceiptView />} />
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+  it('shows the lost-card message when the server redirected with state=lost', async () => {
+    at('/receipt/inactive?card=abc&state=lost');
+    expect(await screen.findByText(/reported lost/)).toBeInTheDocument();
+  });
+
+  it('shows the not-in-use message when the server answers 410', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 410, data: { card_status: 'retired' } } });
+    at('/r/11111111-2222-4333-8444-555555555555');
+    expect(await screen.findByText(/has been retired/)).toBeInTheDocument();
+  });
+
+  it('falls back to a generic line for a 410 with no status', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 410, data: {} } });
+    at('/r/11111111-2222-4333-8444-555555555555');
+    expect(await screen.findByText('This card is no longer in use.')).toBeInTheDocument();
+  });
+});

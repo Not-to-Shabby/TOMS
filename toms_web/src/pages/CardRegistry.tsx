@@ -4,6 +4,13 @@ import { Link } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { api } from '../lib/api';
 import LoadError from '../components/LoadError';
+import PairPrintedCardModal from '../components/PairPrintedCardModal';
+import CardActionDialog from '../components/CardActionDialog';
+import { changeStatus } from '../lib/cardRequests';
+import CardEditDialog from '../components/CardEditDialog';
+import CardHistoryDrawer from '../components/CardHistoryDrawer';
+import CardRowMenu from '../components/CardRowMenu';
+import { confirmationFor, type CardStatus, type Confirmation, type RowAction } from '../lib/cardLifecycle';
 import { loadErrorMessage } from '../lib/loadError';
 
 interface CardItem {
@@ -35,6 +42,14 @@ export default function CardRegistry() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [vehicleFilter, setVehicleFilter] = useState<string>('all');
   const [showEnrollModal, setShowEnrollModal] = useState(false);
+  const [showPairModal, setShowPairModal] = useState(false);
+  const [editing, setEditing] = useState<CardItem | null>(null);
+  const [historyOf, setHistoryOf] = useState<CardItem | null>(null);
+  const [pending, setPending] = useState<{
+    confirmation: Confirmation;
+    run: (reason: string, confirm: boolean) => Promise<unknown>;
+  } | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
   const [selectedCardForQr, setSelectedCardForQr] = useState<CardItem | null>(null);
 
   // Enrollment Form State
@@ -231,13 +246,28 @@ export default function CardRegistry() {
     }
   }
 
-  async function handleStatusChange(cardUuid: string, newStatus: string) {
-    try {
-      await api.patch(`/cards/${cardUuid}`, { status: newStatus });
-      loadCards();
-    } catch {
-      alert('Failed to update card status');
+  /** Runs a row action. Risky ones open a confirmation first; harmless ones go straight through. */
+  function handleRowAction(card: CardItem, action: RowAction, to?: CardStatus) {
+    setRowError(null);
+    const name = card.serial ?? card.label ?? card.card_uuid.slice(0, 8);
+    if (action === 'edit') return void setEditing(card);
+    if (action === 'history') return void setHistoryOf(card);
+
+    const confirmation = confirmationFor(action, name);
+    if (action === 'unpair' && confirmation) {
+      return void setPending({
+        confirmation,
+        run: (reason, confirm) => api.post(`/cards/${card.card_uuid}/unpair`, { reason: reason || undefined, confirm: confirm || undefined }),
+      });
     }
+    if (!to) return;
+    if (confirmation) {
+      return void setPending({ confirmation, run: (reason, confirm) => changeStatus(card.card_uuid, to, reason, confirm) });
+    }
+    // Activate, found, restore: nothing to confirm.
+    changeStatus(card.card_uuid, to, '', false)
+      .then(loadCards)
+      .catch((err) => setRowError(err?.response?.data?.error ?? 'Could not change the card.'));
   }
 
   async function handleVehicleReassign(cardUuid: string, newVehicleId: string) {
@@ -264,6 +294,9 @@ export default function CardRegistry() {
         return <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600 }}>Retired</span>;
     }
   }
+
+  const unpairedCards = useMemo(() => cards.filter((c) => c.status === 'unpaired'), [cards]);
+  const unpairedCount = unpairedCards.length;
 
   // Group cards by vehicle
   const groupedSections = useMemo(() => {
@@ -341,6 +374,13 @@ export default function CardRegistry() {
           <Printer size={18} />
           <span>Print-ready cards</span>
         </Link>
+        <button
+          onClick={() => setShowPairModal(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap', border: '1px solid var(--accent)', background: 'rgba(0, 210, 255, 0.12)', color: 'var(--accent)', cursor: 'pointer', fontWeight: 700 }}
+        >
+          <QrCode size={18} />
+          <span>Pair printed card{unpairedCount > 0 ? ` (${unpairedCount} waiting)` : ''}</span>
+        </button>
         <button
           onClick={() => openEnrollForVehicle()}
           className="btn-primary"
@@ -589,22 +629,12 @@ export default function CardRegistry() {
                                 <QrCode size={15} />
                                 <span>QR</span>
                               </button>
-                              {c.status === 'active' && (
-                                <button
-                                  onClick={() => handleStatusChange(c.card_uuid, 'suspended')}
-                                  style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--warning)', cursor: 'pointer', fontSize: '11px' }}
-                                >
-                                  Suspend
-                                </button>
-                              )}
-                              {c.status === 'suspended' && (
-                                <button
-                                  onClick={() => handleStatusChange(c.card_uuid, 'active')}
-                                  style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--success)', cursor: 'pointer', fontSize: '11px' }}
-                                >
-                                  Activate
-                                </button>
-                              )}
+                              <CardRowMenu
+                                serial={c.serial ?? c.label ?? c.card_uuid.slice(0, 8)}
+                                status={c.status}
+                                hasChip={c.nfc_uid !== null}
+                                onAction={(action, to) => handleRowAction(c, action, to)}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -618,6 +648,31 @@ export default function CardRegistry() {
         )}
       </div>
 
+      {rowError && (
+        <div role="alert" style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 1100, padding: '10px 16px', borderRadius: 8, background: '#2a1215', border: '1px solid var(--danger)', color: 'var(--danger)', fontSize: 14 }}>
+          {rowError}
+        </div>
+      )}
+      {pending && (
+        <CardActionDialog
+          confirmation={pending.confirmation}
+          run={pending.run}
+          onDone={() => { setPending(null); loadCards(); }}
+          onClose={() => setPending(null)}
+        />
+      )}
+      {editing && (
+        <CardEditDialog card={editing} onDone={() => { setEditing(null); loadCards(); }} onClose={() => setEditing(null)} />
+      )}
+      {historyOf && <CardHistoryDrawer card={historyOf} onClose={() => setHistoryOf(null)} />}
+      {showPairModal && (
+        <PairPrintedCardModal
+          waiting={unpairedCards.map((c) => ({ card_uuid: c.card_uuid, serial: c.serial, label: c.label, status: c.status, nfc_uid: c.nfc_uid }))}
+          onClose={() => setShowPairModal(false)}
+          onChanged={loadCards}
+        />
+      )}
+
       {/* Modal: Enroll Card with Web NFC & Vehicle Selection */}
       {showEnrollModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
@@ -625,6 +680,9 @@ export default function CardRegistry() {
             <h3 style={{ margin: '0 0 16px 0', fontSize: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
               Enroll Physical NFC Card
             </h3>
+            <div style={{ marginBottom: 16, padding: '10px 14px', fontSize: 13, color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 8 }}>
+              Cards with a printed QR code? Close this and use <strong>Pair printed card</strong> instead. This form is for blank cards with no printed QR.
+            </div>
 
             {hasWebNfc ? (
               <div style={{ marginBottom: '20px', padding: '16px', background: 'rgba(0, 210, 255, 0.08)', border: '1px solid var(--accent)', borderRadius: '8px', textAlign: 'center' }}>
