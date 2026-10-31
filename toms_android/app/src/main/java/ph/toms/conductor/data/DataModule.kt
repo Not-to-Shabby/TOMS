@@ -18,6 +18,8 @@ import ph.toms.conductor.data.db.DatabaseKeyProvider
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.feedback.DeviceFeedback
 import ph.toms.conductor.feedback.Feedback
+import ph.toms.conductor.security.KeystoreSecretCipher
+import ph.toms.conductor.security.SecretCipher
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.PrefsDeviceConfig
 import ph.toms.conductor.settings.PrefsSettings
@@ -63,6 +65,9 @@ object ProvidersModule {
             .addMigrations(*ALL_MIGRATIONS)
             .build()
     }
+
+    @Provides @Singleton
+    fun secretCipher(): SecretCipher = KeystoreSecretCipher()
 
     @Provides @Singleton
     fun deviceId(config: DeviceConfigStore): String = config.deviceId
