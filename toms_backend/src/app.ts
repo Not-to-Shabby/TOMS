@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { LoginLimiter, makeAuth, newDeviceCredential, verifyPassword } from './auth';
 import { fleetStatus, registerDashboardRoutes } from './dashboard';
 import { registerCardRoutes } from './cards';
+import { registerDeviceConfigRoutes } from './deviceConfig';
 import { registerFareRoutes, FARES_UPLOAD_DIR } from './fares';
 import { registerReceiptRoutes } from './receipt';
 import { envelopeSchema, ingestEvents } from './ingest';
@@ -230,6 +231,7 @@ export function createApp({
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
   registerCardRoutes(app, { pool, admin, auth });
   registerFareRoutes(app, { pool, admin });
+  registerDeviceConfigRoutes(app, { pool, auth });
   registerReceiptRoutes(app, { pool, limiter: publicLimiter ?? new RateLimiter(120, 60_000) });
 
   // --- Routes -------------------------------------------------------------------------------
