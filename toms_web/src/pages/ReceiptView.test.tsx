@@ -27,9 +27,11 @@ const sampleReceipt = {
   conductor_name: 'John Doe',
   timestamp: '2026-10-08T08:30:00Z',
   ltfrb: {
+    configured: true,
     order_reference: 'LTFRB Memorandum 2024-001',
     document_url: '/uploads/fares/sample-signed.png',
     base_fare: 15.0,
+    base_distance_km: 4.0,
     per_km_fare: 2.5,
     discounts: { student: 20, pwd: 20, senior: 20 },
   },
@@ -111,6 +113,38 @@ describe('ReceiptView card link', () => {
     );
     expect(await screen.findByText(/No active trip found for this card/)).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith(expect.stringContaining('/api/r/'), { headers: { Accept: 'application/json' } });
+  });
+});
+
+describe('ReceiptView with no fare matrix on file', () => {
+  it('shows the passenger fare without a verified-rate section, and never prints a made-up rate', async () => {
+    const noMatrix = { ...sampleReceipt, ltfrb: { configured: false } };
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: noMatrix });
+    render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(screen.getAllByText('₱36.00').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('LTFRB Verified Fare Matrix')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Fare matrix not on file'));
+    expect(screen.getByText(/does not show a verified rate/)).toBeInTheDocument();
+    expect(screen.queryByText(/Base Fare/)).not.toBeInTheDocument();
+  });
+
+  it('explains a rate-limited lookup in plain words', async () => {
+    vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 429 } });
+    render(
+      <MemoryRouter initialEntries={['/r/11111111-2222-4333-8444-555555555555']}>
+        <Routes>
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/Too many lookups from this connection/)).toBeInTheDocument();
   });
 });
 

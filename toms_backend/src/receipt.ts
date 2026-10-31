@@ -1,10 +1,22 @@
-import type { Express, Request, Response } from 'express';
+import type { Express, Request, RequestHandler, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
+import type { RateLimiter } from './rateLimit';
 
 const uuidSchema = z.string().uuid();
 
-export function registerReceiptRoutes(app: Express, { pool }: { pool: Pool }) {
+export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: Pool; limiter: RateLimiter }) {
+  // These lookups are the only unauthenticated reads that touch the database. One address gets a generous
+  // allowance per minute, because a bus full of passengers on one mobile carrier can share an address.
+  const gate: RequestHandler = (req, res, next) => {
+    const wait = limiter.hit(req.ip ?? 'unknown');
+    if (wait > 0) {
+      res.setHeader('Retry-After', String(wait));
+      return void res.status(429).json({ error: 'Too many requests. Try again shortly.' });
+    }
+    next();
+  };
+
   // Public static QR handler: /r/:card_uuid or /api/r/:card_uuid
   // When a passenger scans the QR code printed on their reusable card, it opens /r/:card_uuid
   const handleCardQr = async (req: Request, res: Response) => {
@@ -67,11 +79,11 @@ export function registerReceiptRoutes(app: Express, { pool }: { pool: Pool }) {
     });
   };
 
-  app.get('/r/:card_uuid', handleCardQr);
-  app.get('/api/r/:card_uuid', handleCardQr);
+  app.get('/r/:card_uuid', gate, handleCardQr);
+  app.get('/api/r/:card_uuid', gate, handleCardQr);
 
   // GET /api/receipt/:receipt_token - Fetch full digital receipt for a specific trip
-  app.get('/api/receipt/:receipt_token', async (req: Request, res: Response) => {
+  app.get('/api/receipt/:receipt_token', gate, async (req: Request, res: Response) => {
     const parseRes = uuidSchema.safeParse(req.params.receipt_token);
     if (!parseRes.success) {
       return void res.status(400).json({ error: 'Invalid receipt token format' });
@@ -102,8 +114,10 @@ export function registerReceiptRoutes(app: Express, { pool }: { pool: Pool }) {
          rt.name AS route_name,
          c.name AS conductor_name,
          e.passengers,
+         fm.id AS matrix_id,
          fm.order_reference,
          fm.document_url AS ltfrb_document_url,
+         fm.base_distance_km AS matrix_base_distance_km,
          fm.base_fare AS matrix_base_fare,
          fm.per_km_fare AS matrix_per_km_fare,
          fm.discounts AS matrix_discounts
@@ -152,13 +166,20 @@ export function registerReceiptRoutes(app: Express, { pool }: { pool: Pool }) {
       route_name: r.route_name ?? 'Transit Route',
       conductor_name: r.conductor_name ?? 'Assigned Conductor',
       timestamp: r.effective_at,
-      ltfrb: {
-        order_reference: r.order_reference ?? 'LTFRB Mandated Fare Matrix',
-        document_url: r.ltfrb_document_url ?? null,
-        base_fare: r.matrix_base_fare != null ? Number(r.matrix_base_fare) : 15.0,
-        per_km_fare: r.matrix_per_km_fare != null ? Number(r.matrix_per_km_fare) : 2.5,
-        discounts: r.matrix_discounts ?? { student: 20, pwd: 20, senior: 20 },
-      },
+      // Only a matrix that is on file is shown. Nothing is filled in for a missing one, so a receipt never
+      // states a rate that was not configured.
+      ltfrb:
+        r.matrix_id == null
+          ? { configured: false }
+          : {
+              configured: true,
+              order_reference: r.order_reference ?? null,
+              document_url: r.ltfrb_document_url ?? null,
+              base_fare: Number(r.matrix_base_fare),
+              base_distance_km: Number(r.matrix_base_distance_km),
+              per_km_fare: Number(r.matrix_per_km_fare),
+              discounts: r.matrix_discounts ?? {},
+            },
     });
   });
 }

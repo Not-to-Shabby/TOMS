@@ -9,6 +9,7 @@ import { registerCardRoutes } from './cards';
 import { registerFareRoutes, FARES_UPLOAD_DIR } from './fares';
 import { registerReceiptRoutes } from './receipt';
 import { envelopeSchema, ingestEvents } from './ingest';
+import { RateLimiter } from './rateLimit';
 
 export interface AppDeps {
   pool: Pool;
@@ -18,6 +19,15 @@ export interface AppDeps {
   /** Pushes a live update to dashboard clients. A no-op in tests. */
   emit?: (event: string, payload: unknown) => void;
   loginLimiter?: LoginLimiter;
+  /** Failed logins from one address across all names. Defaults to 20 per 15 minutes. */
+  loginIpLimiter?: LoginLimiter;
+  /** Lookups of the public card and receipt links per address. Defaults to 120 per minute. */
+  publicLimiter?: RateLimiter;
+  /**
+   * Proxies in front of this server that add to X-Forwarded-For. Production has Caddy and nginx, so 2.
+   * Zero (the default) means the socket address is the client, which is right when nothing is in front.
+   */
+  trustProxyHops?: number;
   /** IANA zone used for "today" in reports. Defaults to the Philippines. */
   reportTimezone?: string;
 }
@@ -44,12 +54,26 @@ const stopBody = z.object({
   radius_m: z.number().int().positive().optional(),
 });
 
-export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => undefined, loginLimiter, reportTimezone = 'Asia/Manila' }: AppDeps) {
+export function createApp({
+  pool,
+  jwtSecret,
+  corsOrigins = [],
+  emit = () => undefined,
+  loginLimiter,
+  loginIpLimiter,
+  publicLimiter,
+  trustProxyHops = 0,
+  reportTimezone = 'Asia/Manila',
+}: AppDeps) {
   const app = express();
   const auth = makeAuth({ pool, jwtSecret });
   const limiter = loginLimiter ?? new LoginLimiter();
+  const ipLimiter = loginIpLimiter ?? new LoginLimiter(20);
   const admin = auth.requireRole('admin');
 
+  // Behind Caddy and nginx every request arrives from a proxy, so req.ip must come from X-Forwarded-For.
+  // Trusting a fixed number of hops (not "all") stops a client from typing its own address into the header.
+  app.set('trust proxy', trustProxyHops);
   app.disable('x-powered-by');
   app.use(
     cors({
@@ -74,8 +98,13 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
       const body = parse(loginBody, req.body, res);
       if (!body) return;
 
-      const key = `${role}:${body.username.toLowerCase()}`;
-      const wait = limiter.blockedFor(key);
+      // Two counters, both keyed by the client address. The name counter stops one address guessing one account,
+      // so a stranger guessing the same name from elsewhere cannot lock the real account out. The address counter
+      // caps how many different names one address can try.
+      const addr = req.ip ?? 'unknown';
+      const nameKey = `${role}:${body.username.toLowerCase()}@${addr}`;
+      const addrKey = `${role}:ip:${addr}`;
+      const wait = Math.max(limiter.blockedFor(nameKey), ipLimiter.blockedFor(addrKey));
       if (wait > 0) {
         res.setHeader('Retry-After', String(Math.ceil(wait / 1000)));
         return void res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
@@ -86,10 +115,11 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
       const user = rows[0];
       const ok = await verifyPassword(user?.password_hash, body.password);
       if (!user || !ok) {
-        limiter.fail(key);
+        limiter.fail(nameKey);
+        ipLimiter.fail(addrKey);
         return void res.status(401).json({ error: 'Invalid username or password' });
       }
-      limiter.reset(key);
+      limiter.reset(nameKey);
 
       const token = auth.signToken(role, user.id, user.username);
       res.json({ token, user: { id: user.id, username: user.username, name: user.name ?? user.username, role } });
@@ -200,7 +230,7 @@ export function createApp({ pool, jwtSecret, corsOrigins = [], emit = () => unde
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
   registerCardRoutes(app, { pool, admin, auth });
   registerFareRoutes(app, { pool, admin });
-  registerReceiptRoutes(app, { pool });
+  registerReceiptRoutes(app, { pool, limiter: publicLimiter ?? new RateLimiter(120, 60_000) });
 
   // --- Routes -------------------------------------------------------------------------------
 

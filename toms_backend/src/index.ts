@@ -16,13 +16,18 @@ async function main() {
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  // Proxies in front of this server that add to X-Forwarded-For. Production has Caddy and nginx: 2.
+  const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+  if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) {
+    throw new Error('TRUST_PROXY_HOPS must be a whole number from 0 to 10 (production behind Caddy and nginx: 2)');
+  }
 
   const pool = createPool(databaseUrl);
   const applied = await migrate(pool);
   if (applied.length > 0) console.log('Applied migrations:', applied.join(', '));
   const reportTimezone = await assertTimezone(pool, process.env.REPORT_TIMEZONE ?? 'Asia/Manila');
 
-  const { server } = createServer({ pool, jwtSecret, corsOrigins, reportTimezone });
+  const { server } = createServer({ pool, jwtSecret, corsOrigins, reportTimezone, trustProxyHops });
   const port = Number(process.env.PORT) || 3000;
   server.listen(port, () => console.log(`TOMS backend listening on port ${port}`));
 }

@@ -1,18 +1,20 @@
-www.perchbuilds.me {
-	redir https://perchbuilds.me{uri} permanent
-}
-
-perchbuilds.me {
+# Only this name points at the server. The apex and www stay on GitHub Pages (Namecheap DNS).
+toms.perchbuilds.me {
 	encode zstd gzip
-	# A printed card's QR link goes straight to the API, which answers with the redirect to the receipt.
-	handle /r/* {
-		reverse_proxy api:3000
-	}
-	handle {
-		reverse_proxy web:8080
+	# Everything goes to the web container. Its nginx sends /api and /socket.io to the API. The app itself
+	# handles /r/:card_uuid: a passenger sees the receipt, and a signed-in admin sees the pairing screen.
+	reverse_proxy web:8080 {
+		# Set the header to the address Caddy sees, replacing anything the client sent. The API counts two proxies
+		# from the right (TRUST_PROXY_HOPS=2), so a client cannot choose its own address.
+		header_up X-Forwarded-For {http.request.remote.host}
 	}
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Report-only: a violation is logged in the browser console and nothing is blocked. Check the dashboard
+		# (map, fonts, live feed) and the receipt page, then change this name to Content-Security-Policy.
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; connect-src 'self' wss: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com https://router.project-osrm.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 	}
 }

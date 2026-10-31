@@ -28,6 +28,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set in deploy/.env}
       CORS_ORIGINS: ${PUBLIC_BASE_URL}
       REPORT_TIMEZONE: ${REPORT_TIMEZONE:-Asia/Manila}
+      # Caddy sets X-Forwarded-For to the client's address (replacing anything the client sent) and nginx appends the
+      # address it sees, so the real client is the second address from the right. Change this only if a proxy is added or removed.
+      TRUST_PROXY_HOPS: 2
     volumes:
       - uploads:/app/uploads
     depends_on:

@@ -27,6 +27,8 @@ export default function FareSettings() {
   const [routes, setRoutes] = useState<RouteOption[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<number | null>(null);
   const [activeMatrix, setActiveMatrix] = useState<ActiveFareMatrix | null>(null);
+  // True only when the server answered 404: nothing is published for the route. A failed request is not this.
+  const [noMatrixOnFile, setNoMatrixOnFile] = useState(false);
 
   // Form State
   const [baseFare, setBaseFare] = useState('15.00');
@@ -65,11 +67,27 @@ export default function FareSettings() {
   }
 
   async function loadActiveFare(routeId: number | null) {
+    // Clear the form first, so a route with no matrix never shows the previous route's amounts. Base distance,
+    // rounding and discounts go back to the server's own defaults; the fare and per-km amounts stay blank so a
+    // route with no matrix cannot be published by accident.
+    setActiveMatrix(null);
+    setNoMatrixOnFile(false);
+    setBaseFare('');
+    setBaseDistanceKm('4.0');
+    setPerKmFare('');
+    setRoundingStep('100');
+    setStudentDiscount('20');
+    setPwdDiscount('20');
+    setSeniorDiscount('20');
+    setOrderReference('');
+    setPreviewUrl(null);
+    setDocumentFile(null);
     try {
       const url = routeId ? `/fares/active/${routeId}` : '/fares/active';
       const res = await api.get(url);
       const data: ActiveFareMatrix = res.data;
       setActiveMatrix(data);
+      setNoMatrixOnFile(false);
 
       // Prepopulate form with active settings
       setBaseFare(Number(data.base_fare).toFixed(2));
@@ -84,7 +102,12 @@ export default function FareSettings() {
       setPreviewUrl(data.document_url ? `${API_BASE}${data.document_url}` : null);
       setDocumentFile(null);
     } catch (err) {
-      console.error('Failed to load active fare matrix:', err);
+      setActiveMatrix(null);
+      if ((err as { response?: { status?: number } }).response?.status === 404) {
+        setNoMatrixOnFile(true);
+      } else {
+        console.error('Failed to load active fare matrix:', err);
+      }
     }
   }
 
@@ -165,6 +188,11 @@ export default function FareSettings() {
         {activeMatrix?.order_reference && (
           <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px', color: 'var(--success)', fontSize: '13px', fontWeight: 600 }}>
             <ShieldCheck size={16} /> Verified under: {activeMatrix.order_reference}
+          </span>
+        )}
+        {noMatrixOnFile && (
+          <span style={{ marginLeft: 'auto', color: 'var(--warning, #f59e0b)', fontSize: '13px', fontWeight: 600 }}>
+            No fare matrix is published for this route yet. Passenger receipts show no rate until you publish one.
           </span>
         )}
       </div>

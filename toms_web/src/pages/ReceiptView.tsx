@@ -31,13 +31,17 @@ interface ReceiptData {
   route_name: string;
   conductor_name: string;
   timestamp: string;
-  ltfrb: {
-    order_reference: string;
-    document_url: string | null;
-    base_fare: number;
-    per_km_fare: number;
-    discounts: Record<string, number>;
-  };
+  ltfrb:
+    | { configured: false }
+    | {
+        configured: true;
+        order_reference: string | null;
+        document_url: string | null;
+        base_fare: number;
+        base_distance_km: number;
+        per_km_fare: number;
+        discounts: Record<string, number>;
+      };
 }
 
 export default function ReceiptView() {
@@ -87,6 +91,8 @@ export default function ReceiptView() {
         setError(notInUseMessage(err.response?.data?.card_status) ?? 'This card is no longer in use.');
       } else if (err.response?.status === 404) {
         setError('No active trip found for this card right now. Receipts become active once your boarding is recorded.');
+      } else if (err.response?.status === 429) {
+        setError('Too many lookups from this connection. Wait a minute, then scan again.');
       } else {
         setError('Could not load receipt. Please check your internet connection.');
       }
@@ -118,7 +124,8 @@ export default function ReceiptView() {
   }
 
   const isPaid = receipt.status === 'PAID';
-  const ltfrbDocUrl = receipt.ltfrb.document_url ? `${API_BASE}${receipt.ltfrb.document_url}` : null;
+  const matrix = receipt.ltfrb.configured ? receipt.ltfrb : null;
+  const ltfrbDocUrl = matrix?.document_url ? `${API_BASE}${matrix.document_url}` : null;
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0d14', color: '#fff', padding: '24px 16px', display: 'flex', justifyContent: 'center' }}>
@@ -255,20 +262,26 @@ export default function ReceiptView() {
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '14px' }}>
-              <ShieldCheck size={18} color="var(--success)" />
-              <span>LTFRB Verified Fare Matrix</span>
+              <ShieldCheck size={18} color={matrix ? 'var(--success)' : 'var(--warning, #f59e0b)'} />
+              <span>{matrix ? 'LTFRB Verified Fare Matrix' : 'Fare matrix not on file'}</span>
             </div>
             {showLtfrbDoc ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </button>
 
-          {showLtfrbDoc && (
+          {showLtfrbDoc && !matrix && (
+            <div style={{ marginTop: '16px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+              No fare matrix is on file for this route, so this receipt does not show a verified rate.
+            </div>
+          )}
+
+          {showLtfrbDoc && matrix && (
             <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '13px' }}>
               <div style={{ color: 'var(--text-secondary)' }}>
-                Government Reference: <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{receipt.ltfrb.order_reference}</span>
+                Government Reference: <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{matrix.order_reference ?? 'Not recorded'}</span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                <div>Base Fare: ₱{receipt.ltfrb.base_fare.toFixed(2)} (first 4km)</div>
-                <div>Per Km: ₱{receipt.ltfrb.per_km_fare.toFixed(2)}</div>
+                <div>Base Fare: ₱{matrix.base_fare.toFixed(2)} (first {matrix.base_distance_km.toFixed(1)} km)</div>
+                <div>Per Km: ₱{matrix.per_km_fare.toFixed(2)}</div>
               </div>
 
               {ltfrbDocUrl ? (

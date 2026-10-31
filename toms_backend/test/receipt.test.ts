@@ -5,6 +5,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createApp } from '../src/app';
+import { RateLimiter } from '../src/rateLimit';
 import { adminToken, createTestDb, enrollDevice, TEST_JWT_SECRET } from './helpers';
 
 let pool: Pool;
@@ -86,6 +87,36 @@ describe('Verified Fares & Document Upload', () => {
     const activeRes = await request(app).get(`/api/fares/active/${routeId}`);
     expect(activeRes.status).toBe(200);
     expect(Number(activeRes.body.base_fare)).toBe(16.0);
+  });
+});
+
+describe('Active fare with nothing on file', () => {
+  it('answers 404 instead of a made-up matrix, for a route and for all routes', async () => {
+    const byRoute = await request(app).get('/api/fares/active/123');
+    expect(byRoute.status).toBe(404);
+    expect(byRoute.body.base_fare).toBeUndefined();
+    const all = await request(app).get('/api/fares/active');
+    expect(all.status).toBe(404);
+  });
+
+  it('refuses a blank base fare or per-km fare instead of saving zero as the fare', async () => {
+    const routeRes = await pool.query("INSERT INTO routes (name) VALUES ('Blank Fare Route') RETURNING id");
+    const routeId = routeRes.rows[0].id;
+    const blankBase = await request(app)
+      .post('/api/fares')
+      .set('Authorization', `Bearer ${admin}`)
+      .field('route_id', routeId)
+      .field('base_fare', '')
+      .field('per_km_fare', '2.5');
+    const blankPerKm = await request(app)
+      .post('/api/fares')
+      .set('Authorization', `Bearer ${admin}`)
+      .field('route_id', routeId)
+      .field('base_fare', '15')
+      .field('per_km_fare', '');
+    expect(blankBase.status).toBe(400);
+    expect(blankPerKm.status).toBe(400);
+    expect((await pool.query('SELECT count(*) FROM fare_matrices')).rows[0].count).toBe(0);
   });
 });
 
@@ -239,5 +270,52 @@ describe('Static Card QR & Public Receipt Flow', () => {
     expect(res.body.route_name).toBe('Buru-un Loop');
     expect(res.body.ltfrb.order_reference).toBe('LTFRB Order 2024-001');
     expect(res.body.ltfrb.document_url).toBe('/uploads/fares/sample-signed.png');
+  });
+
+  it('shows no fare figures when no matrix is on file, instead of made-up defaults', async () => {
+    const cardUuid = randomUUID();
+    const tripId = randomUUID();
+    await request(app).post('/api/events').set('Authorization', `Bearer ${deviceToken}`).send({
+      events: [
+        {
+          event_id: randomUUID(),
+          device_id: 'dev-1',
+          local_seq: 1,
+          type: 'trip_created',
+          created_at_millis: Date.now(),
+          payload: {
+            tripId,
+            cardUuid,
+            nfcUid: '6FF1AD39',
+            boardingStopId: 'A',
+            declaredDestinationStopId: 'B',
+            computedFareCentavos: 1500,
+            fareCentavos: 1500,
+            discountCentavos: 0,
+            fareVersion: 0,
+            passengerCount: 1,
+            passengers: [],
+          },
+        },
+      ],
+    });
+    const { rows } = await pool.query('SELECT receipt_token FROM trip_status WHERE trip_id = $1', [tripId]);
+    const res = await request(app).get(`/api/receipt/${rows[0].receipt_token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ltfrb).toEqual({ configured: false });
+    expect(res.body.ltfrb).not.toHaveProperty('base_fare');
+    expect(res.body.ltfrb).not.toHaveProperty('per_km_fare');
+  });
+
+  it('limits how fast one address can look up public card and receipt links', async () => {
+    const limited = createApp({ pool, jwtSecret: TEST_JWT_SECRET, publicLimiter: new RateLimiter(3, 60_000) });
+    const cardUuid = randomUUID();
+    for (let i = 0; i < 3; i++) {
+      expect((await request(limited).get(`/r/${cardUuid}`).set('Accept', 'application/json')).status).toBe(404);
+    }
+    const blocked = await request(limited).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers['retry-after'])).toBeGreaterThan(0);
+    expect((await request(limited).get(`/api/receipt/${randomUUID()}`)).status).toBe(429);
   });
 });
