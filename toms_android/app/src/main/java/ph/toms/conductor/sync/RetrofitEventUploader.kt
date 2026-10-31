@@ -125,7 +125,12 @@ class RetrofitEventUploader @Inject constructor(
         return try {
             val res = api.uploadEvents("Bearer $token", EventUploadEnvelope(items, channel))
             val acked = (res.accepted + res.duplicates).toSet()
-            UploadResult.Acked(acked)
+            // A rejection names the event by ID, or only by its index in the batch.
+            val rejected = res.rejected.mapNotNull { r ->
+                val id = r.eventId ?: batch.getOrNull(r.index)?.eventId
+                id?.let { it to r.reason.ifBlank { "rejected by server" } }
+            }.toMap()
+            UploadResult.Acked(acked, rejected)
         } catch (e: HttpException) {
             UploadResult.Failed("HTTP ${e.code()}: ${e.message()}")
         } catch (e: Exception) {

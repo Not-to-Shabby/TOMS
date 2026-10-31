@@ -97,6 +97,27 @@ class RetrofitEventUploaderTest {
     }
 
     @Test
+    fun `rejected events are reported with their reason by id or by batch index`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"accepted":["e1"],"duplicates":[],"rejected":[
+                        {"index":1,"event_id":"e2","reason":"unknown device"},
+                        {"index":2,"reason":"bad payload"}]}""",
+                ),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.upload(listOf(pendingEvent("e1", 1), pendingEvent("e2", 2), pendingEvent("e3", 3)))
+
+        res as UploadResult.Acked
+        assertEquals(setOf("e1"), res.eventIds)
+        assertEquals(mapOf("e2" to "unknown device", "e3" to "bad payload"), res.rejected)
+    }
+
+    @Test
     fun `HTTP 401 returns failed with status`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
         val config = TestConfigStore(initialUrl = server.url("/").toString())

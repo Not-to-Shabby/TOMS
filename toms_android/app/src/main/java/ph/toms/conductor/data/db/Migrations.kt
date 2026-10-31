@@ -68,7 +68,18 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+/**
+ * 3 to 4: an outbox event the server refuses is parked with its reason instead of being retried forever.
+ * Rows already there stay as they were: pending ones are still pending, delivered ones still delivered.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE outbox ADD COLUMN parkedAtMillis INTEGER")
+        db.execSQL("ALTER TABLE outbox ADD COLUMN parkedReason TEXT")
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
 @kotlinx.serialization.Serializable
 data class PassengerLineRecord(

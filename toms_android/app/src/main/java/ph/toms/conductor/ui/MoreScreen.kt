@@ -142,13 +142,14 @@ fun MoreScreen(
             enabled = !state.isUploading && state.isEnrolled,
         )
         state.uploadMessage?.let {
-            Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded")) TomsColors.Good else TomsColors.Bad)
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded") && "refused" !in it) TomsColors.Good else TomsColors.Bad)
         }
 
         Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Text("For whoever is fixing the app, not for the conductor.", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
 
         Fact("Waiting to upload", "${state.pendingCount} events")
+        if (state.parkedCount > 0) Fact("Refused by the server", "${state.parkedCount} events, not retried")
         Fact("Fare version", state.config.fare.version.toString())
         Fact("Approved cards", state.config.approvedCards.size.toString())
         Fact("Trips open", state.openTrips.size.toString())

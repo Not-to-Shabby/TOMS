@@ -85,6 +85,8 @@ data class ConductorState(
     val result: BoardResult? = null,
     val openTrips: List<OpenTrip> = emptyList(),
     val pendingCount: Int = 0,
+    /** Events the server refused. Kept for whoever fixes the cause, and not retried. */
+    val parkedCount: Int = 0,
     val fix: GeoFix? = null,
     val nearestStop: StopMatch? = null,
     val calcMode: CalcMode = CalcMode.CHANGE,
@@ -144,6 +146,7 @@ class ConductorViewModel @Inject constructor(
         }
         viewModelScope.launch { reloadCards() }
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
+        viewModelScope.launch { trips.parkedCount().collect { n -> _state.update { it.copy(parkedCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
         viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
         viewModelScope.launch {
@@ -425,6 +428,8 @@ class ConductorViewModel @Inject constructor(
             syncApprovedCards()
             val msg = if (report.failure != null) {
                 "Upload failed: ${report.failure}"
+            } else if (report.parked > 0) {
+                "Uploaded ${report.delivered} event(s). ${report.parked} refused by the server and set aside"
             } else {
                 "Uploaded ${report.delivered} event(s)"
             }

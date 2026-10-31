@@ -73,7 +73,10 @@ data class EventEntity(
     val cardState: String? = null,
 )
 
-/** One row per event awaiting or having completed delivery. [deliveredAtMillis] null means pending. */
+/**
+ * One row per event awaiting or having completed delivery. [deliveredAtMillis] null means pending, unless
+ * [parkedAtMillis] is set: the server refused the event with [parkedReason], so it is kept but not retried.
+ */
 @Entity(tableName = "outbox")
 data class OutboxEntity(
     @PrimaryKey val eventId: String,
@@ -81,6 +84,8 @@ data class OutboxEntity(
     val deliveredAtMillis: Long? = null,
     val attemptCount: Int = 0,
     val lastAttemptAtMillis: Long? = null,
+    val parkedAtMillis: Long? = null,
+    val parkedReason: String? = null,
 )
 
 @Entity(tableName = "config_cache")

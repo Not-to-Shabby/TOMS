@@ -170,6 +170,23 @@ class MigrationTest {
         }
     }
 
+    @Test fun `version 4 keeps pending and delivered outbox rows and leaves them unparked`() {
+        helper.createDatabase(name, 3).apply {
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e1', 'dev', 'x', '{}', 1)")
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e2', 'dev', 'x', '{}', 2)")
+            execSQL("INSERT INTO outbox (eventId, attemptCount) VALUES ('e1', 3)")
+            execSQL("INSERT INTO outbox (eventId, deliveryChannel, deliveredAtMillis, attemptCount) VALUES ('e2', 'data_a', 9, 1)")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(name, 4, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT eventId, attemptCount, deliveredAtMillis, parkedAtMillis, parkedReason FROM outbox ORDER BY eventId").use {
+            assertTrue(it.moveToNext()); assertEquals("e1", it.getString(0)); assertEquals(3, it.getInt(1)); assertTrue(it.isNull(2)); assertTrue(it.isNull(3)); assertTrue(it.isNull(4))
+            assertTrue(it.moveToNext()); assertEquals("e2", it.getString(0)); assertEquals(9L, it.getLong(2)); assertTrue(it.isNull(3))
+        }
+    }
+
     @Test fun `a group saved after the migration round-trips with every line`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val room = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()

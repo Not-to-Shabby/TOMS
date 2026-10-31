@@ -73,18 +73,27 @@ interface OutboxDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(row: OutboxEntity): Long
 
-    @Query("SELECT COUNT(*) FROM outbox WHERE deliveredAtMillis IS NULL")
+    @Query("SELECT COUNT(*) FROM outbox WHERE deliveredAtMillis IS NULL AND parkedAtMillis IS NULL")
     fun pendingCount(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM outbox WHERE deliveredAtMillis IS NULL")
+    @Query("SELECT COUNT(*) FROM outbox WHERE deliveredAtMillis IS NULL AND parkedAtMillis IS NULL")
     suspend fun pendingCountNow(): Int
+
+    @Query("SELECT COUNT(*) FROM outbox WHERE parkedAtMillis IS NOT NULL AND deliveredAtMillis IS NULL")
+    fun parkedCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM outbox WHERE parkedAtMillis IS NOT NULL AND deliveredAtMillis IS NULL")
+    suspend fun parkedCountNow(): Int
+
+    @Query("SELECT parkedReason FROM outbox WHERE eventId = :eventId")
+    suspend fun parkedReason(eventId: String): String?
 
     @Query(
         """
         SELECT e.seq AS seq, e.eventId AS eventId, e.deviceId AS deviceId, e.type AS type,
                e.payload AS payload, e.createdAtMillis AS createdAtMillis, o.attemptCount AS attemptCount
         FROM outbox o JOIN events e ON e.eventId = o.eventId
-        WHERE o.deliveredAtMillis IS NULL
+        WHERE o.deliveredAtMillis IS NULL AND o.parkedAtMillis IS NULL
         ORDER BY e.seq ASC
         LIMIT :limit
         """,
@@ -106,6 +115,19 @@ interface OutboxDao {
         """,
     )
     suspend fun markAttempt(eventIds: List<String>, at: Long): Int
+
+    @Query(
+        """
+        UPDATE outbox SET parkedAtMillis = :at, parkedReason = :reason,
+               attemptCount = attemptCount + 1, lastAttemptAtMillis = :at
+        WHERE eventId IN (:eventIds) AND deliveredAtMillis IS NULL
+        """,
+    )
+    suspend fun markParked(eventIds: List<String>, reason: String, at: Long): Int
+
+    /** Puts every parked event back in the queue, for when a rejection turns out to have been the server's fault. */
+    @Query("UPDATE outbox SET parkedAtMillis = NULL, parkedReason = NULL WHERE parkedAtMillis IS NOT NULL AND deliveredAtMillis IS NULL")
+    suspend fun unparkAll(): Int
 }
 
 @Dao
@@ -119,7 +141,7 @@ interface ConfigDao {
 
 @Database(
     entities = [TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class, ShiftEntity::class],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class TomsDatabase : RoomDatabase() {

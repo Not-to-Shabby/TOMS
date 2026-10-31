@@ -116,6 +116,9 @@ class TripRepository(
 
     fun pendingCount(): Flow<Int> = db.outbox().pendingCount()
 
+    /** Events the server refused. They are kept, not retried, and are not counted in [pendingCount]. */
+    fun parkedCount(): Flow<Int> = db.outbox().parkedCount()
+
     // ---- shifts
 
     suspend fun openShift(): Shift? = db.shifts().open()?.toDomain()
