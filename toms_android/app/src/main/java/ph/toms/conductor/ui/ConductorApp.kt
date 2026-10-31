@@ -44,7 +44,14 @@ import ph.toms.conductor.ui.theme.TomsColors
 import ph.toms.conductor.ui.theme.TouchTarget
 
 @Composable
-fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, state: ConductorState) {
+fun ConductorApp(
+    vm: ConductorViewModel,
+    syncVm: SyncViewModel,
+    nfcReader: NfcReader,
+    header: String,
+    state: ConductorState,
+    sync: SyncState,
+) {
     val activity = LocalContext.current as Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val availability = remember { nfcReader.availability(activity) }
@@ -83,7 +90,7 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
     state.endedSummary?.let { ShiftEndedDialog(it, state.config, state.endedContinues, vm::acknowledgeEnded) }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        StatusStrip(header, availability, state)
+        StatusStrip(header, availability, state, sync)
         Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
             val summary = state.summary
             val shift = state.shift
@@ -122,10 +129,12 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
                 Tab.Calc -> CalcScreen(state = state, onMode = vm::setCalcMode)
                 Tab.More -> MoreScreen(
                     state = state,
+                    sync = sync,
                     onHand = vm::setHandedness,
-                    onServerUrl = vm::updateServerUrl,
-                    onDeviceToken = vm::updateDeviceToken,
-                    onUploadNow = vm::flushNow,
+                    onServerUrl = syncVm::updateServerUrl,
+                    onDeviceToken = syncVm::updateDeviceToken,
+                    // A finished upload is followed by a refresh of the approved card list.
+                    onUploadNow = { syncVm.flushNow(onFlushed = vm::syncApprovedCards) },
                     onShiftSummary = vm::openSummary,
                 )
             }
@@ -137,7 +146,7 @@ fun ConductorApp(vm: ConductorViewModel, nfcReader: NfcReader, header: String, s
 /** One line, dots and words, so a glance is enough: which bus, is the card reader on, is GPS good, what is unsent. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorState) {
+private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorState, sync: SyncState) {
     val gps: Pair<String, Status> = run {
         val fix = state.fix
         when {
@@ -161,7 +170,7 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
         ) {
             StatusChip(reader.first, reader.second)
             StatusChip(gps.first, gps.second)
-            if (state.pendingCount > 0) StatusChip("${state.pendingCount} unsent", Status.Neutral)
+            if (sync.pendingCount > 0) StatusChip("${sync.pendingCount} unsent", Status.Neutral)
         }
     }
 }

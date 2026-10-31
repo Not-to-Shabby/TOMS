@@ -17,6 +17,7 @@ import ph.toms.conductor.ui.EndShiftDialog
 import ph.toms.conductor.ui.LoginScreen
 import ph.toms.conductor.ui.SessionViewModel
 import ph.toms.conductor.ui.ShiftEndedDialog
+import ph.toms.conductor.ui.SyncViewModel
 import ph.toms.conductor.ui.theme.TomsTheme
 
 @AndroidEntryPoint
@@ -25,6 +26,7 @@ class MainActivity : ComponentActivity() {
     /** Sign-in and the choice of vehicle and route. The stub accepts any name until real sign-in (Phase 1.4). */
     private val session: SessionViewModel by viewModels()
     private val conductor: ConductorViewModel by viewModels()
+    private val sync: SyncViewModel by viewModels()
 
     @Inject lateinit var nfcReader: NfcReader
 
@@ -34,6 +36,7 @@ class MainActivity : ComponentActivity() {
             TomsTheme {
                 val s by session.state.collectAsState()
                 val c by conductor.state.collectAsState()
+                val sy by sync.state.collectAsState()
                 val assignment = s.assignment
 
                 // Choosing a vehicle and route opens the shift (or resumes the same person's open one).
@@ -73,9 +76,11 @@ class MainActivity : ComponentActivity() {
                     }
                     else -> ConductorApp(
                         vm = conductor,
+                        syncVm = sync,
                         nfcReader = nfcReader,
                         header = "${assignment.vehicle.plate}  ·  ${assignment.route.name}",
                         state = c,
+                        sync = sy,
                     )
                 }
             }

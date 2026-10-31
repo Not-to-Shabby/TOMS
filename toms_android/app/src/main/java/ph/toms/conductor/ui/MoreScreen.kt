@@ -42,6 +42,7 @@ import ph.toms.conductor.ui.theme.TouchTarget
 @Composable
 fun MoreScreen(
     state: ConductorState,
+    sync: SyncState,
     onHand: (Handedness) -> Unit,
     onServerUrl: (String) -> Unit = {},
     onDeviceToken: (String?) -> Unit = {},
@@ -120,36 +121,36 @@ fun MoreScreen(
         )
 
         Text("Server Sync", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
-        Fact("Device ID", state.deviceId.ifEmpty { "loading..." })
+        Fact("Device ID", sync.deviceId.ifEmpty { "loading..." })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Server URL", style = MaterialTheme.typography.bodyLarge, color = TomsColors.InkSoft)
-                Text(state.serverUrl.ifEmpty { "Not set" }, style = MaterialTheme.typography.bodyMedium)
+                Text(sync.serverUrl.ifEmpty { "Not set" }, style = MaterialTheme.typography.bodyMedium)
             }
-            QuietButton("Change", { editUrl = state.serverUrl })
+            QuietButton("Change", { editUrl = sync.serverUrl })
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Enrollment", style = MaterialTheme.typography.bodyLarge, color = TomsColors.InkSoft)
-                StatusChip(if (state.isEnrolled) "Enrolled" else "Not enrolled", if (state.isEnrolled) Status.Good else Status.Warn)
+                StatusChip(if (sync.isEnrolled) "Enrolled" else "Not enrolled", if (sync.isEnrolled) Status.Good else Status.Warn)
             }
             QuietButton("Set Token", { editToken = "" })
         }
 
         BigButton(
-            text = if (state.isUploading) "Uploading..." else "Upload now (${state.pendingCount} pending)",
+            text = if (sync.isUploading) "Uploading..." else "Upload now (${sync.pendingCount} pending)",
             onClick = onUploadNow,
-            enabled = !state.isUploading && state.isEnrolled,
+            enabled = !sync.isUploading && sync.isEnrolled,
         )
-        state.uploadMessage?.let {
+        sync.uploadMessage?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded") && "refused" !in it) TomsColors.Good else TomsColors.Bad)
         }
 
         Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Text("For whoever is fixing the app, not for the conductor.", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
 
-        Fact("Waiting to upload", "${state.pendingCount} events")
-        if (state.parkedCount > 0) Fact("Refused by the server", "${state.parkedCount} events, not retried")
+        Fact("Waiting to upload", "${sync.pendingCount} events")
+        if (sync.parkedCount > 0) Fact("Refused by the server", "${sync.parkedCount} events, not retried")
         Fact("Fare version", state.config.fare.version.toString())
         Fact("Approved cards", state.config.approvedCards.size.toString())
         Fact("Trips open", state.openTrips.size.toString())

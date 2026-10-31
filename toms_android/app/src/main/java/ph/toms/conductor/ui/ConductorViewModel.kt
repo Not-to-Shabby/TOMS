@@ -44,7 +44,6 @@ import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.SettingsStore
 import ph.toms.conductor.sync.CardRegistrySync
-import ph.toms.conductor.sync.OutboxFlusher
 
 enum class Tab { Board, Collect, Calc, More }
 
@@ -84,9 +83,6 @@ data class ConductorState(
     val tally: PassengerTally = PassengerTally.starting(),
     val result: BoardResult? = null,
     val openTrips: List<OpenTrip> = emptyList(),
-    val pendingCount: Int = 0,
-    /** Events the server refused. Kept for whoever fixes the cause, and not retried. */
-    val parkedCount: Int = 0,
     val fix: GeoFix? = null,
     val nearestStop: StopMatch? = null,
     val calcMode: CalcMode = CalcMode.CHANGE,
@@ -98,11 +94,6 @@ data class ConductorState(
     val focusTripId: String? = null,
     /** A short message for tabs other than Board, such as "Open Board to start a trip". */
     val notice: String? = null,
-    val deviceId: String = "",
-    val serverUrl: String = "",
-    val isEnrolled: Boolean = false,
-    val isUploading: Boolean = false,
-    val uploadMessage: String? = null,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 }
@@ -114,18 +105,10 @@ class ConductorViewModel @Inject constructor(
     private val feedback: Feedback,
     private val settings: SettingsStore,
     private val deviceConfig: DeviceConfigStore,
-    private val flusher: OutboxFlusher,
     private val cardSync: CardRegistrySync,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(
-        ConductorState(
-            handedness = settings.handedness.value,
-            deviceId = deviceConfig.deviceId,
-            serverUrl = deviceConfig.serverUrl.value,
-            isEnrolled = !deviceConfig.deviceToken.value.isNullOrBlank(),
-        ),
-    )
+    private val _state = MutableStateFlow(ConductorState(handedness = settings.handedness.value))
     val state: StateFlow<ConductorState> = _state.asStateFlow()
 
     private val debouncer = TapDebouncer()
@@ -140,21 +123,15 @@ class ConductorViewModel @Inject constructor(
                     _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached.cards, cached.statuses))) }
                 }
             }
-            if (_state.value.isEnrolled) {
+            if (!deviceConfig.deviceToken.value.isNullOrBlank()) {
                 syncApprovedCards()
             }
         }
         viewModelScope.launch { reloadCards() }
-        viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
-        viewModelScope.launch { trips.parkedCount().collect { n -> _state.update { it.copy(parkedCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
-        viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
+        // Enrolling a phone (a token appears) fetches the card list straight away.
         viewModelScope.launch {
-            deviceConfig.deviceToken.collect { tok ->
-                val enrolled = !tok.isNullOrBlank()
-                _state.update { it.copy(isEnrolled = enrolled) }
-                if (enrolled) syncApprovedCards()
-            }
+            deviceConfig.deviceToken.collect { tok -> if (!tok.isNullOrBlank()) syncApprovedCards() }
         }
     }
 
@@ -418,24 +395,7 @@ class ConductorViewModel @Inject constructor(
         it.copy(tab = Tab.Calc, calcMode = CalcMode.CHANGE, calcDueCentavos = it.preview?.totalCentavos ?: 0)
     }
 
-    // ---- sync & diagnostics
-
-    fun flushNow() {
-        if (_state.value.isUploading) return
-        _state.update { it.copy(isUploading = true, uploadMessage = null) }
-        viewModelScope.launch {
-            val report = flusher.flush()
-            syncApprovedCards()
-            val msg = if (report.failure != null) {
-                "Upload failed: ${report.failure}"
-            } else if (report.parked > 0) {
-                "Uploaded ${report.delivered} event(s). ${report.parked} refused by the server and set aside"
-            } else {
-                "Uploaded ${report.delivered} event(s)"
-            }
-            _state.update { it.copy(isUploading = false, uploadMessage = msg) }
-        }
-    }
+    // ---- approved cards (uploads, enrollment and the server URL are in SyncViewModel)
 
     fun syncApprovedCards() {
         viewModelScope.launch {
@@ -451,9 +411,6 @@ class ConductorViewModel @Inject constructor(
                 }
         }
     }
-
-    fun updateServerUrl(url: String) = deviceConfig.setServerUrl(url)
-    fun updateDeviceToken(token: String?) = deviceConfig.setDeviceToken(token)
 
     // ---- location
 

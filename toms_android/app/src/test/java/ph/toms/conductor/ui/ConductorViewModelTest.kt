@@ -56,12 +56,18 @@ class ConductorViewModelTest {
     private lateinit var deviceConfig: TestDeviceConfigStore
     private lateinit var flusher: OutboxFlusher
     private lateinit var vm: ConductorViewModel
+    private lateinit var syncVm: SyncViewModel
 
     private class FakeUploader : EventUploader {
         override val channel = "data_a"
         var failWith: String? = null
-        override suspend fun upload(batch: List<PendingEvent>): UploadResult =
-            failWith?.let { UploadResult.Failed(it) } ?: UploadResult.Acked(batch.map { it.eventId }.toSet())
+        /** When set, the server refuses every event with this reason. */
+        var rejectAll: String? = null
+        override suspend fun upload(batch: List<PendingEvent>): UploadResult {
+            failWith?.let { return UploadResult.Failed(it) }
+            rejectAll?.let { reason -> return UploadResult.Acked(emptySet(), batch.associate { it.eventId to reason }) }
+            return UploadResult.Acked(batch.map { it.eventId }.toSet())
+        }
     }
 
     private class TestDeviceConfigStore(
@@ -100,7 +106,8 @@ class ConductorViewModelTest {
         location = LocationTracker(context)
         deviceConfig = TestDeviceConfigStore()
         flusher = OutboxFlusher(db.outbox(), uploader)
-        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, flusher, fakeCardSync)
+        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, fakeCardSync)
+        syncVm = SyncViewModel(repo, deviceConfig, flusher)
         // Every trip belongs to a shift, so the tests run inside one.
         vm.startShift("juan", "v1", "r1")
         waitUntil { vm.state.value.shift != null }
@@ -344,32 +351,57 @@ class ConductorViewModelTest {
         // Pending events present in outbox
         assertTrue(db.outbox().pendingCountNow() > 0)
 
-        vm.flushNow()
+        syncVm.flushNow()
         // Wait briefly for background thread query to complete
         var tries = 0
-        while (vm.state.value.isUploading && tries < 20) {
+        while (syncVm.state.value.isUploading && tries < 20) {
             advanceUntilIdle()
             Thread.sleep(20)
             tries++
         }
-        assertNotNull(vm.state.value.uploadMessage)
-        assertTrue(vm.state.value.uploadMessage!!.startsWith("Uploaded"))
+        assertNotNull(syncVm.state.value.uploadMessage)
+        assertTrue(syncVm.state.value.uploadMessage!!.startsWith("Uploaded"))
         assertEquals(0, db.outbox().pendingCountNow())
     }
 
     @Test
     fun `updating server URL and device token updates state and enrollment`() = runTest {
         advanceUntilIdle()
-        vm.updateServerUrl("http://192.168.1.100:3000")
-        vm.updateDeviceToken("dev-1.mytoken123")
+        syncVm.updateServerUrl("http://192.168.1.100:3000")
+        syncVm.updateDeviceToken("dev-1.mytoken123")
         advanceUntilIdle()
 
-        assertEquals("http://192.168.1.100:3000", vm.state.value.serverUrl)
-        assertTrue(vm.state.value.isEnrolled)
+        assertEquals("http://192.168.1.100:3000", syncVm.state.value.serverUrl)
+        assertTrue(syncVm.state.value.isEnrolled)
 
-        vm.updateDeviceToken(null)
+        syncVm.updateDeviceToken(null)
         advanceUntilIdle()
-        assertTrue(!vm.state.value.isEnrolled)
+        assertTrue(!syncVm.state.value.isEnrolled)
+    }
+
+    @Test
+    fun `a refused event is reported as set aside and counted as parked, not pending`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        uploader.rejectAll = "unknown device"
+
+        syncVm.flushNow()
+        var tries = 0
+        while (syncVm.state.value.isUploading && tries < 20) {
+            advanceUntilIdle()
+            Thread.sleep(20)
+            tries++
+        }
+        advanceUntilIdle()
+
+        assertTrue(syncVm.state.value.uploadMessage!!.contains("refused by the server"))
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertTrue(db.outbox().parkedCountNow() > 0)
+        var seen = 0
+        while (syncVm.state.value.parkedCount == 0 && seen++ < 20) { advanceUntilIdle(); Thread.sleep(20) }
+        assertTrue(syncVm.state.value.parkedCount > 0)
+        assertEquals(0, syncVm.state.value.pendingCount)
     }
 
     @Test

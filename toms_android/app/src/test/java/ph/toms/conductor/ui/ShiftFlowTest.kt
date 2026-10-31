@@ -48,6 +48,7 @@ class ShiftFlowTest {
     private lateinit var db: TomsDatabase
     private lateinit var repo: TripRepository
     private lateinit var vm: ConductorViewModel
+    private lateinit var syncVm: SyncViewModel
     private val uploader = FakeUploader()
     private var eventSeq = 0
     private var shiftSeq = 0
@@ -79,8 +80,9 @@ class ShiftFlowTest {
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), OutboxFlusher(db.outbox(), uploader), NoCardSync(),
+            Config(), NoCardSync(),
         )
+        syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader))
     }
 
     /** Waits until no more database writes are arriving, so a late write cannot hit a closed database. */
@@ -237,7 +239,7 @@ class ShiftFlowTest {
         assertTrue("events wait in the outbox while offline", pendingBefore > 0)
 
         uploader.failWith = null
-        vm.flushNow()
+        syncVm.flushNow()
         settle { runBlocking { db.outbox().pendingCountNow() } == 0 }
         assertEquals(0, runBlocking { db.outbox().pendingCountNow() })
         assertEquals("each event once", events().size, events().map { it.eventId }.toSet().size)
@@ -274,7 +276,7 @@ class ShiftFlowTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), OutboxFlusher(db.outbox(), uploader), NoCardSync(),
+            Config(), NoCardSync(),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }
