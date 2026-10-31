@@ -118,6 +118,36 @@ class RetrofitEventUploaderTest {
     }
 
     @Test
+    fun `the cached service follows a changed server url`() = runBlocking {
+        val other = MockWebServer().apply { start() }
+        try {
+            val url = MutableStateFlow(server.url("/").toString())
+            val config = object : DeviceConfigStore {
+                override val deviceId = "dev-test-1"
+                override val serverUrl: StateFlow<String> = url
+                override val deviceToken: StateFlow<String?> = MutableStateFlow("dev-test-1.secret123")
+                override fun setServerUrl(url: String) {}
+                override fun setDeviceToken(token: String?) {}
+            }
+            val ok = """{"accepted":["e1"],"duplicates":[],"rejected":[]}"""
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            other.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            val uploader = RetrofitEventUploader(config, okHttpClient)
+
+            uploader.upload(listOf(pendingEvent()))
+            uploader.upload(listOf(pendingEvent()))
+            assertEquals(2, server.requestCount)
+            url.value = other.url("/").toString()
+            uploader.upload(listOf(pendingEvent()))
+            assertEquals(2, server.requestCount)
+            assertEquals(1, other.requestCount)
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
     fun `HTTP 401 returns failed with status`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
         val config = TestConfigStore(initialUrl = server.url("/").toString())

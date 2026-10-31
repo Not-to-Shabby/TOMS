@@ -86,8 +86,13 @@ class RetrofitEventUploader @Inject constructor(
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val contentType = "application/json".toMediaType()
 
+    /** The service for the last server URL used. Rebuilt only when the URL changes, not on every call. */
+    private var cachedApi: Pair<String, TomsApiService>? = null
+
+    @Synchronized
     private fun createApi(): TomsApiService? {
         val baseUrl = config.serverUrl.value.trimEnd('/') + "/"
+        cachedApi?.let { (url, api) -> if (url == baseUrl) return api }
         return try {
             Retrofit.Builder()
                 .baseUrl(baseUrl)
@@ -95,6 +100,7 @@ class RetrofitEventUploader @Inject constructor(
                 .addConverterFactory(json.asConverterFactory(contentType))
                 .build()
                 .create(TomsApiService::class.java)
+                .also { cachedApi = baseUrl to it }
         } catch (_: Exception) {
             null
         }
