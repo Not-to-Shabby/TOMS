@@ -187,6 +187,45 @@ class MigrationTest {
         }
     }
 
+    @Test fun `version 5 adds an empty server config table and keeps everything else`() {
+        helper.createDatabase(name, 4).apply {
+            insertV2Trip(this, "a")
+            execSQL("INSERT INTO config_cache (`key`, version, json, fetchedAtMillis) VALUES ('approved_cards', 1, '{}', 9)")
+            execSQL("INSERT INTO events (eventId, deviceId, type, payload, createdAtMillis) VALUES ('e1', 'dev', 'x', '{}', 1)")
+            execSQL("INSERT INTO outbox (eventId, attemptCount, parkedAtMillis, parkedReason) VALUES ('e1', 2, 7, 'rejected')")
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(name, 5, true, *ALL_MIGRATIONS)
+
+        db.query("SELECT COUNT(*) FROM server_config").use { assertTrue(it.moveToFirst()); assertEquals("nothing is seeded", 0, it.getInt(0)) }
+        db.query("SELECT id, fareCentavos FROM trips").use { assertTrue(it.moveToFirst()); assertEquals("a", it.getString(0)); assertEquals(1500, it.getInt(1)) }
+        db.query("SELECT json FROM config_cache WHERE `key` = 'approved_cards'").use { assertTrue(it.moveToFirst()); assertEquals("{}", it.getString(0)) }
+        db.query("SELECT attemptCount, parkedAtMillis, parkedReason FROM outbox WHERE eventId = 'e1'").use {
+            assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)); assertEquals(7L, it.getLong(1)); assertEquals("rejected", it.getString(2))
+        }
+    }
+
+    @Test fun `a version 4 database opened through Room has no fares until some are saved`() = runBlocking {
+        helper.createDatabase(name, 4).apply {
+            insertV2Trip(this, "old")
+            close()
+        }
+        helper.runMigrationsAndValidate(name, 5, true, *ALL_MIGRATIONS).close()
+
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val room = Room.databaseBuilder(context, TomsDatabase::class.java, name).addMigrations(*ALL_MIGRATIONS).allowMainThreadQueries().build()
+        try {
+            val repo = TripRepository(room, "dev")
+            assertNull(repo.loadServerConfig())
+            repo.saveServerConfig(serverConfigResponse(version = 12))
+            assertEquals(12, repo.loadServerConfig()!!.version)
+            assertEquals("the old trip is still there", 1, repo.loadTrips().size)
+        } finally {
+            room.close()
+        }
+    }
+
     @Test fun `a group saved after the migration round-trips with every line`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val room = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()

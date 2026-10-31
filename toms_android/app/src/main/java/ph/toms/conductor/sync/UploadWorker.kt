@@ -19,9 +19,13 @@ class UploadWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
     private val flusher: OutboxFlusher,
+    private val configRefresher: ConfigRefresher,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        // The fares are fetched on the same schedule as the upload. A failed fetch changes nothing and does not
+        // fail the run: the saved fares stay in use, and the next run tries again.
+        runCatching { configRefresher.refresh() }
         val report = flusher.flush()
         return if (report.failure == null) Result.success() else Result.retry()
     }

@@ -139,9 +139,26 @@ interface ConfigDao {
     suspend fun get(key: String): ConfigCacheEntity?
 }
 
+/** The one saved copy of the fares, stops and discounts the server last sent. */
+@Dao
+interface ServerConfigDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun put(row: ServerConfigEntity)
+
+    @Query("SELECT * FROM server_config WHERE id = 1")
+    suspend fun get(): ServerConfigEntity?
+
+    /** Emits now and again whenever the row is written, so a screen follows a sync made by the background worker. */
+    @Query("SELECT * FROM server_config WHERE id = 1")
+    fun observe(): Flow<ServerConfigEntity?>
+}
+
 @Database(
-    entities = [TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class, ShiftEntity::class],
-    version = 4,
+    entities = [
+        TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class,
+        ShiftEntity::class, ServerConfigEntity::class,
+    ],
+    version = 5,
     exportSchema = true,
 )
 abstract class TomsDatabase : RoomDatabase() {
@@ -151,4 +168,5 @@ abstract class TomsDatabase : RoomDatabase() {
     abstract fun events(): EventDao
     abstract fun outbox(): OutboxDao
     abstract fun config(): ConfigDao
+    abstract fun serverConfig(): ServerConfigDao
 }

@@ -6,8 +6,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import ph.toms.conductor.data.DeviceConfigResponse
 import ph.toms.conductor.data.db.PendingEvent
 import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.settings.DeviceConfigStore
@@ -69,6 +73,11 @@ interface TomsApiService {
     suspend fun fetchApprovedCards(
         @Header("Authorization") authHeader: String?,
     ): ApprovedCardsResponse
+
+    @GET("api/device/config")
+    suspend fun fetchConfig(
+        @Header("Authorization") authHeader: String?,
+    ): DeviceConfigResponse
 }
 
 interface CardRegistrySync {
@@ -79,7 +88,7 @@ interface CardRegistrySync {
 class RetrofitEventUploader @Inject constructor(
     private val config: DeviceConfigStore,
     private val okHttpClient: OkHttpClient,
-) : EventUploader, CardRegistrySync {
+) : EventUploader, CardRegistrySync, ConfigSync {
 
     override val channel: String = "data_a"
 
@@ -143,6 +152,29 @@ class RetrofitEventUploader @Inject constructor(
             UploadResult.Failed(e.message ?: "network error")
         }
     }
+
+    override suspend fun fetchConfig(): ConfigFetch {
+        val token = config.deviceToken.value
+        if (token.isNullOrBlank()) return ConfigFetch.Failed("Not enrolled. Set the device token on More.")
+        val api = createApi() ?: return ConfigFetch.Failed("The server URL is not valid.")
+        return try {
+            ConfigFetch.Loaded(api.fetchConfig("Bearer $token"))
+        } catch (e: HttpException) {
+            when (e.code()) {
+                404 -> ConfigFetch.Unavailable(serverReason(e) ?: "The server has no fares for this phone yet.")
+                401 -> ConfigFetch.Failed("The server did not accept this phone's token (401).")
+                else -> ConfigFetch.Failed("The server answered ${e.code()}.")
+            }
+        } catch (e: Exception) {
+            ConfigFetch.Failed(e.message ?: "No connection to the server.")
+        }
+    }
+
+    /** The server's own explanation, the `error` text of an error answer, when it sent one. */
+    private fun serverReason(e: HttpException): String? = runCatching {
+        val body = e.response()?.errorBody()?.string() ?: return null
+        (json.parseToJsonElement(body) as? JsonObject)?.get("error")?.jsonPrimitive?.contentOrNull
+    }.getOrNull()
 
     override suspend fun fetchApprovedCards(): Result<ApprovedCardList> {
         val token = config.deviceToken.value

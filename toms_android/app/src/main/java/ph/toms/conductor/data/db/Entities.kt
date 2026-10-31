@@ -88,6 +88,20 @@ data class OutboxEntity(
     val parkedReason: String? = null,
 )
 
+/**
+ * The last good copy of what `GET /api/device/config` sent, so the phone works offline. One row (id 1):
+ * a new copy replaces it. [json] is the response as the server sent it; [version] and [routeName] are
+ * kept beside it so the More screen can show them without reading the JSON.
+ */
+@Entity(tableName = "server_config")
+data class ServerConfigEntity(
+    @PrimaryKey val id: Int = 1,
+    val version: Int,
+    val routeName: String,
+    val json: String,
+    val fetchedAtMillis: Long,
+)
+
 @Entity(tableName = "config_cache")
 data class ConfigCacheEntity(
     @PrimaryKey val key: String,

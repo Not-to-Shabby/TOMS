@@ -14,7 +14,6 @@ import kotlinx.coroutines.launch
 import ph.toms.conductor.data.Assignment
 import ph.toms.conductor.data.RouteInfo
 import ph.toms.conductor.data.SessionRepository
-import ph.toms.conductor.data.TestConfig
 import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.data.Vehicle
 import ph.toms.conductor.domain.ApprovedCards
@@ -44,9 +43,9 @@ data class SessionUiState(
     val vehicles: List<Vehicle> = emptyList(),
     val routes: List<RouteInfo> = emptyList(),
     val assignment: Assignment? = null,
-    val config: TomsConfig = TestConfig.config,
-    val boardingStopId: String = TestConfig.config.stops.first().id,
-    val destinationStopId: String = TestConfig.config.stops.getOrElse(1) { TestConfig.config.stops.first() }.id,
+    val config: TomsConfig = TomsConfig.EMPTY,
+    val boardingStopId: String = "",
+    val destinationStopId: String = "",
     val categoryId: String? = null,
     val reads: List<CardRead> = emptyList(),
     val trips: List<TripRow> = emptyList(),

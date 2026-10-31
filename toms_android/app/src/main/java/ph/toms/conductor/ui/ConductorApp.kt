@@ -118,6 +118,7 @@ fun ConductorApp(
                     onClearAlarm = { vm.clearAlarm(it.id) },
                     onUseNearest = vm::useNearestAsBoarding,
                     onCalcPreview = vm::openCalcForBoard,
+                    onRetry = vm::refreshConfig,
                 )
                 Tab.Collect -> CollectScreen(
                     state = state,
@@ -134,7 +135,12 @@ fun ConductorApp(
                     onServerUrl = syncVm::updateServerUrl,
                     onDeviceToken = syncVm::updateDeviceToken,
                     // A finished upload is followed by a refresh of the approved card list.
-                    onUploadNow = { syncVm.flushNow(onFlushed = vm::syncApprovedCards) },
+                    onUploadNow = {
+                        syncVm.flushNow(onFlushed = {
+                            vm.syncApprovedCards()
+                            vm.refreshConfig()
+                        })
+                    },
                     onShiftSummary = vm::openSummary,
                 )
             }

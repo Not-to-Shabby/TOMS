@@ -20,7 +20,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // `./gradlew assembleDebug -PtestFares=true` starts with placeholder fares, for trying the app with no server.
+            buildConfigField("boolean", "TEST_FARES", (findProperty("testFares") == "true").toString())
+        }
         release {
+            // Never: a release build charges only fares the server published.
+            buildConfigField("boolean", "TEST_FARES", "false")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
@@ -35,6 +41,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     sourceSets {
         // Exported Room schemas, so migrations can be tested against the real older versions.

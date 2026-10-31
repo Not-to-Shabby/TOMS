@@ -79,7 +79,21 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+/**
+ * 4 to 5: a table for the fares, stops and discounts downloaded from the server. It starts empty, which means
+ * "no fares loaded yet": nothing is seeded, so an upgraded phone never charges from invented numbers.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS server_config (
+                id INTEGER NOT NULL PRIMARY KEY, version INTEGER NOT NULL, routeName TEXT NOT NULL,
+                json TEXT NOT NULL, fetchedAtMillis INTEGER NOT NULL)""",
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
 
 @kotlinx.serialization.Serializable
 data class PassengerLineRecord(

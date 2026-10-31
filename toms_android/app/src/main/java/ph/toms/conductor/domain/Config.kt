@@ -67,7 +67,50 @@ data class TomsConfig(
 ) {
     fun stop(id: String): Stop? = stops.firstOrNull { it.id == id }
     fun category(id: String): DiscountCategory? = discountCategories.firstOrNull { it.id == id }
+
+    companion object {
+        /**
+         * What the phone holds before any fares have been downloaded: no stops, no discounts, no fare. It prices
+         * nothing (a trip needs two stops), so it can never charge a passenger. Never a stand-in for real fares.
+         */
+        val EMPTY = TomsConfig(
+            version = 0,
+            stops = emptyList(),
+            fare = FareConfig(version = 0, baseFareCentavos = 0, baseDistanceKm = 1.0, perKmCentavos = 0, roundingStepCentavos = 100),
+            discountCategories = emptyList(),
+            approvedCards = ApprovedCards(emptyMap()),
+        )
+    }
 }
+
+/**
+ * The highest fare version the server accepts on a trip event (`fare_version`). The server keeps its config
+ * version within 1..this, and the phone refuses a config outside it, so a trip is never rejected for its version.
+ */
+const val MAX_FARE_VERSION = 1_000_000
+
+/**
+ * The stops, fare and discounts the server published for this phone's route. Money is in centavos.
+ * [version] is the server's: it is the fare version every trip made with this config records.
+ * [fetchedAtMillis] is when the phone last got it from the server.
+ */
+data class ServerConfig(
+    val version: Int,
+    val routeName: String,
+    val stops: List<Stop>,
+    val fare: FareConfig,
+    val discountCategories: List<DiscountCategory>,
+    val fetchedAtMillis: Long,
+) {
+    /** [base] with this config's stops, fare and discounts. The approved cards are not part of it, so they are kept. */
+    fun applyTo(base: TomsConfig): TomsConfig =
+        base.copy(version = version, stops = stops, fare = fare, discountCategories = discountCategories)
+
+    fun info() = ConfigInfo(version, routeName, fetchedAtMillis)
+}
+
+/** Which fares are loaded, for the screens that say so. [fetchedAtMillis] is null for built-in test data. */
+data class ConfigInfo(val version: Int, val routeName: String, val fetchedAtMillis: Long?)
 
 fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val r = 6371000.0

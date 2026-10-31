@@ -151,7 +151,15 @@ fun MoreScreen(
 
         Fact("Waiting to upload", "${sync.pendingCount} events")
         if (sync.parkedCount > 0) Fact("Refused by the server", "${sync.parkedCount} events, not retried")
-        Fact("Fare version", state.config.fare.version.toString())
+        val info = state.configInfo
+        if (info == null) {
+            Fact("Fares", "none loaded")
+        } else {
+            Fact("Fares version", info.version.toString())
+            Fact("Route", info.routeName)
+            Fact("Fares synced", info.fetchedAtMillis?.let { DateFormat.format("d MMM yyyy, HH:mm", Date(it)).toString() } ?: "test data")
+        }
+        state.configMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad) }
         Fact("Approved cards", state.config.approvedCards.size.toString())
         Fact("Trips open", state.openTrips.size.toString())
         val fix = state.fix

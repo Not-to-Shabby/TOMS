@@ -37,7 +37,11 @@ import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
+import ph.toms.conductor.sync.ConfigRefresher
 import ph.toms.conductor.sync.UploadResult
+import ph.toms.conductor.data.FakeConfigSync
+import ph.toms.conductor.data.InitialConfig
+import ph.toms.conductor.data.TestConfig
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -80,7 +84,7 @@ class ShiftFlowTest {
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader))
     }
@@ -276,7 +280,7 @@ class ShiftFlowTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), InitialConfig(TestConfig.config),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }

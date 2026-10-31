@@ -24,6 +24,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import ph.toms.conductor.data.FakeConfigSync
+import ph.toms.conductor.data.InitialConfig
+import ph.toms.conductor.data.TestConfig
 import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.data.db.PendingEvent
 import ph.toms.conductor.data.db.TomsDatabase
@@ -38,6 +41,7 @@ import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
 import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.sync.CardRegistrySync
+import ph.toms.conductor.sync.ConfigRefresher
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.UploadResult
@@ -94,6 +98,7 @@ class ConductorViewModelTest {
 
     private val uploader = FakeUploader()
     private val fakeCardSync = FakeCardSync()
+    private val configSync = FakeConfigSync()
 
     @Before
     fun setUp() {
@@ -106,7 +111,10 @@ class ConductorViewModelTest {
         location = LocationTracker(context)
         deviceConfig = TestDeviceConfigStore()
         flusher = OutboxFlusher(db.outbox(), uploader)
-        vm = ConductorViewModel(repo, location, feedback, settings, deviceConfig, fakeCardSync)
+        vm = ConductorViewModel(
+            repo, location, feedback, settings, deviceConfig, fakeCardSync,
+            ConfigRefresher(repo, configSync), InitialConfig(TestConfig.config),
+        )
         syncVm = SyncViewModel(repo, deviceConfig, flusher)
         // Every trip belongs to a shift, so the tests run inside one.
         vm.startShift("juan", "v1", "r1")

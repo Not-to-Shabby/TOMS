@@ -3,13 +3,16 @@ package ph.toms.conductor.data
 import androidx.room.withTransaction
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import ph.toms.conductor.data.db.CardEntity
 import ph.toms.conductor.data.db.ConfigCacheEntity
 import ph.toms.conductor.data.db.EventEntity
 import ph.toms.conductor.data.db.OutboxEntity
+import ph.toms.conductor.data.db.ServerConfigEntity
 import ph.toms.conductor.data.db.ShiftEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.db.TripEntity
@@ -19,6 +22,7 @@ import ph.toms.conductor.data.db.PassengerJson
 import ph.toms.conductor.data.db.PassengerLineRecord
 import ph.toms.conductor.domain.GeoFix
 import ph.toms.conductor.domain.LineQuote
+import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.domain.Shift
 import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ShiftTrip
@@ -308,6 +312,36 @@ class TripRepository(
     }
 
     suspend fun saveApprovedCards(cards: Map<String, String>) = saveApprovedCardList(ApprovedCardList(cards))
+
+    // ---- fares, stops and discounts from the server
+
+    /**
+     * Saves what the server sent as the config to work from. It is checked first ([toServerConfig]); a response
+     * that fails a check throws [InvalidServerConfig] and nothing is saved, so the copy already on the phone stays.
+     * Returns the config that is now saved.
+     */
+    suspend fun saveServerConfig(response: DeviceConfigResponse): ServerConfig {
+        val config = response.toServerConfig(clock())
+        db.serverConfig().put(
+            ServerConfigEntity(
+                version = config.version,
+                routeName = config.routeName,
+                json = json.encodeToString(response),
+                fetchedAtMillis = config.fetchedAtMillis,
+            ),
+        )
+        return config
+    }
+
+    /** The saved config, or null when none was ever downloaded or the saved copy can no longer be read or fails its checks. */
+    suspend fun loadServerConfig(): ServerConfig? = db.serverConfig().get()?.let(::readSavedConfig)
+
+    /** The saved config now and whenever it changes, including by a sync that ran while no screen was open. */
+    fun observeServerConfig(): Flow<ServerConfig?> = db.serverConfig().observe().map { row -> row?.let(::readSavedConfig) }
+
+    /** Reads a saved copy back through the same checks as a fresh one, so a damaged or outdated row reads as "none". */
+    private fun readSavedConfig(row: ServerConfigEntity): ServerConfig? =
+        runCatching { json.decodeFromString<DeviceConfigResponse>(row.json).toServerConfig(row.fetchedAtMillis) }.getOrNull()
 
     private suspend fun appendEvent(
         type: String,
