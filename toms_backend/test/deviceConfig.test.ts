@@ -1,8 +1,9 @@
+import { randomUUID } from 'crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createApp } from '../src/app';
-import { configVersion, pesosToCentavos } from '../src/deviceConfig';
+import { configVersion, MAX_CONFIG_VERSION, pesosToCentavos } from '../src/deviceConfig';
 import { adminToken, createTestDb, enrollDevice, TEST_JWT_SECRET } from './helpers';
 
 let pool: Pool;
@@ -245,12 +246,37 @@ describe('GET /api/device/config: several paths', () => {
 });
 
 describe('GET /api/device/config: version', () => {
-  it('is a positive 32-bit integer, so the phone and the fare_version column can hold it', async () => {
+  it('is an integer from 1 to 1,000,000, the most ingest accepts as a trip fare_version', async () => {
     const { token } = await workingDevice();
     const v = (await get(token)).body.version;
     expect(Number.isInteger(v)).toBe(true);
-    expect(v).toBeGreaterThan(0);
-    expect(v).toBeLessThanOrEqual(2147483647);
+    expect(v).toBeGreaterThanOrEqual(1);
+    expect(v).toBeLessThanOrEqual(MAX_CONFIG_VERSION);
+    for (const sample of ['a', 'b', 'c', 'd', 'e', 'f'].map((s) => configVersion({ s }))) {
+      expect(sample).toBeGreaterThanOrEqual(1);
+      expect(sample).toBeLessThanOrEqual(MAX_CONFIG_VERSION);
+    }
+  });
+
+  it('is accepted by ingest when a trip carries it as its fare version', async () => {
+    const { token } = await workingDevice();
+    const version = (await get(token)).body.version;
+    const trip = {
+      event_id: randomUUID(),
+      device_id: 'dev-1',
+      local_seq: 1,
+      type: 'trip_created',
+      created_at_millis: Date.UTC(2026, 9, 31),
+      payload: {
+        tripId: randomUUID(), cardUuid: randomUUID(), nfcUid: '6FF1AD39',
+        boardingStopId: '1', declaredDestinationStopId: '2', actualDestinationStopId: null, discountCategoryId: null,
+        computedFareCentavos: 1500, fareCentavos: 1500, discountCentavos: 0, fareVersion: version, overrideReason: null,
+      },
+    };
+    const res = await request(app).post('/api/events').set('Authorization', `Bearer ${token}`).send({ events: [trip] });
+    expect(res.status).toBe(200);
+    expect(res.body.accepted).toEqual([trip.event_id]);
+    expect(res.body.rejected).toEqual([]);
   });
 
   it('stays the same while nothing changes, and changes when the fare, a stop or a discount changes', async () => {

@@ -16,13 +16,17 @@ interface ConfigDiscount {
   percent: number;
 }
 
+/** The most `fare_version` can be: ingest refuses a trip event whose fare_version is above this (see ingest.ts). */
+export const MAX_CONFIG_VERSION = 1_000_000;
+
 /**
- * A positive 31-bit integer taken from everything the phone is sent, so it changes whenever any of it changes.
- * It is an integer because the phone stores it as one and trip events carry it in `fare_version` (integer).
+ * An integer from 1 to MAX_CONFIG_VERSION taken from everything the phone is sent, so it changes whenever any of it
+ * changes. Trip events carry it in `fare_version`, which is why it has to fit what ingest accepts. Two different
+ * configs can share a version (about one in a million), so the phone never skips an update because the versions match.
  */
 export function configVersion(content: unknown): number {
   const digest = crypto.createHash('sha256').update(JSON.stringify(content)).digest();
-  return (digest.readUInt32BE(0) & 0x7fffffff) || 1;
+  return (digest.readUInt32BE(0) % MAX_CONFIG_VERSION) + 1;
 }
 
 export function registerDeviceConfigRoutes(app: Express, { pool, auth }: { pool: Pool; auth: Auth }) {
