@@ -1,0 +1,18 @@
+www.perchbuilds.me {
+	redir https://perchbuilds.me{uri} permanent
+}
+
+perchbuilds.me {
+	encode zstd gzip
+	# A printed card's QR link goes straight to the API, which answers with the redirect to the receipt.
+	handle /r/* {
+		reverse_proxy api:3000
+	}
+	handle {
+		reverse_proxy web:8080
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+}
