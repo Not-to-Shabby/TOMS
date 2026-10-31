@@ -141,3 +141,63 @@ export function buildCsv(cards: { serial: string; card_uuid: string }[], baseUrl
   const lines = ['serial,url', ...cards.map((c) => `${csvCell(c.serial)},${csvCell(cardUrl(baseUrl, c.card_uuid))}`)];
   return lines.join('\r\n') + '\r\n';
 }
+
+/** How close (in screen pixels) an edge must be to a target before the object snaps onto it. */
+export const SNAP_PX = 6;
+
+/** A line drawn while dragging, as a share of the card: a vertical line at x, or a horizontal line at y. */
+export interface Guide {
+  axis: 'x' | 'y';
+  at: number;
+}
+
+export interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Snaps a box being dragged so its edges and centre line line up with the card's edges and centre, and with the
+ * other object's edges and centre. Works in shares of the card (0..1), so the tolerance is converted from screen
+ * pixels with the card's displayed width and height. Snaps each axis independently, to the nearest target in reach.
+ */
+export function snapBox(
+  box: Box,
+  others: Box[],
+  displayPx: { width: number; height: number },
+  tolerancePx = SNAP_PX,
+): { x: number; y: number; guides: Guide[] } {
+  const tolX = tolerancePx / displayPx.width;
+  const tolY = tolerancePx / displayPx.height;
+  const targetsX = [0, 0.5, 1];
+  const targetsY = [0, 0.5, 1];
+  for (const o of others) {
+    targetsX.push(o.x, o.x + o.w / 2, o.x + o.w);
+    targetsY.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+
+  // Each axis is decided on its own: probes and targets are both on the same axis, so a Y line can never
+  // be reported as an X guide. Of the nearest match in reach, the box moves so that line lines up exactly.
+  const pick = (value: number, size: number, targets: number[], tol: number) => {
+    const probes = [value, value + size / 2, value + size];
+    let best: { delta: number; at: number } | null = null;
+    for (const p of probes) {
+      for (const t of targets) {
+        const d = t - p;
+        if (Math.abs(d) <= tol && (best === null || Math.abs(d) < Math.abs(best.delta))) best = { delta: d, at: t };
+      }
+    }
+    return best;
+  };
+
+  const sx = pick(box.x, box.w, targetsX, tolX);
+  const sy = pick(box.y, box.h, targetsY, tolY);
+  const guides: Guide[] = [];
+  const x = sx ? box.x + sx.delta : box.x;
+  const y = sy ? box.y + sy.delta : box.y;
+  if (sx) guides.push({ axis: 'x', at: sx.at });
+  if (sy) guides.push({ axis: 'y', at: sy.at });
+  return { x, y, guides };
+}

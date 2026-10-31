@@ -177,3 +177,64 @@ describe('CardDesigner reprint', () => {
     expect(screen.getByRole('button', { name: /Create 50 unpaired cards/ })).toBeInTheDocument();
   });
 });
+
+describe('CardDesigner snapping while dragging', () => {
+  // jsdom has no pointer capture; a real browser has it. Stub it so a drag can start under test.
+  beforeEach(() => {
+    if (!('setPointerCapture' in HTMLElement.prototype)) {
+      Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { value: () => undefined, configurable: true });
+    }
+  });
+
+  // jsdom has no layout, so give the preview a real size. 500 x 300 px card.
+  const sized = (el: HTMLElement) => {
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 300, right: 500, bottom: 300, x: 0, y: 0, toJSON: () => '' }) as DOMRect;
+  };
+
+  async function uploaded() {
+    renderPage();
+    await userEvent.upload(screen.getByLabelText('front design'), png);
+    const box = await screen.findByTestId('qr-box-front');
+    const preview = box.parentElement as HTMLElement;
+    sized(preview);
+    return { box, preview };
+  }
+
+  const drag = (el: HTMLElement, from: { x: number; y: number }, to: { x: number; y: number }) => {
+    fireEvent.pointerDown(el, { clientX: from.x, clientY: from.y, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(el.parentElement as HTMLElement, { clientX: to.x, clientY: to.y, pointerId: 1 });
+  };
+
+  it('shows no guide until something is dragged', async () => {
+    await uploaded();
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+  });
+
+  it('snaps the QR onto the left edge of the card and shows the guide', async () => {
+    const { box, preview } = await uploaded();
+    // Start the QR's left edge at 0.62 (310 px). Drag left so its edge lands 2 px from the card edge.
+    const startX = 310;
+    const qrLeftPx = parseFloat(box.style.left) / 100 * 500; // 0.62 * 500 = 310
+    drag(box, { x: startX + 4, y: 100 }, { x: 2 + 4, y: 100 });
+    void qrLeftPx;
+    expect(screen.getAllByTestId('snap-guide').length).toBeGreaterThan(0);
+    expect(preview).toBeInTheDocument();
+    const left = parseFloat(box.style.left);
+    expect(left).toBeCloseTo(0, 1); // snapped flush to the card's left edge
+  });
+
+  it('removes the guides when the drag ends', async () => {
+    const { box, preview } = await uploaded();
+    drag(box, { x: 314, y: 100 }, { x: 6, y: 100 });
+    expect(screen.getAllByTestId('snap-guide').length).toBeGreaterThan(0);
+    fireEvent.pointerUp(preview);
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+  });
+
+  it('leaves the QR where the pointer put it when nothing is in reach', async () => {
+    const { box } = await uploaded();
+    drag(box, { x: 314, y: 100 }, { x: 264, y: 100 }); // 50 px to the left, away from every line
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+    expect(parseFloat(box.style.left)).toBeGreaterThan(0);
+  });
+});

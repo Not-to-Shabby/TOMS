@@ -12,6 +12,8 @@ import {
   serialRange,
   SVG_FALLBACK_WIDTH,
   toPixels,
+  snapBox,
+  SNAP_PX,
   validateBatch,
 } from './cardDesign';
 
@@ -124,5 +126,80 @@ describe('exports', () => {
       'https://x.test',
     );
     expect(csv).toBe('serial,url\r\nTOMS-0001,https://x.test/r/u1\r\n"we,ird",https://x.test/r/u2\r\n');
+  });
+});
+
+describe('snapping a dragged object to alignment lines', () => {
+  // The card is 500 x 300 px on screen, so a 6 px reach is 0.012 of the width and 0.02 of the height.
+  const card = { width: 500, height: 300 };
+  const box = (x: number, y: number, w = 0.2, h = 0.2) => ({ x, y, w, h });
+
+  it('snaps the left edge onto the card left edge when it is within reach', () => {
+    const r = snapBox(box(0.004, 0.3), [], card);
+    expect(r.x).toBe(0);
+    expect(r.guides).toContainEqual({ axis: 'x', at: 0 });
+  });
+
+  it('snaps the centre onto the card centre line', () => {
+    // Left edge at 0.395 puts the centre at 0.495, 0.005 from the card centre (0.5).
+    const r = snapBox(box(0.395, 0.1), [], card);
+    expect(r.x).toBeCloseTo(0.4, 6);
+    expect(r.guides).toContainEqual({ axis: 'x', at: 0.5 });
+  });
+
+  it('snaps the right edge onto the card right edge', () => {
+    const r = snapBox(box(0.79, 0.1), [], card);
+    expect(r.x).toBeCloseTo(0.8, 6);
+    expect(r.guides).toContainEqual({ axis: 'x', at: 1 });
+  });
+
+  it('snaps the left edge onto the left edge of another object', () => {
+    // Other object: left 0.5, right 0.8. Our box: left 0.497, centre 0.597, right 0.697 (the other's right is 0.8, far off).
+    const other = box(0.5, 0.7, 0.3, 0.1);
+    const r = snapBox(box(0.497, 0.1), [other], card);
+    expect(r.x).toBeCloseTo(0.5, 6);
+    expect(r.guides).toContainEqual({ axis: 'x', at: 0.5 });
+  });
+
+  it('snaps the centre onto the centre line of another object', () => {
+    // The other object's centre is 0.5. Our centre at 0.498 (left edge 0.398) is 0.002 away.
+    // Its left edge (0.4) is also near our left edge (0.398), so we check the centre match directly.
+    const other = box(0.4, 0.7, 0.2, 0.1);
+    const near = snapBox(box(0.398, 0.1), [other], card);
+    expect(near.guides).toContainEqual({ axis: 'x', at: 0.4 });
+    expect(near.x).toBeCloseTo(0.4, 6);
+  });
+
+  it('does not snap to anything when no line is within reach', () => {
+    // Left edge 0.1 and right edge 0.3 are both far from every line (0, 0.5, 1 and the other object's edges).
+    const r = snapBox(box(0.1, 0.1), [], card);
+    expect(r.x).toBe(0.1);
+    expect(r.guides).toEqual([]);
+  });
+
+  it('snaps each axis on its own, and reports a guide for each', () => {
+    const r = snapBox(box(0.004, 0.296), [], card);
+    expect(r.x).toBe(0);
+    expect(r.guides.map((g) => g.axis).sort()).toEqual(['x', 'y']);
+  });
+
+  it('uses the screen size to decide reach, so the same distance snaps on a small view but not a large one', () => {
+    const small = snapBox(box(0.004, 0.1), [], { width: 500, height: 300 }); // 0.004 is 2 px here: in reach
+    expect(small.x).toBe(0);
+    const large = snapBox(box(0.004, 0.1), [], { width: 5000, height: 3000 }); // 0.004 is 20 px here: out of reach
+    expect(large.x).toBeCloseTo(0.004, 6);
+    expect(large.guides).toEqual([]);
+  });
+
+  it('keeps the default tolerance at a few pixels', () => {
+    expect(SNAP_PX).toBeGreaterThanOrEqual(4);
+    expect(SNAP_PX).toBeLessThanOrEqual(10);
+  });
+
+  it('picks the nearest line when two are in reach', () => {
+    // Left edge 0.002 from the card edge (0) and 0.002 from another object's edge at 0.004: it is nearer 0.
+    const other = box(0.004, 0.7, 0.2, 0.1);
+    const r = snapBox(box(0.002, 0.3), [other], card);
+    expect(r.x).toBe(0);
   });
 });

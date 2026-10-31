@@ -15,6 +15,8 @@ import {
   resolutionNote,
   serialRange,
   validateBatch,
+  snapBox,
+  type Guide,
   type Placement,
 } from '../lib/cardDesign';
 import SheetExport from '../components/SheetExport';
@@ -49,6 +51,8 @@ export default function CardDesigner() {
   const [progress, setProgress] = useState<[number, number] | null>(null);
   const dragRef = useRef<Drag>(null);
   const previewRefs = useRef<Partial<Record<Side, HTMLDivElement | null>>>({});
+  // Alignment lines to draw while an object is being dragged, on one side of the card.
+  const [guides, setGuides] = useState<{ side: Side; lines: Guide[] } | null>(null);
   const location = useLocation();
   // Set when the admin chose Reprint in the registry: the cards to load instead of making a new batch.
   const reprintRequest = (location.state as { reprint?: { card_uuids?: string[]; filter?: object } } | null)?.reprint ?? null;
@@ -166,9 +170,31 @@ export default function CardDesigner() {
     const drag = dragRef.current;
     const el = drag && previewRefs.current[drag.side];
     if (!drag || !el) return;
-    const f = fractionOf(e.clientX, e.clientY, el.getBoundingClientRect());
-    if (drag.target === 'qr') update(drag.side, { qrX: f.x - drag.dx, qrY: f.y - drag.dy });
-    else update(drag.side, { textX: f.x - drag.dx, textY: f.y - drag.dy });
+    const cur = sides[drag.side]?.placement;
+    const design = sides[drag.side]?.design;
+    if (!cur || !design) return;
+    const rect = el.getBoundingClientRect();
+    const f = fractionOf(e.clientX, e.clientY, rect);
+
+    // Both objects as boxes in shares of the card: x and y are the top-left corner.
+    // The serial's width is estimated from its font size: monospace characters are about 0.6 em wide.
+    const qrBox = { x: cur.qrX, y: cur.qrY, w: cur.qrSize, h: cur.qrSize * (design.width / design.height) };
+    const serialW = (cur.textSize * 0.6 * sampleSerial.length) / (design.width / design.height);
+    const serialH = cur.textSize / (design.height / design.width);
+    const textBox = { x: cur.textX - serialW / 2, y: cur.textY - serialH / 2, w: serialW, h: serialH };
+
+    const mine = drag.target === 'qr' ? qrBox : textBox;
+    const want = { x: f.x - drag.dx, y: f.y - drag.dy, w: mine.w, h: mine.h };
+    const snapped = snapBox(want, [drag.target === 'qr' ? textBox : qrBox], { width: rect.width, height: rect.height });
+    setGuides({ side: drag.side, lines: snapped.guides });
+
+    if (drag.target === 'qr') update(drag.side, { qrX: snapped.x, qrY: snapped.y });
+    else update(drag.side, { textX: snapped.x + serialW / 2, textY: snapped.y + serialH / 2 });
+  }
+
+  function endDrag() {
+    dragRef.current = null;
+    setGuides(null);
   }
 
   async function exportZip() {
@@ -286,10 +312,24 @@ export default function CardDesigner() {
                   <div
                     ref={(el) => { previewRefs.current[side] = el; }}
                     onPointerMove={onPointerMove}
-                    onPointerUp={() => { dragRef.current = null; }}
+                    onPointerUp={endDrag}
+                    onPointerLeave={endDrag}
                     style={{ position: 'relative', marginTop: 8, touchAction: 'none', userSelect: 'none', containerType: 'inline-size', border: '1px solid var(--border)' }}
                   >
                     <img src={sides[side]!.src} alt={`${side} design preview`} style={{ width: '100%', display: 'block' }} draggable={false} />
+                    {guides?.side === side &&
+                      guides.lines.map((g, i) => (
+                        <div
+                          key={`${g.axis}-${g.at}-${i}`}
+                          data-testid="snap-guide"
+                          aria-hidden
+                          style={
+                            g.axis === 'x'
+                              ? { position: 'absolute', top: 0, bottom: 0, left: `${g.at * 100}%`, width: 1, background: 'var(--accent)', pointerEvents: 'none' }
+                              : { position: 'absolute', left: 0, right: 0, top: `${g.at * 100}%`, height: 1, background: 'var(--accent)', pointerEvents: 'none' }
+                          }
+                        />
+                      ))}
                     {sides[side]!.placement && (() => {
                       const p = sides[side]!.placement!;
                       return (
