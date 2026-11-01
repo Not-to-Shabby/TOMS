@@ -26,6 +26,8 @@ data class SyncState(
     val parked: List<ParkedEvent> = emptyList(),
     val isUploading: Boolean = false,
     val uploadMessage: String? = null,
+    /** Set when the token could not be stored safely. Null when all is well. */
+    val tokenWarning: String? = null,
 )
 
 @HiltViewModel
@@ -40,6 +42,7 @@ class SyncViewModel @Inject constructor(
             deviceId = deviceConfig.deviceId,
             serverUrl = deviceConfig.serverUrl.value,
             isEnrolled = !deviceConfig.deviceToken.value.isNullOrBlank(),
+            tokenWarning = deviceConfig.storageWarning.value,
         ),
     )
     val state: StateFlow<SyncState> = _state.asStateFlow()
@@ -49,6 +52,7 @@ class SyncViewModel @Inject constructor(
         viewModelScope.launch { trips.parkedCount().collect { n -> _state.update { it.copy(parkedCount = n) } } }
         viewModelScope.launch { trips.parkedEvents().collect { list -> _state.update { it.copy(parked = list) } } }
         viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
+        viewModelScope.launch { deviceConfig.storageWarning.collect { w -> _state.update { it.copy(tokenWarning = w) } } }
         viewModelScope.launch {
             deviceConfig.deviceToken.collect { tok -> _state.update { it.copy(isEnrolled = !tok.isNullOrBlank()) } }
         }

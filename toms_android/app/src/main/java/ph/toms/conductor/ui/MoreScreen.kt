@@ -137,6 +137,7 @@ fun MoreScreen(
             }
             QuietButton("Set Token", { editToken = "" })
         }
+        sync.tokenWarning?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad) }
 
         BigButton(
             text = if (sync.isUploading) "Uploading..." else "Upload now (${sync.pendingCount} pending)",
