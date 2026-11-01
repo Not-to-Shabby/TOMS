@@ -17,7 +17,7 @@ Spike test client: nRF Connect on the Android phone (Pova 4 or the Xiaomi).
 | 2 | PN532 over I2C in reader mode: version check, then 100 consecutive reliable UID reads (NTAG, DESFire, MIFARE Classic) at exit distance, IRQ-driven | yes | — | — | — |
 | 3 | Flash-backed ring buffer (NVS/FCB): no data loss across 20 power cycles | yes | — | — | — |
 | 4 | Reconnect: 50 drop/restore cycles, buffered reads flush in order | yes | — | — | — |
-| 5 | OTA over BLE: MCUboot + SMP upload, image swap, confirm/revert on ESP32-S3 (sample docs list only nRF — unproven) | yes | — | — | — |
+| 5 | OTA over BLE: MCUboot swap mode, image swap, confirm/revert on ESP32-S3 (sample docs list only nRF — unproven); upload by Zephyr SMP or the custom service in `OTA_PLAN.md`, which has the phases and pass gates | yes | — | — | — |
 | 6 | Watchdog: real application watchdog binding verified (`espressif,esp32-timg-wdt` MWDT + `CONFIG_ESP_TASK_WDT`; the xt-wdt is crystal-fault only); fed only from a loop proving the PN532 task and BLE are alive; reset reason logged in the heartbeat | yes | — | — | — |
 
 ## Notes per item

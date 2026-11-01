@@ -1,6 +1,11 @@
-# Host unit test binary
+# Host unit test binaries
 lib/toms_core/test/test_core
 lib/toms_core/test/test_core.exe
+lib/toms_core/test/test_ota
+lib/toms_core/test/test_ota.exe
+
+# Python bytecode
+__pycache__/
 
 # Zephyr build outputs (workspace lives outside the repo, but be safe)
 build/

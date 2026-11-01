@@ -19,7 +19,11 @@ to this protocol. Android has no NFC-DEP; everything here is ISO 14443-A reader 
 - Every notify carries a truncated HMAC-SHA256 signature (8 bytes) keyed by the per-machine
   key (32 bytes, generated at enrollment, stored in the RM's NVS and in the phone's
   Keystore-encrypted config). Key material never enters git.
-- MTU: request 247; message fits one characteristic value. ATT timeout default.
+- MTU: the phone requests 247 (Android `requestMtu(247)`). This build's buffers
+  (`CONFIG_BT_L2CAP_TX_MTU=65`) cap the MTU at **65**, so one value carries at most
+  **62 bytes** (MTU minus the 3-byte ATT header). The phone may end up with less, so read
+  the negotiated MTU and never assume 247. This has not been measured on a real phone yet. Every RM value fits (largest is card_read at 25 bytes); a `state_update` does not
+  always, see below. ATT timeout default.
 - Byte order: little-endian. Multi-byte integers are unsigned unless stated.
 
 ## GATT layout
@@ -27,16 +31,30 @@ to this protocol. Android has no NFC-DEP; everything here is ISO 14443-A reader 
 Service UUID: `544F4D53-5245-5455-524E-414348494E45` ("TOMS RETURN MACHINE").
 Characteristics share the base with a 1-byte suffix:
 
+A peripheral can only notify and a central can only write, so a request from the RM is a
+notify and the phone's answer is a write on a different characteristic. The phone must
+enable notifications (write the CCC descriptor) on every notify characteristic it wants.
+
 | Suffix | Name | Properties | Direction |
 | --- | --- | --- | --- |
-| `…01` | card_read | notify, read | RM → phone |
+| `…01` | card_read | notify | RM → phone |
 | `…02` | state_update | write, write-without-response | phone → RM |
-| `…03` | paid_check | write, write-without-response | RM → phone |
-| `…04` | paid_reply | notify | phone → RM |
+| `…03` | paid_check | notify | RM → phone (the RM asks) |
+| `…04` | paid_reply | write, write-without-response | phone → RM (the phone answers) |
 | `…05` | heartbeat | notify | RM → phone |
 | `…06` | time_sync | write | phone → RM |
 | `…07` | config | write | phone → RM |
 | `…08` | ack | write | phone → RM |
+| `…09` | device_info | read (no pairing needed) | RM → phone |
+| `…0A` | rm_ack | notify | RM → phone (answers state_update) |
+| `…0B` | sim_card | write, dev mode only | phone → RM |
+
+Implemented in `firmware/return-machine/src/ble/svc.c`; the byte layouts are encoded and
+decoded by `firmware/lib/toms_core/src/codec.c`, with host tests in `test/test_main.c`.
+
+Current build status (until the spike and M2 land): values carry **no HMAC trailer** and
+writes are not yet bound to one bonded phone. `CONFIG_TOMS_DEV_MODE=y` in `prj.conf` lets any
+central write and enables `sim_card`. Without it, writes need an encrypted link.
 
 The Device Name characteristic carries `TOMS-RM-<last 4 hex of the machine id>`; the
 appearance is Generic. Advertising: connectable, 1 s interval while disconnected, service
@@ -78,12 +96,25 @@ Status codes: 0 available, 1 assigned_unpaid, 2 assigned_paid, 3 returned,
 4 returned_unpaid, 5 lost.
 
 On receipt the RM applies entries to its cached table, stores `table_version`, and answers
-with ack (below). On reconnect the phone always sends a full snapshot first.
+with a `rm_ack` notify (kind 1, the applied version). On reconnect the phone always sends a
+full snapshot first.
 
-### paid_check (RM → phone, write) and paid_reply (phone → RM, notify)
+The RM holds up to 128 cards, but one write holds at most 62 bytes: 6 header bytes plus
+`uid_len + 2` bytes per entry, so at most 9 entries with 4-byte UIDs, 6 with 7-byte UIDs. **Send a
+large table in several writes with the same `table_version`:** the first write has the
+snapshot flag set (it replaces the table), every following write has the flag clear (it adds
+entries). Wait for the `rm_ack` of each write before sending the next. A write with a lower
+version than the RM already holds is rejected, as is a malformed one (the write fails with
+ATT error 0x13, value not allowed).
+
+### paid_check (RM → phone, notify) and paid_reply (phone → RM, write)
+
+The RM asks on `paid_check`; the phone answers by writing `paid_reply`. The phone must have
+notifications enabled on `paid_check` or the RM treats it as "phone not reachable".
 
 Request: `check_seq u32`, `uid_len u8`, `uid`.
-Reply: `check_seq u32`, `verdict u8`.
+Reply: `check_seq u32`, `verdict u8`. Answer with the same `check_seq`; a reply with another
+number, or one that arrives after the timeout, is ignored.
 
 Verdicts: 0 OK (card is assigned_paid — play the paid tone), 1 UNPAID (play the unpaid
 alarm; the phone shows the collector), 2 UNKNOWN (UID not in the phone's registry — play the
@@ -112,8 +143,10 @@ and warns the conductor (phone-side rule from the plan doc).
 
 ### time_sync (phone → RM, write)
 
-`epoch u32` (UTC seconds), `remaining_ms u16` (sub-second remainder). The RM sets its clock
-and keeps the boot-offset so timestamps survive until the next sync.
+`epoch u32` (UTC seconds), `remaining_ms u16` (sub-second remainder, 0-999; a larger value
+is rejected). The RM sets its clock and keeps the boot-offset so timestamps survive until
+the next sync. Until the first sync, `card_read.timestamp` is 0. Send it right after every
+connect: the clock is not persisted.
 
 ### config (phone → RM, write)
 
@@ -125,8 +158,34 @@ and keeps the boot-offset so timestamps survive until the next sync.
 | heartbeat_interval_s | u16 | 10 |
 | alarm_clear_policy | u8 | 0 (alarm tone repeats until a state_update clears the card) |
 
-Write persists to NVS. The vehicle binding written at enrollment locks the RM to that
+Layout: `vehicle_id_len u8`, `vehicle_id` (at most 32 bytes), `tones_mask u8`,
+`paid_timeout_ms u16`, `heartbeat_interval_s u16`, `alarm_clear_policy u8`. A write is
+rejected whole if `paid_timeout_ms` is outside 1000-2000, `heartbeat_interval_s` is outside
+1-120, or the vehicle id is longer than 32 bytes. Bit n of `tones_mask` enables tone number n
+(0 boot, 1 ok, 2 unpaid, 3 unknown, 4 unverified, 5 duplicate).
+
+**Not built yet:** the write takes effect at once but is not persisted to NVS (it resets to
+the defaults on reboot), `vehicle_id` is stored but unused, and `alarm_clear_policy` is
+stored but has no effect. The vehicle binding written at enrollment will lock the RM to that
 phone's bond.
+
+### device_info (RM → phone, read)
+
+Read it first, before bonding; it needs no pairing. 7 bytes: `protocol_version u8` (now 1,
+bump on any layout change), `fw_major u8`, `fw_minor u8`, `fw_patch u8`, `flags u8`
+(bit 0 dev mode, bit 1 values are signed), `max_state_entries u16` (128). Refuse to talk to
+a machine whose `protocol_version` the app does not know.
+
+### rm_ack (RM → phone, notify)
+
+Same 5-byte layout as `ack`. The RM sends `kind 1` with the applied `table_version` after it
+accepts a `state_update`. (`kind 2` is reserved for the read buffer and is not sent yet.)
+
+### sim_card (phone → RM, write, dev mode only)
+
+`uid_len u8`, `uid` (1-10 bytes). The RM treats it exactly like a card tapped on the reader:
+the read is notified, a `paid_check` is sent, and the tone plays. It lets an app be tested
+with no PN532 fitted. With `CONFIG_TOMS_DEV_MODE` off the write fails with ATT error 0x03.
 
 ### ack (phone → RM, write)
 
@@ -136,7 +195,8 @@ phone's bond.
 | value | u32 | kind 1: applied table_version. kind 2: highest read_seq fully received by the phone. |
 
 kind 2 drives the flash ring buffer flush: on reconnect the RM sends buffered card_reads in
-read_seq order and only erases entries the ack has covered.
+read_seq order and only erases entries the ack has covered. **Not built yet:** the RM
+records both kinds (visible on its status page) but has no buffer to flush.
 
 ## Reconnect sequence
 

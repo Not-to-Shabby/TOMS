@@ -41,7 +41,11 @@ The board's battery pads and 5V pin are unused. One charger must ever touch the 
    `5V_BAT_OUT+`; J1 pin 0 is the Q4 collector. The plan doc text said "buzzer plus to 3.3V".
    Firmware behavior is unchanged (GPIO6 high = tone on, low-side NPN), but the buzzer needs
    the boost module running. Confirm the buzzer tolerates 5V.
-2. **Backlight drive is still the flagged bug.** The sketch has GPIO13 → 1K → NPN (Q3)
+2. **Backlight: RESOLVED on the built board (2026-10-30).** The board uses a PNP
+   transistor: base to GND lights the backlight, base high turns it off, so GPIO13 is
+   active low. Firmware default is now `CONFIG_TOMS_BACKLIGHT_ACTIVE_HIGH=n`. The sketch
+   still draws an NPN and should be updated. Original note follows.
+   **Backlight drive was the flagged bug.** The sketch has GPIO13 → 1K → NPN (Q3)
    low-side pulling the LCD `LED` pin to GND. If the module's LED pin is the anode (cathode
    grounded on-module), the backlight can never light — exactly the issue the plan doc's v2
    review raises. The parts list says a 2N3906 PNP was bought "used in the build", so the
@@ -55,8 +59,11 @@ The board's battery pads and 5V pin are unused. One charger must ever touch the 
    divider or gauge is installed.
 5. **Buzzer type unknown** (piezo vs electromagnetic). The sketch has no flyback diode
    across J1; the parts list carries a 1N4148 "electromagnetic buzzer only". OPEN.
-6. **Super Mini module variant unknown** (N8 8 MB flash vs N16R8 16 MB + PSRAM). Read with
-   `esptool flash_id` at the bench before sizing MCUboot partitions.
+6. **Flash is 4 MB** (owner confirmed 2026-10-30; esptool reported 4 MB). Not the N8 (8 MB)
+   or N16R8 (16 MB + PSRAM) variants this note first guessed. Whether the chip has PSRAM is
+   still unread: `esptool flash_id`, look for "Embedded PSRAM". The Zephyr build assumes
+   8 MB (`CONFIG_FLASH_SIZE=8388608`) because the devkit SoC definition picks an 8 MB module;
+   see `OTA_PLAN.md` for the fix. Flash with `--flash_size 4MB`.
 
 ## Bench checklist before first flash (Fork confirms)
 
