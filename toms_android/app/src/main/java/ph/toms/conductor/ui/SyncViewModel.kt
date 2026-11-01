@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ph.toms.conductor.data.TripRepository
+import ph.toms.conductor.data.db.ParkedEvent
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.sync.OutboxFlusher
 
@@ -21,6 +22,8 @@ data class SyncState(
     val pendingCount: Int = 0,
     /** Events the server refused. Kept for whoever fixes the cause, and not retried. */
     val parkedCount: Int = 0,
+    /** The refused events with their reasons, newest first (a short list, not all of them). */
+    val parked: List<ParkedEvent> = emptyList(),
     val isUploading: Boolean = false,
     val uploadMessage: String? = null,
 )
@@ -44,6 +47,7 @@ class SyncViewModel @Inject constructor(
     init {
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { trips.parkedCount().collect { n -> _state.update { it.copy(parkedCount = n) } } }
+        viewModelScope.launch { trips.parkedEvents().collect { list -> _state.update { it.copy(parked = list) } } }
         viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
         viewModelScope.launch {
             deviceConfig.deviceToken.collect { tok -> _state.update { it.copy(isEnrolled = !tok.isNullOrBlank()) } }
@@ -65,6 +69,18 @@ class SyncViewModel @Inject constructor(
                 "Uploaded ${report.delivered} event(s)"
             }
             _state.update { it.copy(isUploading = false, uploadMessage = msg) }
+        }
+    }
+
+    /**
+     * Puts the refused events back in the queue and sends them. If the server refuses them again they are parked
+     * again with the new reason, so retrying never loops: each press is one try.
+     */
+    fun retryRefused(onFlushed: () -> Unit = {}) {
+        if (_state.value.isUploading) return
+        viewModelScope.launch {
+            trips.retryParked()
+            flushNow(onFlushed)
         }
     }
 

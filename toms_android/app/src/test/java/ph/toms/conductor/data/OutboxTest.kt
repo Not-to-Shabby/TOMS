@@ -3,6 +3,7 @@ package ph.toms.conductor.data
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -180,6 +181,84 @@ class OutboxTest {
         assertEquals(1, db.outbox().unparkAll())
         assertEquals(1, db.outbox().pendingCountNow())
         assertEquals(0, db.outbox().parkedCountNow())
+    }
+
+    @Test fun `retrying refused events puts them back in the queue and the parked count goes to zero`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        repo.recordTrip(trip("t2", "AA"), CardState.ASSIGNED_UNPAID, 1100)
+        val ids = db.outbox().pending(10).map { it.eventId }
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), ids.associateWith { "unknown device" }) }).flush()
+        assertEquals(2, db.outbox().parkedCountNow())
+        assertEquals(0, db.outbox().pendingCountNow())
+
+        assertEquals(2, repo.retryParked())
+
+        assertEquals(0, db.outbox().parkedCountNow())
+        assertEquals(2, db.outbox().pendingCountNow())
+        assertEquals("they keep their order", ids, db.outbox().pending(10).map { it.eventId })
+        assertEquals("the old reason is gone", null, db.outbox().parkedReason(ids[0]))
+    }
+
+    @Test fun `a retried event that the server now accepts is delivered and stays delivered`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        val id = db.outbox().pending(10).single().eventId
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), mapOf(id to "server bug")) }).flush()
+        repo.retryParked()
+
+        val report = flusher(FakeUploader { b -> UploadResult.Acked(b.map { it.eventId }.toSet()) }).flush()
+
+        assertEquals(1, report.delivered)
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertEquals(0, db.outbox().parkedCountNow())
+        assertEquals("nothing left to retry", 0, repo.retryParked())
+    }
+
+    @Test fun `a second refusal parks the event again with the new reason, so a retry never loops`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        val id = db.outbox().pending(10).single().eventId
+        val up = FakeUploader { UploadResult.Acked(emptySet(), mapOf(id to "still wrong")) }
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), mapOf(id to "first reason")) }).flush()
+
+        repo.retryParked()
+        val report = flusher(up).flush()
+
+        assertEquals("one try per retry, not a loop", 1, up.seen.size)
+        assertEquals(1, report.parked)
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertEquals(1, db.outbox().parkedCountNow())
+        assertEquals("still wrong", db.outbox().parkedReason(id))
+    }
+
+    @Test fun `retry with nothing refused changes nothing`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        assertEquals(0, repo.retryParked())
+        assertEquals(1, db.outbox().pendingCountNow())
+    }
+
+    @Test fun `the refused list has each event with its reason, newest first, and shrinks after a retry`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        repo.recordTrip(trip("t2", "AA"), CardState.ASSIGNED_UNPAID, 1100)
+        val ids = db.outbox().pending(10).map { it.eventId }
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), mapOf(ids[0] to "bad payload", ids[1] to "unknown device")) }).flush()
+
+        val list = repo.parkedEvents().first()
+
+        assertEquals(listOf(ids[1], ids[0]), list.map { it.eventId })
+        assertEquals(listOf("unknown device", "bad payload"), list.map { it.reason })
+        assertTrue(list.all { it.type == EventTypes.TRIP_CREATED })
+        repo.retryParked()
+        assertEquals(emptyList<Any>(), repo.parkedEvents().first())
+    }
+
+    @Test fun `the refused list is capped, and delivered events never appear in it`() = runBlocking {
+        repeat(5) { i -> repo.recordTrip(trip("t$i", "U$i"), CardState.ASSIGNED_UNPAID, 1000L + i) }
+        val ids = db.outbox().pending(10).map { it.eventId }
+        flusher(FakeUploader { UploadResult.Acked(ids.take(4).toSet(), ids.drop(4).associateWith { "no" }) }).flush()
+        assertEquals(1, repo.parkedEvents().first().size)
+
+        repo.retryParked()
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), ids.associateWith { "no" }) }).flush()
+        assertEquals(1, repo.parkedEvents(limit = 20).first().size)
     }
 
     @Test fun `large backlog drains in batches in order`() = runBlocking {

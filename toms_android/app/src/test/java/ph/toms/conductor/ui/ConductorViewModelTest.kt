@@ -388,6 +388,32 @@ class ConductorViewModelTest {
     }
 
     @Test
+    fun `retry refused events sends them again, and a second refusal parks them again`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        uploader.rejectAll = "unknown device"
+        syncVm.flushNow()
+        waitUntil { !syncVm.state.value.isUploading && syncVm.state.value.parkedCount > 0 }
+        val parked = syncVm.state.value.parkedCount
+        assertTrue(parked > 0)
+        assertTrue("the reason is listed", syncVm.state.value.parked.all { it.reason == "unknown device" })
+
+        // The server still refuses: each press is one try, the events go back to parked with the reason it gave now.
+        uploader.rejectAll = "still unknown"
+        syncVm.retryRefused()
+        waitUntil { !syncVm.state.value.isUploading && syncVm.state.value.parked.all { it.reason == "still unknown" } && syncVm.state.value.parkedCount == parked }
+        assertEquals(0, db.outbox().pendingCountNow())
+
+        // The cause is fixed: the next press delivers them and the list empties.
+        uploader.rejectAll = null
+        syncVm.retryRefused()
+        waitUntil { !syncVm.state.value.isUploading && syncVm.state.value.parkedCount == 0 }
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertTrue(syncVm.state.value.parked.isEmpty())
+    }
+
+    @Test
     fun `a refused event is reported as set aside and counted as parked, not pending`() = runTest {
         advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))
