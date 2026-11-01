@@ -364,6 +364,35 @@ describe('credentials from the environment', () => {
     assert.deepEqual(creds, { username: 'boss', password: 'long-enough-pass' });
   });
 
+  test('the username is shown as it is typed, and the password is not', async () => {
+    const { EventEmitter } = await import('node:events');
+    const { readVisible, readHidden } = await import('./setup-pilot.mjs');
+    // A real terminal sends keystrokes only once a reader is listening. The fake does the same: it sends the typed
+    // text on resume(), which the reader calls after it attaches its listener.
+    const fakeTerminal = (typed) => {
+      const t = new EventEmitter();
+      t.isTTY = true;
+      t.raw = false;
+      t.setRawMode = (on) => { t.raw = on; };
+      t.resume = () => { setImmediate(() => t.emit('data', Buffer.from(typed))); };
+      t.pause = () => {};
+      t.setEncoding = () => {};
+      return t;
+    };
+    const writes = [];
+    const out = { write: (s) => writes.push(s) };
+
+    const user = fakeTerminal('boss\r');
+    assert.equal(await readVisible('Admin username: ', user, out), 'boss');
+    assert.match(writes.join(''), /boss/, 'the username is echoed so the admin can see what they typed');
+    assert.equal(user.raw, false, 'the terminal is back to normal after the username');
+
+    writes.length = 0;
+    const pass = fakeTerminal('correct-horse\r');
+    assert.equal(await readHidden('Admin password: ', pass, out), 'correct-horse');
+    assert.doesNotMatch(writes.join(''), /correct-horse/, 'the password is never echoed');
+  });
+
   test('without a terminal and without the variables, it refuses instead of waiting', async () => {
     await assert.rejects(readHidden('Admin password: ', { isTTY: false }, { write() {} }), /no terminal/);
   });

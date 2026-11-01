@@ -319,8 +319,6 @@ export function readHidden(question, stdin = process.stdin, stdout = process.std
   if (!stdin.isTTY) return Promise.reject(new Error('no terminal to type into; run it in a terminal, or use the environment variables'));
   return new Promise((resolvePromise, rejectPromise) => {
     stdout.write(question);
-    stdin.setRawMode(true);
-    stdin.resume();
     stdin.setEncoding('utf8');
     let value = '';
     const finish = (fn) => {
@@ -331,14 +329,19 @@ export function readHidden(question, stdin = process.stdin, stdout = process.std
       fn();
     };
     const onData = (chunk) => {
-      for (const ch of chunk) {
+      // Accept a string or a Buffer. Iterating a Buffer yields numbers, which would never match a character.
+      for (const ch of String(chunk)) {
         if (ch === '\r' || ch === '\n') return finish(() => resolvePromise(value));
         if (ch === '\u0003') return finish(() => rejectPromise(new Error('cancelled')));
         if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
         else value += ch;
       }
     };
+    // The listener is attached before raw mode and resume, so no keystroke can arrive before it is read.
+    // Without setRawMode and resume the terminal sends nothing until Enter, and the prompt never reads a key.
     stdin.on('data', onData);
+    stdin.setRawMode(true);
+    stdin.resume();
   });
 }
 
@@ -348,9 +351,43 @@ export async function conductorSecret(env = process.env, stdin = process.stdin, 
   return readHidden('Password for the new conductor (at least 8 characters): ', stdin, stdout);
 }
 
+/**
+ * Reads one line from the terminal and shows what is typed. A username is not a secret, so it is not hidden.
+ * Without a terminal it fails, unless the caller set the value in the environment.
+ */
+export function readVisible(question, stdin = process.stdin, stdout = process.stdout) {
+  if (!stdin.isTTY) return Promise.reject(new Error('no terminal to type into; run it in a terminal, or use the environment variables'));
+  stdout.write(question);
+  return new Promise((resolvePromise) => {
+    let value = '';
+    const onData = (chunk) => {
+      for (const ch of String(chunk)) {
+        if (ch === '\r' || ch === '\n') {
+          stdin.removeListener('data', onData);
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdout.write('\n');
+          return resolvePromise(value.trim());
+        }
+        if (ch === '\u007f' || ch === '\b') {
+          value = value.slice(0, -1);
+          stdout.write('\b \b');
+        } else {
+          value += ch;
+          stdout.write(ch);
+        }
+      }
+    };
+    // The listener is attached before the terminal is resumed, so no keystroke can arrive before it is read.
+    stdin.on('data', onData);
+    stdin.setRawMode(true);
+    stdin.resume();
+  });
+}
+
 /** The admin credentials: from the environment when both are set, otherwise asked for in the terminal. */
 export async function adminCredentials(env = process.env, stdin = process.stdin, stdout = process.stdout) {
-  const username = env.TOMS_ADMIN_USERNAME || await readHidden('Admin username: ', stdin, stdout);
+  const username = env.TOMS_ADMIN_USERNAME || await readVisible('Admin username: ', stdin, stdout);
   const password = env.TOMS_ADMIN_PASSWORD || await readHidden('Admin password: ', stdin, stdout);
   if (!username || !password) throw new Error('an admin username and password are both needed');
   return { username, password };
