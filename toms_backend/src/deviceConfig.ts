@@ -37,7 +37,7 @@ export function registerDeviceConfigRoutes(app: Express, { pool, auth }: { pool:
 
     const assigned = (
       await pool.query(
-        `SELECT r.id AS route_id, r.name AS route_name
+        `SELECT r.id AS route_id, r.name AS route_name, v.id AS vehicle_id, v.plate_number AS vehicle_plate
          FROM devices d
          JOIN vehicles v ON v.id = d.vehicle_id
          JOIN routes r ON r.id = v.assigned_route_id
@@ -94,6 +94,10 @@ export function registerDeviceConfigRoutes(app: Express, { pool, auth }: { pool:
     }
 
     const body = {
+      vehicle: {
+        id: assigned.vehicle_id as string,
+        plate: (assigned.vehicle_plate as string) || (assigned.vehicle_id as string),
+      },
       route: { id: routeId, name: assigned.route_name as string },
       stops: stops.map((s) => ({ id: String(s.id), name: s.name as string, lat: s.lat as number, lon: s.lon as number, radius_m: s.radius_m as number })),
       fare: {

@@ -86,6 +86,7 @@ describe('GET /api/device/config: what it sends', () => {
     const { route, matrix, token } = await workingDevice();
     const res = await get(token);
     expect(res.status).toBe(200);
+    expect(res.body.vehicle).toEqual({ id: 'v1', plate: 'PLATE-v1' });
     expect(res.body.route).toEqual({ id: route, name: 'Tibanga - Pala-o' });
     expect(res.body.stops.map((s: { name: string }) => s.name)).toEqual(['Tibanga', 'Pala-o']);
     expect(res.body.stops[0]).toMatchObject({ lat: 8.2, lon: 124.2, radius_m: 120 });
