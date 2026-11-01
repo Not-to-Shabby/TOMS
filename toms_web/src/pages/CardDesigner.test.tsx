@@ -108,3 +108,133 @@ describe('CardDesigner', () => {
     expect(render_.buildExportZip).toHaveBeenCalledWith(expect.objectContaining({ baseUrl: 'https://toms.example.com' }));
   });
 });
+
+describe('CardDesigner reprint', () => {
+  const renderWith = (state: object | null) =>
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/cards/designer', state }]}>
+        <CardDesigner />
+      </MemoryRouter>,
+    );
+
+  const existing = [
+    { card_uuid: 'u1', serial: 'TOMS-0001', status: 'active', nfc_uid: '04AA' },
+    { card_uuid: 'u2', serial: 'TOMS-0002', status: 'lost', nfc_uid: '04BB' },
+  ];
+
+  it('loads the chosen cards instead of offering to create a new batch', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { cards: existing, count: 2 } });
+    renderWith({ reprint: { card_uuids: ['u1', 'u2'] } });
+    expect(await screen.findByText(/Reprinting 2 existing cards/)).toBeInTheDocument();
+    expect(post).toHaveBeenCalledWith('/cards/lookup', { card_uuids: ['u1', 'u2'] });
+    expect(screen.queryByRole('button', { name: /unpaired cards/ })).not.toBeInTheDocument();
+  });
+
+  it('passes a filter through, for everything that matched in the registry', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { cards: existing, count: 2 } });
+    renderWith({ reprint: { filter: { search: 'TOMS-', status: 'active' } } });
+    await screen.findByText(/Reprinting 2 existing cards/);
+    expect(post).toHaveBeenCalledWith('/cards/lookup', { filter: { search: 'TOMS-', status: 'active' } });
+  });
+
+  it('uses the existing card ids, so the QR codes do not change', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { cards: existing, count: 2 } });
+    renderWith({ reprint: { card_uuids: ['u1', 'u2'] } });
+    await screen.findByText(/Reprinting 2 existing cards/);
+    await userEvent.upload(screen.getByLabelText('front design'), png);
+    await screen.findByTestId('qr-box-front');
+    await userEvent.click(screen.getByRole('button', { name: /Download ZIP/ }));
+    await waitFor(() => expect(render_.buildExportZip).toHaveBeenCalled());
+    const call = (render_.buildExportZip as unknown as { mock: { calls: [{ cards: { serial: string; card_uuid: string }[] }][] } }).mock.calls[0][0];
+    expect(call.cards).toEqual([
+      { serial: 'TOMS-0001', card_uuid: 'u1' },
+      { serial: 'TOMS-0002', card_uuid: 'u2' },
+    ]);
+  });
+
+  it('leaves out a card that has no serial and says so', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { cards: [...existing, { card_uuid: 'u3', serial: null, status: 'active', nfc_uid: '04CC' }], count: 3 } });
+    renderWith({ reprint: { card_uuids: ['u1', 'u2', 'u3'] } });
+    expect(await screen.findByText(/Reprinting 2 existing cards \(1 without a serial left out\)/)).toBeInTheDocument();
+  });
+
+  it('uses the singular for one card', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue({ data: { cards: [existing[0]], count: 1 } });
+    renderWith({ reprint: { card_uuids: ['u1'] } });
+    expect(await screen.findByText(/Reprinting 1 existing card\./)).toBeInTheDocument();
+  });
+
+  it('shows the server message when the lookup fails', async () => {
+    vi.spyOn(api, 'post').mockRejectedValue({ response: { data: { error: 'That matches more than 500 cards. Narrow the filter and try again.' } } });
+    renderWith({ reprint: { filter: {} } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('more than 500 cards');
+  });
+
+  it('does nothing special when opened normally', () => {
+    const post = vi.spyOn(api, 'post');
+    renderWith(null);
+    expect(post).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Create 50 unpaired cards/ })).toBeInTheDocument();
+  });
+});
+
+describe('CardDesigner snapping while dragging', () => {
+  // jsdom has no pointer capture; a real browser has it. Stub it so a drag can start under test.
+  beforeEach(() => {
+    if (!('setPointerCapture' in HTMLElement.prototype)) {
+      Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { value: () => undefined, configurable: true });
+    }
+  });
+
+  // jsdom has no layout, so give the preview a real size. 500 x 300 px card.
+  const sized = (el: HTMLElement) => {
+    el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 500, height: 300, right: 500, bottom: 300, x: 0, y: 0, toJSON: () => '' }) as DOMRect;
+  };
+
+  async function uploaded() {
+    renderPage();
+    await userEvent.upload(screen.getByLabelText('front design'), png);
+    const box = await screen.findByTestId('qr-box-front');
+    const preview = box.parentElement as HTMLElement;
+    sized(preview);
+    return { box, preview };
+  }
+
+  const drag = (el: HTMLElement, from: { x: number; y: number }, to: { x: number; y: number }) => {
+    fireEvent.pointerDown(el, { clientX: from.x, clientY: from.y, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(el.parentElement as HTMLElement, { clientX: to.x, clientY: to.y, pointerId: 1 });
+  };
+
+  it('shows no guide until something is dragged', async () => {
+    await uploaded();
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+  });
+
+  it('snaps the QR onto the left edge of the card and shows the guide', async () => {
+    const { box, preview } = await uploaded();
+    // Start the QR's left edge at 0.62 (310 px). Drag left so its edge lands 2 px from the card edge.
+    const startX = 310;
+    const qrLeftPx = parseFloat(box.style.left) / 100 * 500; // 0.62 * 500 = 310
+    drag(box, { x: startX + 4, y: 100 }, { x: 2 + 4, y: 100 });
+    void qrLeftPx;
+    expect(screen.getAllByTestId('snap-guide').length).toBeGreaterThan(0);
+    expect(preview).toBeInTheDocument();
+    const left = parseFloat(box.style.left);
+    expect(left).toBeCloseTo(0, 1); // snapped flush to the card's left edge
+  });
+
+  it('removes the guides when the drag ends', async () => {
+    const { box, preview } = await uploaded();
+    drag(box, { x: 314, y: 100 }, { x: 6, y: 100 });
+    expect(screen.getAllByTestId('snap-guide').length).toBeGreaterThan(0);
+    fireEvent.pointerUp(preview);
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+  });
+
+  it('leaves the QR where the pointer put it when nothing is in reach', async () => {
+    const { box } = await uploaded();
+    drag(box, { x: 314, y: 100 }, { x: 264, y: 100 }); // 50 px to the left, away from every line
+    expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
+    expect(parseFloat(box.style.left)).toBeGreaterThan(0);
+  });
+});

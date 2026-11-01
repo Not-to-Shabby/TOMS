@@ -80,7 +80,11 @@ export class LoginLimiter {
     const t = this.now();
     const e = this.entries.get(key);
     if (!e || t - e.first >= this.windowMs) {
-      if (this.entries.size >= 10_000) this.entries.clear(); // bound memory under a flood of keys
+      // Bounded under a flood of keys. Drop only the oldest entry: clearing everything would also clear live blocks.
+      if (!e && this.entries.size >= 10_000) {
+        const oldest = this.entries.keys().next().value;
+        if (oldest !== undefined) this.entries.delete(oldest);
+      }
       this.entries.set(key, { count: 1, first: t });
     } else {
       e.count += 1;

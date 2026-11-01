@@ -330,3 +330,45 @@ describe('conductor management', () => {
     expect((jwt.decode(res.body.token) as jwt.JwtPayload).exp! - (jwt.decode(res.body.token) as jwt.JwtPayload).iat!).toBe(16 * 3600);
   });
 });
+
+describe('login limits by address', () => {
+  // Trust is set to 2 here, as in production (Caddy and nginx). Each test sends its own X-Forwarded-For address.
+  const proxied = () => createApp({
+    pool,
+    jwtSecret: TEST_JWT_SECRET,
+    trustProxyHops: 2,
+    loginLimiter: new LoginLimiter(3, 60_000),
+    loginIpLimiter: new LoginLimiter(5, 60_000),
+  });
+  const from = (app: ReturnType<typeof createApp>, ip: string, username: string, password: string) =>
+    request(app).post('/api/admin/login').set('X-Forwarded-For', `${ip}, 172.18.0.5`).send({ username, password });
+
+  beforeEach(async () => {
+    await createAdmin(pool, 'boss', ADMIN_PASSWORD);
+  });
+
+  it('a stranger guessing the name from another address does not lock the real admin out', async () => {
+    const app = proxied();
+    for (let i = 0; i < 3; i++) expect((await from(app, '198.51.100.7', 'boss', `guess-${i}-guess`)).status).toBe(401);
+    expect((await from(app, '198.51.100.7', 'boss', ADMIN_PASSWORD)).status).toBe(429);
+    expect((await from(app, '203.0.113.9', 'boss', ADMIN_PASSWORD)).status).toBe(200);
+  });
+
+  it('one address trying many names is capped, even with a different name each time', async () => {
+    const app = proxied();
+    for (let i = 0; i < 5; i++) expect((await from(app, '198.51.100.8', `name-${i}`, 'nope-nope-nope')).status).toBe(401);
+    expect((await from(app, '198.51.100.8', 'name-99', 'nope-nope-nope')).status).toBe(429);
+  });
+
+  it('ignores an address the client typed into X-Forwarded-For (only the proxy-added address counts)', async () => {
+    const app = proxied();
+    // The client claims to be 10.9.9.9 on every try. The proxy chain still appends the real address on the right.
+    for (let i = 0; i < 3; i++) {
+      await request(app).post('/api/admin/login').set('X-Forwarded-For', `10.9.9.${i}, 198.51.100.9, 172.18.0.5`)
+        .send({ username: 'boss', password: `guess-${i}-guess` });
+    }
+    const blocked = await request(app).post('/api/admin/login').set('X-Forwarded-For', '10.9.9.200, 198.51.100.9, 172.18.0.5')
+      .send({ username: 'boss', password: ADMIN_PASSWORD });
+    expect(blocked.status).toBe(429);
+  });
+});

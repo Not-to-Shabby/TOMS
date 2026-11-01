@@ -6,7 +6,7 @@ import { z } from 'zod';
 export const OPEN_TRIP_WINDOW_HOURS = 24;
 export const EXPORT_ROW_LIMIT = 50_000;
 const MAX_PAGE_SIZE = 200;
-const OPEN_STATES = "('ASSIGNED_UNPAID', 'ASSIGNED_PAID')";
+export const OPEN_STATES = "('ASSIGNED_UNPAID', 'ASSIGNED_PAID')";
 
 export async function assertTimezone(pool: Pool, tz: string): Promise<string> {
   const { rowCount } = await pool.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [tz]);

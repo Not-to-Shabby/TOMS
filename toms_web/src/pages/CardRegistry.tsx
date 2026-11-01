@@ -1,9 +1,22 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Search, QrCode, Printer, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Plus, Search, QrCode, Printer, Download, Radio, CheckCircle2, AlertTriangle, XCircle, Bus, Layers, Wifi, ExternalLink } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
-import { api } from '../lib/api';
+import { api, downloadFile } from '../lib/api';
+import { lastUsedText } from '../lib/format';
+import BulkBar from '../components/BulkBar';
+import BulkDialog, { type BulkChoice, type BulkTarget } from '../components/BulkDialog';
+import { checkState, commonMoves, statusCounts, toggle, toggleAll } from '../lib/cardSelection';
 import LoadError from '../components/LoadError';
+import PairPrintedCardModal from '../components/PairPrintedCardModal';
+import CardActionDialog from '../components/CardActionDialog';
+import { changeStatus } from '../lib/cardRequests';
+import CardEditDialog from '../components/CardEditDialog';
+import CardHistoryDrawer from '../components/CardHistoryDrawer';
+import Modal from '../components/Modal';
+import PairPanel from '../components/PairPanel';
+import CardRowMenu from '../components/CardRowMenu';
+import { confirmationFor, type CardStatus, type Confirmation, type RowAction } from '../lib/cardLifecycle';
 import { loadErrorMessage } from '../lib/loadError';
 
 interface CardItem {
@@ -16,6 +29,8 @@ interface CardItem {
   notes: string | null;
   vehicle_id: string | null;
   vehicle_plate: string | null;
+  last_used_at: string | null;
+  open_trips: number;
 }
 
 interface VehicleItem {
@@ -35,6 +50,20 @@ export default function CardRegistry() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [vehicleFilter, setVehicleFilter] = useState<string>('all');
   const [showEnrollModal, setShowEnrollModal] = useState(false);
+  const [showPairModal, setShowPairModal] = useState(false);
+  const [editing, setEditing] = useState<CardItem | null>(null);
+  const [historyOf, setHistoryOf] = useState<CardItem | null>(null);
+  const [replacingChip, setReplacingChip] = useState<CardItem | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<{ choice: BulkChoice; target: BulkTarget } | null>(null);
+  const [allMatching, setAllMatching] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const [pending, setPending] = useState<{
+    confirmation: Confirmation;
+    run: (reason: string, confirm: boolean) => Promise<unknown>;
+  } | null>(null);
+  const [rowError, setRowError] = useState<string | null>(null);
   const [selectedCardForQr, setSelectedCardForQr] = useState<CardItem | null>(null);
 
   // Enrollment Form State
@@ -231,13 +260,29 @@ export default function CardRegistry() {
     }
   }
 
-  async function handleStatusChange(cardUuid: string, newStatus: string) {
-    try {
-      await api.patch(`/cards/${cardUuid}`, { status: newStatus });
-      loadCards();
-    } catch {
-      alert('Failed to update card status');
+  /** Runs a row action. Risky ones open a confirmation first; harmless ones go straight through. */
+  function handleRowAction(card: CardItem, action: RowAction, to?: CardStatus) {
+    setRowError(null);
+    const name = card.serial ?? card.label ?? card.card_uuid.slice(0, 8);
+    if (action === 'edit') return void setEditing(card);
+    if (action === 'history') return void setHistoryOf(card);
+    if (action === 'replace') return void setReplacingChip(card);
+
+    const confirmation = confirmationFor(action, name);
+    if (action === 'unpair' && confirmation) {
+      return void setPending({
+        confirmation,
+        run: (reason, confirm) => api.post(`/cards/${card.card_uuid}/unpair`, { reason: reason || undefined, confirm: confirm || undefined }),
+      });
     }
+    if (!to) return;
+    if (confirmation) {
+      return void setPending({ confirmation, run: (reason, confirm) => changeStatus(card.card_uuid, to, reason, confirm) });
+    }
+    // Activate, found, restore: nothing to confirm.
+    changeStatus(card.card_uuid, to, '', false)
+      .then(loadCards)
+      .catch((err) => setRowError(err?.response?.data?.error ?? 'Could not change the card.'));
   }
 
   async function handleVehicleReassign(cardUuid: string, newVehicleId: string) {
@@ -264,6 +309,48 @@ export default function CardRegistry() {
         return <span style={{ color: 'var(--text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600 }}>Retired</span>;
     }
   }
+
+  // Only cards still in the list count as selected, so a filter or reload cannot leave a hidden selection behind.
+  const picked = useMemo(() => cards.filter((c) => selected.has(c.card_uuid)), [cards, selected]);
+  const moves = useMemo(() => commonMoves(picked.map((c) => ({ card_uuid: c.card_uuid, status: c.status, nfc_uid: c.nfc_uid }))), [picked]);
+  const filterNow = useMemo(
+    () => ({
+      search: search.trim() || undefined,
+      status: statusFilter !== 'all' ? statusFilter : undefined,
+      vehicle_id: vehicleFilter !== 'all' ? vehicleFilter : undefined,
+    }),
+    [search, statusFilter, vehicleFilter],
+  );
+  const everythingPicked = allMatching ? cards : picked;
+
+  function targetNow(): BulkTarget {
+    return allMatching
+      ? { filter: filterNow, count: cards.length, counts: statusCounts(cards) }
+      : { ids: picked.map((c) => c.card_uuid), count: picked.length, counts: statusCounts(picked) };
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    setAllMatching(false);
+  }
+
+  function exportCsv() {
+    const qs = new URLSearchParams();
+    if (filterNow.search) qs.set('search', filterNow.search);
+    if (filterNow.status) qs.set('status', filterNow.status);
+    if (filterNow.vehicle_id) qs.set('vehicle_id', filterNow.vehicle_id);
+    downloadFile(`/cards/export${qs.toString() ? `?${qs}` : ''}`, 'toms_cards.csv')
+      .then(({ truncated }) => setNotice(truncated ? 'The export was cut at 50,000 rows. Narrow the filter for the rest.' : null))
+      .catch(() => setRowError('Could not export the card list.'));
+  }
+
+  function reprint() {
+    const t = targetNow();
+    navigate('/cards/designer', { state: { reprint: t.ids ? { card_uuids: t.ids } : { filter: t.filter } } });
+  }
+
+  const unpairedCards = useMemo(() => cards.filter((c) => c.status === 'unpaired'), [cards]);
+  const unpairedCount = unpairedCards.length;
 
   // Group cards by vehicle
   const groupedSections = useMemo(() => {
@@ -341,6 +428,21 @@ export default function CardRegistry() {
           <Printer size={18} />
           <span>Print-ready cards</span>
         </Link>
+        <button
+          onClick={exportCsv}
+          title="Download the card list as a CSV, with the filters you have set"
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer' }}
+        >
+          <Download size={18} />
+          <span>Export CSV</span>
+        </button>
+        <button
+          onClick={() => setShowPairModal(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '12px 20px', borderRadius: '8px', whiteSpace: 'nowrap', border: '1px solid var(--accent)', background: 'rgba(0, 210, 255, 0.12)', color: 'var(--accent)', cursor: 'pointer', fontWeight: 700 }}
+        >
+          <QrCode size={18} />
+          <span>Pair printed card{unpairedCount > 0 ? ` (${unpairedCount} waiting)` : ''}</span>
+        </button>
         <button
           onClick={() => openEnrollForVehicle()}
           className="btn-primary"
@@ -450,6 +552,17 @@ export default function CardRegistry() {
       </div>
 
       <LoadError message={loadError} onRetry={() => { loadVehicles(); loadCards(); }} />
+      {notice && <div role="status" style={{ color: 'var(--warning)', fontSize: 13 }}>{notice}</div>}
+      <BulkBar
+        count={allMatching ? cards.length : picked.length}
+        counts={statusCounts(everythingPicked)}
+        moves={allMatching ? commonMoves(cards.map((c) => ({ card_uuid: c.card_uuid, status: c.status, nfc_uid: c.nfc_uid }))) : moves}
+        vehicles={vehicles}
+        allMatching={!allMatching && picked.length > 0 && picked.length < cards.length ? { total: cards.length, onSelect: () => setAllMatching(true) } : null}
+        onChoose={(choice) => setBulk({ choice, target: targetNow() })}
+        onReprint={reprint}
+        onClear={clearSelection}
+      />
 
       {/* Grouped Vehicle Card Decks */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', paddingBottom: '16px' }}>
@@ -535,17 +648,44 @@ export default function CardRegistry() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.02)' }}>
+                        <th style={{ padding: '12px 0 12px 24px', width: 24 }}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select all in ${section.title}`}
+                            checked={checkState(selected, section.items.map((i) => i.card_uuid)) === 'all'}
+                            ref={(el) => {
+                              if (el) el.indeterminate = checkState(selected, section.items.map((i) => i.card_uuid)) === 'some';
+                            }}
+                            onChange={() => { setAllMatching(false); setSelected((s) => toggleAll(s, section.items.map((i) => i.card_uuid))); }}
+                          />
+                        </th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>NFC UID</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Card Label</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Assigned Vehicle</th>
-                        <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Static QR Link</th>
+                        <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Last used</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px' }}>Status</th>
                         <th style={{ padding: '12px 24px', color: 'var(--text-secondary)', fontSize: '12px', textAlign: 'center' }}>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {section.items.map((c) => (
-                        <tr key={c.card_uuid} style={{ borderBottom: '1px solid var(--border)' }}>
+                        <tr key={c.card_uuid} style={{ borderBottom: '1px solid var(--border)', background: selected.has(c.card_uuid) || allMatching ? 'rgba(0, 210, 255, 0.07)' : undefined }}>
+                          <td style={{ padding: '14px 0 14px 24px', width: 24 }}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Select ${c.serial ?? c.label ?? c.card_uuid.slice(0, 8)}`}
+                              checked={allMatching || selected.has(c.card_uuid)}
+                              onChange={() => {
+                                if (allMatching) {
+                                  // Leaving "everything that matches": keep every card ticked except this one.
+                                  setAllMatching(false);
+                                  setSelected(new Set(cards.map((x) => x.card_uuid).filter((id) => id !== c.card_uuid)));
+                                } else {
+                                  setSelected((s) => toggle(s, c.card_uuid));
+                                }
+                              }}
+                            />
+                          </td>
                           <td style={{ padding: '14px 24px', fontFamily: 'monospace', fontWeight: 700, color: 'var(--accent)' }}>
                             {c.nfc_uid ?? '—'}
                           </td>
@@ -575,8 +715,15 @@ export default function CardRegistry() {
                               ))}
                             </select>
                           </td>
-                          <td style={{ padding: '14px 24px', fontSize: '12px', fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
-                            /r/{c.card_uuid.slice(0, 8)}...
+                          <td style={{ padding: '14px 24px', fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                            <span title={c.last_used_at ? new Date(c.last_used_at).toLocaleString() : 'This card has not been used yet'}>
+                              {lastUsedText(c.last_used_at)}
+                            </span>
+                            {c.open_trips > 0 && (
+                              <div data-testid="open-trips" style={{ color: 'var(--warning)', fontWeight: 600, marginTop: 2 }}>
+                                {c.open_trips} trip{c.open_trips === 1 ? '' : 's'} open
+                              </div>
+                            )}
                           </td>
                           <td style={{ padding: '14px 24px' }}>{getStatusBadge(c.status)}</td>
                           <td style={{ padding: '14px 24px', textAlign: 'center' }}>
@@ -589,22 +736,12 @@ export default function CardRegistry() {
                                 <QrCode size={15} />
                                 <span>QR</span>
                               </button>
-                              {c.status === 'active' && (
-                                <button
-                                  onClick={() => handleStatusChange(c.card_uuid, 'suspended')}
-                                  style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--warning)', cursor: 'pointer', fontSize: '11px' }}
-                                >
-                                  Suspend
-                                </button>
-                              )}
-                              {c.status === 'suspended' && (
-                                <button
-                                  onClick={() => handleStatusChange(c.card_uuid, 'active')}
-                                  style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--bg-dark)', color: 'var(--success)', cursor: 'pointer', fontSize: '11px' }}
-                                >
-                                  Activate
-                                </button>
-                              )}
+                              <CardRowMenu
+                                serial={c.serial ?? c.label ?? c.card_uuid.slice(0, 8)}
+                                status={c.status}
+                                hasChip={c.nfc_uid !== null}
+                                onAction={(action, to) => handleRowAction(c, action, to)}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -618,6 +755,53 @@ export default function CardRegistry() {
         )}
       </div>
 
+      {rowError && (
+        <div role="alert" style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', zIndex: 1100, padding: '10px 16px', borderRadius: 8, background: '#2a1215', border: '1px solid var(--danger)', color: 'var(--danger)', fontSize: 14 }}>
+          {rowError}
+        </div>
+      )}
+      {pending && (
+        <CardActionDialog
+          confirmation={pending.confirmation}
+          run={pending.run}
+          onDone={() => { setPending(null); loadCards(); }}
+          onClose={() => setPending(null)}
+        />
+      )}
+      {editing && (
+        <CardEditDialog card={editing} onDone={() => { setEditing(null); loadCards(); }} onClose={() => setEditing(null)} />
+      )}
+      {historyOf && <CardHistoryDrawer card={historyOf} onClose={() => setHistoryOf(null)} />}
+      {replacingChip && (
+        <Modal title={`Replace chip on ${replacingChip.serial ?? 'card'}`} onClose={() => { setReplacingChip(null); loadCards(); }}>
+          <PairPanel
+            mode="replace"
+            info={{ card_uuid: replacingChip.card_uuid, serial: replacingChip.serial, label: replacingChip.label, status: replacingChip.status, nfc_uid: replacingChip.nfc_uid }}
+            onPaired={loadCards}
+          />
+        </Modal>
+      )}
+      {bulk && (
+        <BulkDialog
+          choice={bulk.choice}
+          target={bulk.target}
+          onClose={() => setBulk(null)}
+          onDone={(changed) => {
+            setBulk(null);
+            clearSelection();
+            setNotice(`Changed ${changed} card${changed === 1 ? '' : 's'}.`);
+            loadCards();
+          }}
+        />
+      )}
+      {showPairModal && (
+        <PairPrintedCardModal
+          waiting={unpairedCards.map((c) => ({ card_uuid: c.card_uuid, serial: c.serial, label: c.label, status: c.status, nfc_uid: c.nfc_uid }))}
+          onClose={() => setShowPairModal(false)}
+          onChanged={loadCards}
+        />
+      )}
+
       {/* Modal: Enroll Card with Web NFC & Vehicle Selection */}
       {showEnrollModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
@@ -625,6 +809,9 @@ export default function CardRegistry() {
             <h3 style={{ margin: '0 0 16px 0', fontSize: '20px', borderBottom: '1px solid var(--border)', paddingBottom: '12px' }}>
               Enroll Physical NFC Card
             </h3>
+            <div style={{ marginBottom: 16, padding: '10px 14px', fontSize: 13, color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.04)', border: '1px solid var(--border)', borderRadius: 8 }}>
+              Cards with a printed QR code? Close this and use <strong>Pair printed card</strong> instead. This form is for blank cards with no printed QR.
+            </div>
 
             {hasWebNfc ? (
               <div style={{ marginBottom: '20px', padding: '16px', background: 'rgba(0, 210, 255, 0.08)', border: '1px solid var(--accent)', borderRadius: '8px', textAlign: 'center' }}>

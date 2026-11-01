@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { ArrowLeft, Download, Upload, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../lib/api';
 import { getPublicBase } from '../lib/publicBase';
 import {
+  QR_QUIET_MODULES,
   cardUrl,
   clampPlacement,
   DEFAULT_PLACEMENT,
@@ -14,8 +15,11 @@ import {
   resolutionNote,
   serialRange,
   validateBatch,
+  snapBox,
+  type Guide,
   type Placement,
 } from '../lib/cardDesign';
+import SheetExport from '../components/SheetExport';
 import { buildExportZip, loadDesignImage, saveBlob, type DesignImage, type ExportCard } from '../lib/cardRender';
 
 type Side = 'front' | 'back';
@@ -23,6 +27,7 @@ type Drag = { side: Side; target: 'qr' | 'text'; dx: number; dy: number } | null
 
 interface SideState {
   design: DesignImage;
+  file: File;
   src: string;
   placement: Placement | null;
 }
@@ -46,10 +51,41 @@ export default function CardDesigner() {
   const [progress, setProgress] = useState<[number, number] | null>(null);
   const dragRef = useRef<Drag>(null);
   const previewRefs = useRef<Partial<Record<Side, HTMLDivElement | null>>>({});
+  // Alignment lines to draw while an object is being dragged, on one side of the card.
+  const [guides, setGuides] = useState<{ side: Side; lines: Guide[] } | null>(null);
+  const location = useLocation();
+  // Set when the admin chose Reprint in the registry: the cards to load instead of making a new batch.
+  const reprintRequest = (location.state as { reprint?: { card_uuids?: string[]; filter?: object } } | null)?.reprint ?? null;
+  const [reprintNote, setReprintNote] = useState<string | null>(null);
 
   useEffect(() => {
     getPublicBase().then(setBase);
     api.get('/vehicles').then((r) => setVehicles(r.data || [])).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!reprintRequest) return;
+    let cancelled = false;
+    api
+      .post<{ cards: (ExportCard & { status: string; nfc_uid: string | null })[] }>('/cards/lookup', reprintRequest)
+      .then((r) => {
+        if (cancelled) return;
+        // A card with no serial cannot be named on the print, so it is left out and the admin is told.
+        const usable = r.data.cards.filter((c) => c.serial);
+        const skipped = r.data.cards.length - usable.length;
+        setCards(usable.map((c) => ({ serial: c.serial as string, card_uuid: c.card_uuid })));
+        setReprintNote(
+          `Reprinting ${usable.length} existing card${usable.length === 1 ? '' : 's'}${skipped > 0 ? ` (${skipped} without a serial left out)` : ''}. Their QR codes stay the same.`,
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err?.response?.data?.error ?? 'Could not load the cards to reprint.');
+      });
+    return () => {
+      cancelled = true;
+    };
+    // The request arrives once, with the navigation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const baseUrl = (baseOverride.trim() || base?.url || window.location.origin).replace(/\/+$/, '');
@@ -90,7 +126,7 @@ export default function CardDesigner() {
       const src = URL.createObjectURL(file);
       setSides((s) => ({
         ...s,
-        [side]: { design: { image, width, height }, src, placement: side === qrSide ? clampPlacement(DEFAULT_PLACEMENT, width, height) : null },
+        [side]: { design: { image, width, height }, file, src, placement: side === qrSide ? clampPlacement(DEFAULT_PLACEMENT, width, height) : null },
       }));
     } catch (err) {
       setError((err as Error).message);
@@ -134,9 +170,31 @@ export default function CardDesigner() {
     const drag = dragRef.current;
     const el = drag && previewRefs.current[drag.side];
     if (!drag || !el) return;
-    const f = fractionOf(e.clientX, e.clientY, el.getBoundingClientRect());
-    if (drag.target === 'qr') update(drag.side, { qrX: f.x - drag.dx, qrY: f.y - drag.dy });
-    else update(drag.side, { textX: f.x - drag.dx, textY: f.y - drag.dy });
+    const cur = sides[drag.side]?.placement;
+    const design = sides[drag.side]?.design;
+    if (!cur || !design) return;
+    const rect = el.getBoundingClientRect();
+    const f = fractionOf(e.clientX, e.clientY, rect);
+
+    // Both objects as boxes in shares of the card: x and y are the top-left corner.
+    // The serial's width is estimated from its font size: monospace characters are about 0.6 em wide.
+    const qrBox = { x: cur.qrX, y: cur.qrY, w: cur.qrSize, h: cur.qrSize * (design.width / design.height) };
+    const serialW = (cur.textSize * 0.6 * sampleSerial.length) / (design.width / design.height);
+    const serialH = cur.textSize / (design.height / design.width);
+    const textBox = { x: cur.textX - serialW / 2, y: cur.textY - serialH / 2, w: serialW, h: serialH };
+
+    const mine = drag.target === 'qr' ? qrBox : textBox;
+    const want = { x: f.x - drag.dx, y: f.y - drag.dy, w: mine.w, h: mine.h };
+    const snapped = snapBox(want, [drag.target === 'qr' ? textBox : qrBox], { width: rect.width, height: rect.height });
+    setGuides({ side: drag.side, lines: snapped.guides });
+
+    if (drag.target === 'qr') update(drag.side, { qrX: snapped.x, qrY: snapped.y });
+    else update(drag.side, { textX: snapped.x + serialW / 2, textY: snapped.y + serialH / 2 });
+  }
+
+  function endDrag() {
+    dragRef.current = null;
+    setGuides(null);
   }
 
   async function exportZip() {
@@ -215,7 +273,9 @@ export default function CardDesigner() {
           {base && !base.fromServer && ' The server has no PUBLIC_BASE_URL set, so this is the address you have open right now.'}
         </div>
 
-        {cards.length === 0 ? (
+        {reprintNote ? (
+          <div role="status" style={{ color: 'var(--success)' }}>{reprintNote}</div>
+        ) : cards.length === 0 ? (
           <button type="button" className="btn-primary" onClick={generate} disabled={busy !== null} style={{ padding: '12px 20px', borderRadius: 8, justifySelf: 'start' }}>
             Create {count} unpaired cards
           </button>
@@ -252,10 +312,24 @@ export default function CardDesigner() {
                   <div
                     ref={(el) => { previewRefs.current[side] = el; }}
                     onPointerMove={onPointerMove}
-                    onPointerUp={() => { dragRef.current = null; }}
+                    onPointerUp={endDrag}
+                    onPointerLeave={endDrag}
                     style={{ position: 'relative', marginTop: 8, touchAction: 'none', userSelect: 'none', containerType: 'inline-size', border: '1px solid var(--border)' }}
                   >
                     <img src={sides[side]!.src} alt={`${side} design preview`} style={{ width: '100%', display: 'block' }} draggable={false} />
+                    {guides?.side === side &&
+                      guides.lines.map((g, i) => (
+                        <div
+                          key={`${g.axis}-${g.at}-${i}`}
+                          data-testid="snap-guide"
+                          aria-hidden
+                          style={
+                            g.axis === 'x'
+                              ? { position: 'absolute', top: 0, bottom: 0, left: `${g.at * 100}%`, width: 1, background: 'var(--accent)', pointerEvents: 'none' }
+                              : { position: 'absolute', left: 0, right: 0, top: `${g.at * 100}%`, height: 1, background: 'var(--accent)', pointerEvents: 'none' }
+                          }
+                        />
+                      ))}
                     {sides[side]!.placement && (() => {
                       const p = sides[side]!.placement!;
                       return (
@@ -274,7 +348,7 @@ export default function CardDesigner() {
                               outline: '2px dashed var(--accent)',
                             }}
                           >
-                            <QRCodeSVG value={cardUrl(baseUrl, sampleUuid)} size={256} level="M" marginSize={0} style={{ width: '100%', height: '100%', display: 'block' }} />
+                            <QRCodeSVG value={cardUrl(baseUrl, sampleUuid)} size={256} level="M" marginSize={QR_QUIET_MODULES} style={{ width: '100%', height: '100%', display: 'block' }} />
                           </div>
                           <div
                             data-testid={`text-box-${side}`}
@@ -329,7 +403,7 @@ export default function CardDesigner() {
       </section>
 
       <section className="glass-panel" style={{ padding: 24, display: 'grid', gap: 12 }}>
-        <h3 style={{ margin: 0 }}>3. Download for the print shop</h3>
+        <h3 style={{ margin: 0 }}>3. Download one image per card (ZIP)</h3>
         <button
           type="button"
           className="btn-primary"
@@ -341,6 +415,13 @@ export default function CardDesigner() {
         </button>
         {busy && <div role="status">{busy}{progress ? ` ${progress[0]} / ${progress[1]}` : ''}</div>}
       </section>
+
+      <SheetExport
+        cards={cards}
+        baseUrl={baseUrl}
+        front={sides.front ? { file: sides.front.file, image: sides.front.design.image, width: sides.front.design.width, height: sides.front.design.height, src: sides.front.src, placement: sides.front.placement } : undefined}
+        back={sides.back ? { file: sides.back.file, image: sides.back.design.image, width: sides.back.design.width, height: sides.back.design.height, src: sides.back.src, placement: sides.back.placement } : undefined}
+      />
 
       {error && <div role="alert" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>

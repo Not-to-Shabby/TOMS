@@ -35,11 +35,15 @@ const upload = multer({
   },
 });
 
+// z.coerce turns "" into 0, so a blank amount in the form would publish a zero fare. Amounts must be real numbers.
+const amount = (max: number) =>
+  z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), z.coerce.number().min(0).max(max));
+
 const fareMatrixSchema = z.object({
   route_id: z.coerce.number().int().positive().nullish(),
-  base_fare: z.coerce.number().min(0).max(100_000),
+  base_fare: amount(100_000),
   base_distance_km: z.coerce.number().min(0.1).max(1000).default(4.0),
-  per_km_fare: z.coerce.number().min(0).max(10_000),
+  per_km_fare: amount(10_000),
   rounding_step_cents: z.coerce.number().int().min(1).max(10_000).default(100),
   discounts: z
     .string()
@@ -154,17 +158,8 @@ export function registerFareRoutes(
 
     const { rows } = await pool.query(query, params);
     if (rows.length === 0) {
-      // Fallback default matrix matching Philippine LTFRB baseline
-      return void res.json({
-        base_fare: 15.0,
-        base_distance_km: 4.0,
-        per_km_fare: 2.5,
-        rounding_step_cents: 100,
-        discounts: { student: 20, pwd: 20, senior: 20 },
-        order_reference: null,
-        document_url: null,
-        is_default_fallback: true,
-      });
+      // Nothing is invented here. A fare is only shown when an admin has entered and published one.
+      return void res.status(404).json({ error: 'No active fare matrix. Publish one on the Fare & LTFRB page.', is_default_fallback: false });
     }
 
     res.json(routeId ? rows[0] : rows);
