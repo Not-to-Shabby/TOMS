@@ -149,9 +149,12 @@ static void do_chunk(const struct item *it)
 		fail(TOMS_OTA_FLASH, "flash write failed");
 		return;
 	}
-	if (++chunk_tick % 16u == 0u) {
-		ota_ui_show_update(OTA_UI_RECV, (uint32_t)flash_img_bytes_written(&img_ctx),
-				   announced_size);
+	/* Every 16 chunks and the final one (so the bar reaches 100). */
+	if (++chunk_tick % 16u == 0u || it->offset + it->len >= announced_size) {
+		/* Count bytes ACCEPTED (the item's end offset), not bytes already
+		 * in flash: the tail sits in the writer's buffer until FINISH, so
+		 * flash-written would stop at 99%. */
+		ota_ui_show_update(OTA_UI_RECV, it->offset + it->len, announced_size);
 	}
 }
 
@@ -249,9 +252,9 @@ static void do_finish(void)
 	}
 	ota_ui_show_update(OTA_UI_READY, 0, 0);
 	LOG_INF("OTA: upgrade requested as a TRIAL; MCUboot swaps on the next reset and reverts if the "
-		"new image does not confirm itself. Rebooting in 1 s.");
+		"new image does not confirm itself. Rebooting in 3 s.");
 	send(TOMS_OTA_OP_FINISH | TOMS_OTA_REPLY_FLAG, TOMS_OTA_OK, size);
-	k_msleep(1000);
+	k_msleep(3000);
 	sys_reboot(SYS_REBOOT_COLD);
 }
 

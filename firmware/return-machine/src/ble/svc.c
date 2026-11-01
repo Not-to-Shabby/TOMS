@@ -1,6 +1,8 @@
 #include "svc.h"
 #include "ota.h"
 #include "ota_ui.h"
+#include "buzzer.h"
+#include "display_test.h"
 
 #include <errno.h>
 #include <string.h>
@@ -40,6 +42,7 @@ LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 #define CHAR_SIM_CARD 0x0B
 #define CHAR_OTA_CONTROL 0x0C
 #define CHAR_OTA_DATA 0x0D
+#define CHAR_DIAG 0x0E
 
 #define ATT_HEADER 3 /* opcode + handle */
 
@@ -52,6 +55,8 @@ static bool check_notify;
 static bool hb_notify;
 static bool ack_notify;
 static bool ota_notify;
+static bool diag_notify;
+static rm_ble_diag_cmd_cb_t diag_cb;
 
 static uint32_t rx_writes;
 static uint32_t rx_rejected;
@@ -111,6 +116,13 @@ static void ccc_ota(const struct bt_gatt_attr *attr, uint16_t value)
 	LOG_INF("ota_control notifications %s", ota_notify ? "on" : "off");
 }
 
+static void ccc_diag(const struct bt_gatt_attr *attr, uint16_t value)
+{
+	ARG_UNUSED(attr);
+	diag_notify = (value & BT_GATT_CCC_NOTIFY) != 0;
+	LOG_INF("diag notifications %s", diag_notify ? "on" : "off");
+}
+
 static void ccc_ack(const struct bt_gatt_attr *attr, uint16_t value)
 {
 	ARG_UNUSED(attr);
@@ -165,11 +177,16 @@ BT_GATT_SERVICE_DEFINE(rm_svc,
 		BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY, WRITE_PERM, NULL, write_handler,
 		(void *)CHAR_OTA_CONTROL),
 	BT_GATT_CCC(ccc_ota, BT_GATT_PERM_READ | WRITE_PERM),
-	/* 0D ota_data: phone -> RM, write without response (image chunks) */
-	BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(TOMS_UUID(0x0D)),
-		BT_GATT_CHRC_WRITE_WITHOUT_RESP, WRITE_PERM, NULL, write_handler,
-		(void *)CHAR_OTA_DATA),
-);
+		/* 0D ota_data: phone -> RM, write without response (image chunks) */
+		BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(TOMS_UUID(0x0D)),
+			BT_GATT_CHRC_WRITE_WITHOUT_RESP, WRITE_PERM, NULL, write_handler,
+			(void *)CHAR_OTA_DATA),
+		/* 0E diag: phone -> RM write/notify (diagnostic tools: buzzer, screen, nfc, button) */
+		BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(TOMS_UUID(0x0E)),
+			BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP | BT_GATT_CHRC_NOTIFY,
+			WRITE_PERM, NULL, write_handler, (void *)CHAR_DIAG),
+		BT_GATT_CCC(ccc_diag, BT_GATT_PERM_READ | WRITE_PERM),
+	);
 
 static int notify_uuid(const struct bt_uuid *uuid, bool subscribed, const uint8_t *data,
 		       size_t len)
@@ -331,6 +348,38 @@ static int handle_sim_card(const uint8_t *data, uint16_t len)
 	return 0;
 }
 
+static int handle_diag(const uint8_t *data, uint16_t len)
+{
+	if (len < 1) {
+		return -EINVAL;
+	}
+	uint8_t cmd = data[0];
+	uint8_t arg = (len >= 2) ? data[1] : 0;
+	LOG_INF("diag cmd 0x%02X arg 0x%02X", cmd, arg);
+
+	if (diag_cb != NULL) {
+		diag_cb(cmd, arg);
+	}
+
+	switch (cmd) {
+	case 0x01: /* Buzzer test */
+		buzzer_play(arg <= TOMS_TONE_DUPLICATE ? (enum toms_tone)arg : TOMS_TONE_OK);
+		break;
+	case 0x02: /* Screen test: next page */
+		display_test_next();
+		break;
+	case 0x03: /* Screen test: toggle backlight */
+		display_test_backlight_toggle();
+		break;
+	default:
+		break;
+	}
+
+	uint8_t ack[4] = { 0x80 | cmd, arg, 0x00, 0x00 };
+	(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+	return 0;
+}
+
 static ssize_t write_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			     const void *buf, uint16_t len, uint16_t offset, uint8_t flags)
 {
@@ -368,10 +417,13 @@ static ssize_t write_handler(struct bt_conn *conn, const struct bt_gatt_attr *at
 	case CHAR_OTA_CONTROL:
 		rc = rm_ota_control_write(conn, buf, len);
 		break;
-	case CHAR_OTA_DATA:
-		rc = rm_ota_data_write(conn, buf, len);
-		break;
-	default:
+		case CHAR_OTA_DATA:
+			rc = rm_ota_data_write(conn, buf, len);
+			break;
+		case CHAR_DIAG:
+			rc = handle_diag(buf, len);
+			break;
+		default:
 		rc = -EINVAL;
 		break;
 	}
@@ -432,9 +484,10 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	card_notify = false;
 	check_notify = false;
 	hb_notify = false;
-	ack_notify = false;
-	ota_notify = false;
-}
+		ack_notify = false;
+		ota_notify = false;
+		diag_notify = false;
+	}
 
 /* The connection object is free again: advertise for the next connection. */
 static void recycled(void)
@@ -670,4 +723,14 @@ int rm_ble_paid_check(const uint8_t *uid, uint8_t uid_len, uint32_t timeout_ms,
 	paid_replied++;
 	*verdict = reply_verdict;
 	return 0;
+}
+
+void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb)
+{
+	diag_cb = cb;
+}
+
+int rm_ble_notify_diag(const uint8_t *data, size_t len)
+{
+	return NOTIFY(0x0E, diag_notify, data, len);
 }

@@ -34,6 +34,9 @@ int pn532_init(void);
 /* Filled with IC, firmware version, revision, support (response of 0x02). */
 int pn532_get_firmware_version(uint8_t out[4]);
 
+/* Release target tg (0 = all targets). Returns 0 on success. */
+int pn532_in_release(uint8_t tg);
+
 /* Poll once for one ISO 14443-A target (INLISTPASSIVETARGET, 106 kbps).
  * Returns 0 and fills `out` when a card was found, -ETIMEDOUT when the IRQ
  * stayed idle for `timeout`, -EIO on bus/protocol errors. */

@@ -66,6 +66,10 @@ uint32_t rm_ble_epoch(void);
  * the negotiated MTU, or the bt_gatt_notify error. */
 int rm_ble_notify_card_read(const uint8_t *data, size_t len);
 int rm_ble_notify_heartbeat(const uint8_t *data, size_t len);
+int rm_ble_notify_diag(const uint8_t *data, size_t len);
+
+typedef void (*rm_ble_diag_cmd_cb_t)(uint8_t cmd, uint8_t arg);
+void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb);
 
 /* Ask the phone whether a card is paid: notifies paid_check, then blocks up
  * to timeout_ms for the matching paid_reply write. Must not be called from

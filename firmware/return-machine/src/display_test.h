@@ -10,6 +10,7 @@
 #ifndef TOMS_DISPLAY_TEST_H
 #define TOMS_DISPLAY_TEST_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Brings up the panel and starts the test thread. Returns 0 on success. */
@@ -28,5 +29,9 @@ void display_test_backlight_toggle(void);
 
 /* Stores the UID and jumps to the card page. Safe to call from any thread. */
 void display_test_set_uid(const uint8_t *uid, uint8_t len);
+
+/* Diagnostics tools status updates. */
+void display_test_set_nfc_status(bool ready);
+void display_test_record_button_press(uint16_t count);
 
 #endif /* TOMS_DISPLAY_TEST_H */

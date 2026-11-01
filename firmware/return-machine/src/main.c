@@ -206,6 +206,7 @@ static void nfc_loop(void *a, void *b, void *c)
 		trial_alive(TRIAL_TASK_NFC);
 		if (pn532_init() != 0) {
 			atomic_set(&nfc_status, 3);
+			display_test_set_nfc_status(false);
 			LOG_ERR("PN532 init failed; retry in 5 s");
 			/* Sleep in short steps so the watchdog sees this task is alive. */
 			for (int i = 0; i < 50; i++) {
@@ -215,6 +216,7 @@ static void nfc_loop(void *a, void *b, void *c)
 			continue;
 		}
 		atomic_set(&nfc_status, 0);
+		display_test_set_nfc_status(true);
 		buzzer_play(TOMS_TONE_BOOT);
 
 		for (;;) {
@@ -224,6 +226,9 @@ static void nfc_loop(void *a, void *b, void *c)
 			if (rc == 0) {
 				on_read(t.uid, t.uid_len, t.atype);
 			} else if (rc == -ETIMEDOUT) {
+				/* No card this round: pause so the poll does not hot-loop
+				 * (and flood the log) while the field is empty. */
+				k_sleep(K_MSEC(150));
 				continue;
 			} else {
 				LOG_WRN("PN532 read error (%d); re-init", rc);
@@ -259,11 +264,18 @@ static void send_heartbeat(void)
 	}
 }
 
+static uint16_t btn_press_count;
+
 static void on_button(void)
 {
-	LOG_INF("button pressed");
+	btn_press_count++;
+	LOG_INF("button pressed (#%u)", (unsigned int)btn_press_count);
 	buzzer_play(TOMS_TONE_OK);
+	display_test_record_button_press(btn_press_count);
 	display_test_button();
+
+	uint8_t ev[4] = { 0x81, (uint8_t)(btn_press_count & 0xFF), (uint8_t)(btn_press_count >> 8), 0x01 };
+	rm_ble_notify_diag(ev, sizeof(ev));
 }
 
 int main(void)

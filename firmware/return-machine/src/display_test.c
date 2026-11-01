@@ -36,6 +36,8 @@ LOG_MODULE_REGISTER(display_test, LOG_LEVEL_INF);
 
 enum page {
 	PAGE_BLE,
+	PAGE_DIAG,
+	PAGE_CARD,
 	PAGE_RED,
 	PAGE_GREEN,
 	PAGE_BLUE,
@@ -45,7 +47,6 @@ enum page {
 	PAGE_FRAME,
 	PAGE_GRADIENT,
 	PAGE_INFO,
-	PAGE_CARD,
 	PAGE_COUNT,
 };
 
@@ -70,6 +71,8 @@ static atomic_t requests;
 static K_MUTEX_DEFINE(uid_lock);
 static uint8_t card_uid[UID_MAX];
 static uint8_t card_uid_len;
+static bool diag_nfc_ready = true;
+static uint16_t diag_btn_count;
 
 static int backlight_level = IS_ENABLED(CONFIG_TOMS_BACKLIGHT_ACTIVE_HIGH) ? 1 : 0;
 /* Boots on the live Bluetooth page; the button walks the other pages. */
@@ -277,6 +280,46 @@ static void info_page(void)
 	draw_centered(108, 1, C_GRAY, auto_advance ? "AUTO NEXT 3 S" : "MANUAL");
 }
 
+static void diag_page(void)
+{
+	char line[32];
+
+	fill_all(C_BLACK);
+	draw_centered(4, 2, C_CYAN, "DIAGNOSTICS");
+
+	draw_text(6, 26, 1, C_WHITE, "SCREEN: 160x128 OK");
+	snprintk(line, sizeof(line), "BLIGHT: %s", backlight_level ? "ON" : "OFF");
+	draw_text(6, 38, 1, backlight_level ? C_GREEN : C_YELLOW, line);
+
+	snprintk(line, sizeof(line), "NFC   : %s", diag_nfc_ready ? "PN532 v1.6 OK" : "SEARCHING");
+	draw_text(6, 52, 1, diag_nfc_ready ? C_GREEN : C_RED, line);
+
+	k_mutex_lock(&uid_lock, K_FOREVER);
+	uint8_t len = card_uid_len;
+	uint8_t uid[UID_MAX];
+	memcpy(uid, card_uid, sizeof(uid));
+	k_mutex_unlock(&uid_lock);
+
+	if (len > 0) {
+		char hex[22] = {0};
+		for (uint8_t i = 0; i < len && i < 6; i++) {
+			snprintk(&hex[i * 3], 4, "%02X ", uid[i]);
+		}
+		snprintk(line, sizeof(line), "CARD  : %s", hex);
+		draw_text(6, 64, 1, C_CYAN, line);
+	} else {
+		draw_text(6, 64, 1, C_GRAY, "CARD  : TAP CARD NOW");
+	}
+
+	snprintk(line, sizeof(line), "BUTTON: %u PRESSES", (unsigned int)diag_btn_count);
+	draw_text(6, 78, 1, C_WHITE, line);
+
+	draw_text(6, 92, 1, C_WHITE, "BUZZER: GPIO6 ACTIVE");
+	draw_text(6, 104, 1, C_YELLOW, "BEEPS ON TAP/PRESS");
+
+	draw_centered(118, 1, C_GRAY, "PRESS BTN: TEST/NEXT");
+}
+
 static void card_page(void)
 {
 	char hex[3 * UID_MAX + 1];
@@ -345,6 +388,12 @@ static void render_page(enum page p)
 	case PAGE_BLE:
 		ble_page();
 		break;
+	case PAGE_DIAG:
+		diag_page();
+		break;
+	case PAGE_CARD:
+		card_page();
+		break;
 	case PAGE_RED:
 		solid_page(C_RED, C_WHITE, "RED", "SHOULD BE RED. CYAN = INVERSION");
 		break;
@@ -369,15 +418,12 @@ static void render_page(enum page p)
 	case PAGE_GRADIENT:
 		gradient_page();
 		break;
-	case PAGE_INFO:
-		info_page();
-		break;
-	case PAGE_CARD:
-		card_page();
-		break;
-	default:
-		fill_all(C_BLACK);
-		break;
+		case PAGE_INFO:
+			info_page();
+			break;
+		default:
+			fill_all(C_BLACK);
+			break;
 	}
 }
 
@@ -460,13 +506,20 @@ static void display_loop(void *a, void *b, void *c)
 		 * The Bluetooth page redraws every second, the others advance on their own timer. */
 		int rc = k_sem_take(&wake, K_MSEC(500));
 		if (rc == -EAGAIN) {
-			idle_ms += 500;
-			if (page == PAGE_BLE) {
-				if (idle_ms >= 1000) {
-					idle_ms = 0;
-					redraw = true;
-				}
-			} else if (auto_advance && idle_ms >= AUTO_ADVANCE_S * 1000) {
+				idle_ms += 500;
+				if (page == PAGE_BLE || page == PAGE_DIAG) {
+					if (idle_ms >= 1000) {
+						idle_ms = 0;
+						redraw = true;
+					}
+				} else if (page == PAGE_CARD) {
+					if (idle_ms >= 4000) {
+						idle_ms = 0;
+						auto_advance = true;
+						page = PAGE_BLE;
+						redraw = true;
+					}
+				} else if (auto_advance && idle_ms >= AUTO_ADVANCE_S * 1000) {
 				idle_ms = 0;
 				page = (page + 1) % PAGE_COUNT;
 				redraw = true;
@@ -576,4 +629,16 @@ void display_test_button(void)
 	} else {
 		display_test_next();
 	}
+}
+
+void display_test_set_nfc_status(bool ready)
+{
+	diag_nfc_ready = ready;
+	k_sem_give(&wake);
+}
+
+void display_test_record_button_press(uint16_t count)
+{
+	diag_btn_count = count;
+	k_sem_give(&wake);
 }

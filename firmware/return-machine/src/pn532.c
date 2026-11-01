@@ -1,6 +1,7 @@
 #include "pn532.h"
 
 #include <errno.h>
+#include <string.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/logging/log.h>
@@ -41,29 +42,36 @@ static uint8_t dcs_of(const uint8_t *data, size_t len)
 
 static int wait_ready(k_timeout_t timeout)
 {
-	/* The IRQ spec is GPIO_ACTIVE_LOW: the PN532 pulls the line LOW when a
-	 * response is pending, so logical 1 means "ready now". The line may
-	 * already be asserted when we arrive, so check before waiting. */
-	if (gpio_pin_get_dt(&pn_irq) == 1) {
-		return 0;
-	}
-	k_sem_reset(&irq_sem);
-	if (gpio_pin_get_dt(&pn_irq) == 1) {
-		return 0;
-	}
-	return k_sem_take(&irq_sem, timeout);
+	int64_t deadline = k_uptime_get() + k_ticks_to_ms_floor64(timeout.ticks);
+
+	do {
+		/* IRQ pin is active low, logical 1 in Zephyr DT */
+		if (gpio_pin_get_dt(&pn_irq) == 1) {
+			return 0;
+		}
+		if (k_sem_take(&irq_sem, K_MSEC(5)) == 0) {
+			return 0;
+		}
+	} while (k_uptime_get() < deadline);
+
+	return -ETIMEDOUT;
 }
 
-/* Raw frame: 00 00 FF LEN LCS [TFI data...] DCS 00 */
-static int pn532_write_frame(const uint8_t *payload, size_t len)
+/* Raw frame: 00 00 FF LEN LCS [TFI data...] DCS 00. */
+static int pn532_write_frame(const uint8_t *cmd, size_t clen)
 {
-	if (len == 0 || len > PN532_FRAME_MAX - 8u) {
+	if (clen == 0 || clen + 1u > PN532_FRAME_MAX - 8u) {
 		return -EINVAL;
 	}
+	uint8_t payload[PN532_FRAME_MAX];
+	size_t len = clen + 1u; /* TFI + command */
 	uint8_t buf[PN532_FRAME_MAX];
 	size_t n = 0;
 	uint8_t hdr[3] = { 0x00, 0x00, 0xFF };
 	uint8_t lcs = (uint8_t)(~(uint8_t)len + 1u);
+
+	payload[0] = PN532_TFI_HOST_TO_PN532;
+	memcpy(&payload[1], cmd, clen);
 
 	memcpy(&buf[n], hdr, 3);
 	n += 3;
@@ -84,61 +92,78 @@ static int pn532_abort(void)
 	return i2c_write_dt(&pn_i2c, ack_frame, sizeof(ack_frame));
 }
 
-/* Read one frame. `payload` receives TFI..end-of-data (TFI included). */
-static int pn532_read_frame(uint8_t *payload, size_t *len, k_timeout_t timeout)
+/* Read ACK frame: exactly 7 bytes (1 status + 6 ACK bytes). */
+static int pn532_read_ack(k_timeout_t timeout)
 {
 	int rc = wait_ready(timeout);
 	if (rc != 0) {
-		return (rc == -EAGAIN) ? -ETIMEDOUT : rc; /* EWOULDBLOCK is the same value */
+		return (rc == -EAGAIN) ? -ETIMEDOUT : rc;
 	}
 
-	uint8_t head[6]; /* status byte + 00 00 FF LEN LCS */
-	rc = i2c_read_dt(&pn_i2c, head, sizeof(head));
+	uint8_t ack[7];
+	rc = i2c_read_dt(&pn_i2c, ack, sizeof(ack));
 	if (rc != 0) {
 		return -EIO;
 	}
-	if ((head[0] & 0x01u) == 0u) {
-		return -EIO; /* PN532 says it is not ready after all */
-	}
-	if (head[1] != 0x00 || head[2] != 0x00 || head[3] != 0xFF) {
-		return -EIO; /* bad start code */
-	}
-
-	bool is_ack = (head[4] == 0x00 && head[5] == 0xFF);
-	size_t flen = head[4];
-
-	if (is_ack) {
-		/* ACK frame: 00 00 FF 00 FF 00 — two more bytes follow. */
-		uint8_t tail[2];
-		if (i2c_read_dt(&pn_i2c, tail, sizeof(tail)) != 0) {
-			return -EIO;
-		}
-		*len = 0;
-		return 1; /* caller distinguishes ACK with the return value */
-	}
-
-	if (flen < 1u || flen > PN532_FRAME_MAX - 8u) {
+	if ((ack[0] & 0x01u) == 0u) {
 		return -EIO;
 	}
-	uint8_t lcs;
-	if (i2c_read_dt(&pn_i2c, &lcs, 1) != 0) {
+	/* ACK frame: 00 00 FF 00 FF 00 */
+	if (ack[1] != 0x00u || ack[2] != 0x00u || ack[3] != 0xFFu ||
+	    ack[4] != 0x00u || ack[5] != 0xFFu || ack[6] != 0x00u) {
 		return -EIO;
 	}
-	if ((uint8_t)(flen + lcs) != 0u) {
-		return -EIO; /* length checksum mismatch */
+	return 0;
+}
+
+/* Read response: single 64-byte I2C transaction, parse in memory. */
+static int pn532_read_response(uint8_t *resp, size_t *rlen, k_timeout_t timeout)
+{
+	int rc = wait_ready(timeout);
+	if (rc != 0) {
+		return (rc == -EAGAIN) ? -ETIMEDOUT : rc;
 	}
 
-	uint8_t body[PN532_FRAME_MAX];
-	if (i2c_read_dt(&pn_i2c, body, flen + 2u) != 0) { /* data.. + DCS + postamble */
+	uint8_t raw[64];
+	memset(raw, 0, sizeof(raw));
+	rc = i2c_read_dt(&pn_i2c, raw, sizeof(raw));
+	if (rc != 0) {
 		return -EIO;
 	}
-	uint8_t dcs = body[flen];
-	if (dcs != dcs_of(body, flen)) {
-		return -EIO; /* data checksum mismatch */
+	if ((raw[0] & 0x01u) == 0u) {
+		return -EIO;
 	}
 
-	memcpy(payload, body, flen);
-	*len = flen;
+	const uint8_t *p = &raw[1];
+	if (p[0] != 0x00u || p[1] != 0x00u || p[2] != 0xFFu) {
+		return -EIO;
+	}
+	uint8_t len = p[3];
+	uint8_t lcs = p[4];
+	if ((uint8_t)(len + lcs) != 0u) {
+		return -EIO;
+	}
+	if (len < 2u || len > 48u) {
+		return -EIO;
+	}
+	if (p[5] != PN532_TFI_PN532_TO_HOST) {
+		return -EIO;
+	}
+
+	/* DCS check: sum of p[5 .. 5 + len] == 0 mod 256 */
+	uint8_t dcs_sum = 0;
+	for (uint8_t i = 0; i <= len; i++) {
+		dcs_sum += p[5 + i];
+	}
+	if (dcs_sum != 0u) {
+		return -EIO;
+	}
+
+	if (*rlen < (size_t)len) {
+		return -ENOSPC;
+	}
+	memcpy(resp, &p[5], len);
+	*rlen = len;
 	return 0;
 }
 
@@ -151,33 +176,28 @@ static int pn532_exchange(const uint8_t *cmd, size_t clen, uint8_t *resp, size_t
 		return -EIO;
 	}
 
-	uint8_t frame[PN532_FRAME_MAX];
-	size_t flen = 0;
-
-	rc = pn532_read_frame(frame, &flen, K_MSEC(60));
-	if (rc < 0) {
+	rc = pn532_read_ack(K_MSEC(100));
+	if (rc != 0) {
 		pn532_abort();
 		return rc;
 	}
-	if (rc != 1) { /* first frame must be the ACK */
-		pn532_abort();
-		return -EIO;
-	}
 
-	rc = pn532_read_frame(frame, &flen, timeout);
-	if (rc < 0) {
+	rc = pn532_read_response(resp, rlen, timeout);
+	if (rc != 0) {
 		pn532_abort();
 		return rc;
 	}
-	if (rc != 0 || flen < 1 || frame[0] != PN532_TFI_PN532_TO_HOST) {
-		pn532_abort();
-		return -EIO;
-	}
 
-	size_t copy = MIN(flen, *rlen);
-	memcpy(resp, frame, copy);
-	*rlen = flen;
 	return 0;
+}
+
+int pn532_in_release(uint8_t tg)
+{
+	const uint8_t cmd[2] = { 0x52, tg };
+	uint8_t resp[8];
+	size_t rlen = sizeof(resp);
+
+	return pn532_exchange(cmd, sizeof(cmd), resp, &rlen, K_MSEC(100));
 }
 
 int pn532_get_firmware_version(uint8_t out[4])
@@ -207,19 +227,19 @@ int pn532_init(void)
 
 	k_sem_reset(&irq_sem);
 
-	/* SAMConfiguration: normal mode, no timeout, use IRQ pin. */
-	const uint8_t sam[4] = { 0x14, 0x01, 0x00, 0x00 };
+	/* SAMConfiguration: normal mode, timeout 0x14, use IRQ pin */
+	const uint8_t sam[4] = { 0x14, 0x01, 0x14, 0x01 };
 	uint8_t resp[8];
 	size_t rlen = sizeof(resp);
-	int rc = pn532_exchange(sam, sizeof(sam), resp, &rlen, K_MSEC(100));
+	int rc = pn532_exchange(sam, sizeof(sam), resp, &rlen, K_MSEC(500));
 	if (rc != 0 || rlen < 2u || resp[1] != 0x15u) {
 		LOG_ERR("SAMConfiguration failed (rc=%d)", rc);
 		return rc == 0 ? -EIO : rc;
 	}
 
-	/* MaxRtyCOM = 1: INLISTPASSIVETARGET gives up quickly per round, our
-	 * own timeout decides when to stop polling. */
-	const uint8_t rf[3] = { 0x32, 0x05, 0x01 };
+	/* MaxRetries (item 5): MxRtyATR=0xFF, MxRtyPSL=0x01, MxRtyPassiveActivation=0x01.
+	 * Requires 5 bytes total. INLISTPASSIVETARGET gives up quickly per round. */
+	const uint8_t rf[5] = { 0x32, 0x05, 0xFF, 0x01, 0x01 };
 	rlen = sizeof(resp);
 	rc = pn532_exchange(rf, sizeof(rf), resp, &rlen, K_MSEC(100));
 	if (rc != 0) {
@@ -228,11 +248,13 @@ int pn532_init(void)
 
 	uint8_t ver[4];
 	rc = pn532_get_firmware_version(ver);
-	if (rc != 0) {
-		LOG_ERR("GetFirmwareVersion failed (rc=%d)", rc);
-		return rc;
+	if (rc == 0) {
+		LOG_INF("PN532 v%u.%u (IC=0x%02X)", ver[1], ver[2], ver[0]);
+	} else {
+		LOG_WRN("GetFirmwareVersion failed (rc=%d) - continuing", rc);
 	}
-	LOG_INF("PN532 v%u.%u (IC=0x%02x)", ver[1], ver[2], ver[0]);
+
+	LOG_INF("PN532 initialized successfully");
 	return 0;
 }
 
@@ -250,7 +272,17 @@ int pn532_read_target(struct pn532_target *out, k_timeout_t timeout)
 		return -EIO;
 	}
 	/* resp: D5 4B NbTg [Tg SENS_RES(2) SEL_RES UIDLen UID] */
-	if (rlen < 5u || resp[1] != 0x4Bu || resp[2] < 1u) {
+	if (rlen < 3u || resp[0] != 0xD5u || resp[1] != 0x4Bu) {
+		return -EIO;
+	}
+
+	uint8_t nb_tg = resp[2];
+	if (nb_tg == 0u) {
+		/* No card in the field. Normal polling condition, NOT an error! */
+		return -ETIMEDOUT;
+	}
+
+	if (rlen < 8u) {
 		return -EIO;
 	}
 
@@ -272,6 +304,10 @@ int pn532_read_target(struct pn532_target *out, k_timeout_t timeout)
 	} else {
 		out->atype = PN532_ATYPE_OTHER;
 	}
+
+	/* Release target so card can be re-detected or removed cleanly */
+	(void)pn532_in_release(0);
+
 	return 0;
 }
 
