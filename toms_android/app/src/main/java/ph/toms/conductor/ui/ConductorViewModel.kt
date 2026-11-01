@@ -207,7 +207,8 @@ class ConductorViewModel @Inject constructor(
         // No server address: nothing is asked of the network, and the Board already says what to do.
         if (_state.value.needsServer) return
         viewModelScope.launch {
-            val message = when (val r = runCatching { configRefresher.refresh() }.getOrElse { ConfigRefresh.Kept(it.message ?: "Could not save the fares.") }) {
+            // refreshSafely turns every failure into a message but lets cancellation through, so a closed screen stops this.
+            val message = when (val r = configRefresher.refreshSafely()) {
                 is ConfigRefresh.Updated -> null
                 is ConfigRefresh.Kept -> r.reason
             }

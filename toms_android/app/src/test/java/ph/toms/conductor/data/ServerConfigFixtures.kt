@@ -27,8 +27,12 @@ fun serverConfigResponse(
 /** Answers what a test tells it to. Starts as if the phone had no connection. */
 class FakeConfigSync(var next: ConfigFetch = ConfigFetch.Failed("offline")) : ConfigSync {
     var calls = 0
+
+    /** When set, the fetch throws this instead of answering, as a broken connection or a cancelled coroutine would. */
+    var throwing: Throwable? = null
     override suspend fun fetchConfig(): ConfigFetch {
         calls++
+        throwing?.let { throw it }
         return next
     }
 }

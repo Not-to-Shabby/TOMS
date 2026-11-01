@@ -309,6 +309,26 @@ class FaresLoadingTest {
         assertTrue(vm.state.value.result is BoardResult.Refused)
     }
 
+    @Test fun `a cancelled fetch is not reported as a failure on More`() {
+        configSync.throwing = kotlinx.coroutines.CancellationException("screen closed")
+        token.value = "dev-1.secret"
+        val vm = newVm()
+        settle { configSync.calls > 0 }
+        settle()
+
+        assertNull("cancellation is not a failure to show the owner", vm.state.value.configMessage)
+    }
+
+    @Test fun `an ordinary exception from the fetch is shown on More and does not crash`() {
+        configSync.throwing = java.io.IOException("connection reset")
+        token.value = "dev-1.secret"
+        val vm = newVm()
+        settle { vm.state.value.configMessage != null }
+
+        assertEquals("connection reset", vm.state.value.configMessage)
+        assertFalse(vm.state.value.faresLoaded)
+    }
+
     @Test fun `a success clears the old message`() {
         configSync.next = ConfigFetch.Failed("no signal")
         token.value = "dev-1.secret"

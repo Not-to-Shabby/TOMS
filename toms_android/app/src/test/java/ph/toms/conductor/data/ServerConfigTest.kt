@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -225,6 +226,52 @@ class ServerConfigTest {
 
         assertTrue(result.reason, result.reason.contains("cannot use"))
         assertEquals(10, repo.loadServerConfig()!!.version)
+    }
+
+    // ---- cancellation is not a failure
+
+    @Test fun `refreshSafely turns an ordinary failure into a message instead of throwing`() = runBlocking {
+        sync.throwing = java.io.IOException("connection reset")
+        val result = refresher.refreshSafely() as ConfigRefresh.Kept
+        assertEquals("connection reset", result.reason)
+
+        sync.throwing = IllegalStateException()
+        assertEquals("Could not save the fares.", (refresher.refreshSafely() as ConfigRefresh.Kept).reason)
+    }
+
+    @Test fun `refreshSafely rethrows cancellation instead of swallowing it`() {
+        sync.throwing = kotlinx.coroutines.CancellationException("screen closed")
+        try {
+            runBlocking { refresher.refreshSafely() }
+            fail("cancellation must not be turned into a result")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            assertEquals("screen closed", e.message)
+        }
+    }
+
+    @Test fun `refreshSafely rethrows a TimeoutCancellation too, which is a cancellation`() {
+        try {
+            runBlocking { kotlinx.coroutines.withTimeout(20) { sync.throwing = null; kotlinx.coroutines.delay(5_000); refresher.refreshSafely() } }
+            fail("the timeout should have fired")
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            // it is a CancellationException and was not absorbed
+        }
+    }
+
+    @Test fun `cancelling a refresh in flight stops it and saves nothing`() = runBlocking {
+        val slow = object : ph.toms.conductor.sync.ConfigSync {
+            override suspend fun fetchConfig(): ConfigFetch {
+                kotlinx.coroutines.delay(60_000)
+                return ConfigFetch.Loaded(serverConfigResponse(version = 5))
+            }
+        }
+        val job = launch(kotlinx.coroutines.Dispatchers.Default) { ConfigRefresher(repo, slow).refreshSafely() }
+        kotlinx.coroutines.delay(50)
+        job.cancel()
+        job.join()
+
+        assertTrue("the refresh stopped instead of carrying on", job.isCancelled)
+        assertNull(repo.loadServerConfig())
     }
 
     @Test fun `with no saved config, a failed fetch leaves none`() = runBlocking {

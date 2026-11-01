@@ -29,8 +29,9 @@ class UploadWorker @AssistedInject constructor(
         // later is pointless until the owner sets the address on More.
         if (deviceConfig.serverUrl.value.isBlank()) return Result.success()
         // The fares are fetched on the same schedule as the upload. A failed fetch changes nothing and does not
-        // fail the run: the saved fares stay in use, and the next run tries again.
-        runCatching { configRefresher.refresh() }
+        // fail the run: the saved fares stay in use, and the next run tries again. If the work itself is cancelled
+        // that is not a failure to absorb: refreshSafely rethrows it, so the run stops instead of carrying on.
+        configRefresher.refreshSafely()
         val report = flusher.flush()
         return if (report.failure == null) Result.success() else Result.retry()
     }
