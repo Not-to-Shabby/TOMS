@@ -20,6 +20,13 @@
 #include <zephyr/dt-bindings/pinctrl/esp32s3-gpio-sigmap.h>
 
 / {
+	/* The Super Mini only exposes the native USB-C port, so the console and
+	 * shell go there instead of the devkit's UART0 pins. */
+	chosen {
+		zephyr,console = &usb_serial;
+		zephyr,shell-uart = &usb_serial;
+	};
+
 	leds {
 		compatible = "gpio-leds";
 
@@ -49,20 +56,43 @@
 	};
 };
 
+&usb_serial {
+	status = "okay";
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+/* The pinctrl driver reads pins from child group nodes only. The board file
+ * already defines i2c0_default and spim3_default with the devkit's pins, so
+ * pinmux set on those nodes directly is ignored. These are new nodes that
+ * the buses are pointed at below. */
 &pinctrl {
-	i2c0_default: i2c0_default {
-		pinmux = <I2C0_SDA_GPIO2>, <I2C0_SCL_GPIO7>;
+	i2c0_toms: i2c0_toms {
+		group1 {
+			pinmux = <I2C0_SDA_GPIO2>, <I2C0_SCL_GPIO7>;
+			bias-pull-up;
+			drive-open-drain;
+			output-high;
+		};
 	};
 
-	spim3_default: spim3_default {
-		pinmux = <SPIM3_MOSI_GPIO11>, <SPIM3_SCLK_GPIO12>;
+	spim3_toms: spim3_toms {
+		group1 {
+			pinmux = <SPIM3_SCLK_GPIO12>;
+		};
+		group2 {
+			pinmux = <SPIM3_MOSI_GPIO11>;
+			output-low;
+		};
 	};
 };
 
 &i2c0 {
 	status = "okay";
 	clock-frequency = <I2C_BITRATE_FAST>;
-	pinctrl-0 = <&i2c0_default>;
+	pinctrl-0 = <&i2c0_toms>;
 	pinctrl-names = "default";
 
 	pn532: pn532@24 {
@@ -74,7 +104,7 @@
 
 &spi3 {
 	status = "okay";
-	pinctrl-0 = <&spim3_default>;
+	pinctrl-0 = <&spim3_toms>;
 	pinctrl-names = "default";
 	cs-gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
 	clock-frequency = <16000000>;
@@ -99,9 +129,12 @@
 		mipi-mode = "MIPI_DBI_MODE_SPI_4WIRE";
 		width = <160>;
 		height = <128>;
-		x-offset = <2>;
-		y-offset = <1>;
-		inversion-on;
+		/* The ESP-IDF slave project (archive/esp32_slave) drove this panel with
+		 * no window offset and inversion off. */
+		x-offset = <0>;
+		y-offset = <0>;
+		madctl = <0x60>;  /* landscape, RGB order */
+		colmod = <0x55>;  /* 16-bit pixels, matches the driver's 2 bytes per pixel */
 		/* Starting gamma values for a red-tab style panel; tune on the bench. */
 		gamctrp1 = [02 1c 07 12 37 32 29 2d 29 25 2B 39 00 01 03 10];
 		gamctrn1 = [03 1d 07 06 2E 2C 29 2D 2E 2E 37 3F 00 00 02 10];

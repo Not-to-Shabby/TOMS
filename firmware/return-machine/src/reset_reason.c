@@ -24,34 +24,14 @@ static uint32_t soc_reset_reason(void)
 }
 #endif
 
+uint32_t toms_reset_raw(void)
+{
+	return soc_reset_reason();
+}
+
 uint8_t toms_reset_reason(void)
 {
-	switch (soc_reset_reason()) {
-	case 1: /* POWERON */
-	case 10: /* SW_CPU_RESET on some chip revisions */
-		return TOMS_RESET_POWER_ON;
-	case 2: /* SW_RESET */
-	case 3: /* DEEPSLEEP_RESET */
-		return TOMS_RESET_SOFTWARE;
-	case 4: /* TG0WDT_SYS_RESET */
-	case 5: /* TG1WDT_SYS_RESET */
-	case 7: /* TG0WDT_CPU_RESET */
-	case 8: /* RTCWDT_SYS_RESET */
-	case 9: /* RTCWDT_CPU_RESET */
-	case 16: /* TG_WDT / RTCWDT_BROWN_OUT variants live here on S3 */
-		return TOMS_RESET_WATCHDOG;
-	case 11: /* INTRUSION_RESET */
-	case 12: /* TGWDT_CPU_RESET */
-		return TOMS_RESET_WATCHDOG;
-	case 13: /* BROWN_OUT_RESET */
-		return TOMS_RESET_BROWNOUT;
-	case 14: /* RTCWDT_BROWN_OUT_RESET */
-		return TOMS_RESET_BROWNOUT;
-	case 15: /* CLK_SWITCH / super WDT */
-		return TOMS_RESET_WATCHDOG;
-	default:
-		return TOMS_RESET_OTHER;
-	}
+	return toms_reset_classify(soc_reset_reason());
 }
 
 const char *toms_reset_reason_name(uint8_t reason)

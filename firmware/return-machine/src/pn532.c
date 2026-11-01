@@ -89,7 +89,7 @@ static int pn532_read_frame(uint8_t *payload, size_t *len, k_timeout_t timeout)
 {
 	int rc = wait_ready(timeout);
 	if (rc != 0) {
-		return (rc == -EAGAIN || rc == -EWOULDBLOCK) ? -ETIMEDOUT : rc;
+		return (rc == -EAGAIN) ? -ETIMEDOUT : rc; /* EWOULDBLOCK is the same value */
 	}
 
 	uint8_t head[6]; /* status byte + 00 00 FF LEN LCS */

@@ -11,11 +11,20 @@ target_sources(app PRIVATE
   src/pn532.c
   src/buzzer.c
   src/button.c
+  src/display_test.c
+  src/trial.c
   src/ble/svc.c
+  src/ble/ota.c
+  src/ota_ui.c
   ${TOMS_CORE}/src/crc16.c
   ${TOMS_CORE}/src/codec.c
   ${TOMS_CORE}/src/state_table.c
   ${TOMS_CORE}/src/ring.c
+  ${TOMS_CORE}/src/clock.c
+  ${TOMS_CORE}/src/guard.c
+  ${TOMS_CORE}/src/reset.c
+  ${TOMS_CORE}/src/ota.c
+  ${TOMS_CORE}/src/sha256.c
 )
 
 target_include_directories(app PRIVATE
