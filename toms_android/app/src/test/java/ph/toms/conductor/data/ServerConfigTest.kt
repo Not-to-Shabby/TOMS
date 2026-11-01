@@ -70,6 +70,21 @@ class ServerConfigTest {
         assertEquals(55L, config.fetchedAtMillis)
     }
 
+    @Test fun `assigned vehicle parses from the response`() {
+        val body = """
+            {"version":4242,"vehicle":{"id":"DONSAL ILIGAN","plate":"1234"},"route":{"id":7,"name":"Route 1"},
+             "stops":[{"id":"11","name":"A","lat":8.2,"lon":124.2},{"id":"12","name":"B","lat":8.3,"lon":124.2}],
+             "fare":{"matrix_id":9,"base_fare_centavos":1500,"base_distance_km":4,"per_km_fare_centavos":1500,
+                     "rounding_step_cents":100,"discounts":[]}}
+        """.trimIndent()
+        val config = Json { ignoreUnknownKeys = true }.decodeFromString<DeviceConfigResponse>(body).toServerConfig(55L)
+
+        assertEquals("DONSAL ILIGAN", config.vehicleId)
+        assertEquals("1234", config.vehiclePlate)
+        assertEquals("7", config.routeId)
+        assertEquals("Route 1", config.routeName)
+    }
+
     @Test fun `each stop keeps the radius the server gave it`() {
         val config = serverConfigResponse(
             stops = listOf(StopDto("1", "A", 8.0, 124.0, 250), StopDto("2", "B", 8.1, 124.0, 40), StopDto("3", "C", 8.2, 124.0)),

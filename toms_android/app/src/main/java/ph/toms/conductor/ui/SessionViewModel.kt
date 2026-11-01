@@ -78,6 +78,28 @@ class SessionViewModel @Inject constructor(
         viewModelScope.launch {
             trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } }
         }
+        viewModelScope.launch {
+            trips.observeServerConfig().collect { config ->
+                if (config != null) {
+                    val vList = if (config.vehicleId.isNotBlank()) {
+                        listOf(Vehicle(config.vehicleId, config.vehiclePlate))
+                    } else {
+                        repo.vehicles()
+                    }
+                    val rList = if (config.routeId.isNotBlank()) {
+                        listOf(RouteInfo(config.routeId, config.routeName))
+                    } else {
+                        repo.routes()
+                    }
+                    _state.update { s ->
+                        s.copy(
+                            vehicles = vList,
+                            routes = rList,
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun login(username: String, password: String) {
@@ -85,8 +107,19 @@ class SessionViewModel @Inject constructor(
         viewModelScope.launch {
             repo.login(username, password)
                 .onSuccess { name ->
+                    val serverConfig = trips.loadServerConfig()
+                    val vehicles = if (serverConfig != null && serverConfig.vehicleId.isNotBlank()) {
+                        listOf(Vehicle(serverConfig.vehicleId, serverConfig.vehiclePlate))
+                    } else {
+                        repo.vehicles()
+                    }
+                    val routes = if (serverConfig != null && serverConfig.routeId.isNotBlank()) {
+                        listOf(RouteInfo(serverConfig.routeId, serverConfig.routeName))
+                    } else {
+                        repo.routes()
+                    }
                     _state.update {
-                        it.copy(busy = false, conductor = name, vehicles = repo.vehicles(), routes = repo.routes())
+                        it.copy(busy = false, conductor = name, vehicles = vehicles, routes = routes)
                     }
                 }
                 .onFailure { e -> _state.update { it.copy(busy = false, loginError = e.message) } }

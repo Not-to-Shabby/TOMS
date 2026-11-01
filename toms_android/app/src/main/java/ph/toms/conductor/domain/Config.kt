@@ -106,7 +106,10 @@ const val MAX_FARE_VERSION = 1_000_000
  */
 data class ServerConfig(
     val version: Int,
-    val routeName: String,
+    val vehicleId: String = "",
+    val vehiclePlate: String = "",
+    val routeId: String = "",
+    val routeName: String = "",
     val stops: List<Stop>,
     val fare: FareConfig,
     val discountCategories: List<DiscountCategory>,

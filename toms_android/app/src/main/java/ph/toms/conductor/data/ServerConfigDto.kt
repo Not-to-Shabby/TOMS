@@ -12,10 +12,14 @@ import ph.toms.conductor.domain.Stop
 @Serializable
 data class DeviceConfigResponse(
     val version: Int,
+    val vehicle: VehicleDto? = null,
     val route: RouteDto,
     val stops: List<StopDto>,
     val fare: FareDto,
 )
+
+@Serializable
+data class VehicleDto(val id: String, val plate: String)
 
 @Serializable
 data class RouteDto(val id: Int, val name: String)
@@ -82,6 +86,9 @@ fun DeviceConfigResponse.toServerConfig(fetchedAtMillis: Long): ServerConfig {
 
     return ServerConfig(
         version = version,
+        vehicleId = vehicle?.id ?: "",
+        vehiclePlate = vehicle?.plate ?: vehicle?.id ?: "",
+        routeId = route.id.toString(),
         routeName = route.name,
         stops = stops.map { Stop(it.id, it.name, it.lat, it.lon, it.radiusM.toDouble()) },
         fare = FareConfig(
