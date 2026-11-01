@@ -64,6 +64,7 @@ fun DeviceConfigResponse.toServerConfig(fetchedAtMillis: Long): ServerConfig {
         if (!it.lat.isFinite() || it.lat !in -90.0..90.0 || !it.lon.isFinite() || it.lon !in -180.0..180.0) {
             bad("stop \"${it.name}\" has no valid position")
         }
+        if (it.radiusM <= 0) bad("stop \"${it.name}\" has a radius of ${it.radiusM} m, which must be positive")
     }
 
     if (fare.baseFareCentavos !in 0..MAX_BASE_FARE_CENTAVOS) bad("base fare ${fare.baseFareCentavos} is out of range")
@@ -82,7 +83,7 @@ fun DeviceConfigResponse.toServerConfig(fetchedAtMillis: Long): ServerConfig {
     return ServerConfig(
         version = version,
         routeName = route.name,
-        stops = stops.map { Stop(it.id, it.name, it.lat, it.lon) },
+        stops = stops.map { Stop(it.id, it.name, it.lat, it.lon, it.radiusM.toDouble()) },
         fare = FareConfig(
             version = version,
             baseFareCentavos = fare.baseFareCentavos,

@@ -70,6 +70,36 @@ class ServerConfigTest {
         assertEquals(55L, config.fetchedAtMillis)
     }
 
+    @Test fun `each stop keeps the radius the server gave it`() {
+        val config = serverConfigResponse(
+            stops = listOf(StopDto("1", "A", 8.0, 124.0, 250), StopDto("2", "B", 8.1, 124.0, 40), StopDto("3", "C", 8.2, 124.0)),
+        ).toServerConfig(0)
+        assertEquals(listOf(250.0, 40.0, 100.0), config.stops.map { it.radiusMeters })
+    }
+
+    @Test fun `a response with no radius_m uses the default of 100 m`() {
+        val body = """{"version":1,"route":{"id":1,"name":"R"},
+            "stops":[{"id":"1","name":"A","lat":8.0,"lon":124.0},{"id":"2","name":"B","lat":8.1,"lon":124.0}],
+            "fare":{"matrix_id":1,"base_fare_centavos":1500,"base_distance_km":4,"per_km_fare_centavos":250,"rounding_step_cents":100,"discounts":[]}}"""
+        val config = Json { ignoreUnknownKeys = true }.decodeFromString<DeviceConfigResponse>(body).toServerConfig(0)
+        assertEquals(listOf(100.0, 100.0), config.stops.map { it.radiusMeters })
+    }
+
+    @Test fun `a radius that is not positive is refused`() {
+        for (radius in listOf(0, -5)) {
+            try {
+                serverConfigResponse(stops = listOf(StopDto("1", "A", 8.0, 124.0, radius), StopDto("2", "B", 8.1, 124.0))).toServerConfig(0)
+                fail("radius $radius should have been refused")
+            } catch (_: InvalidServerConfig) {
+            }
+        }
+    }
+
+    @Test fun `the radius survives being saved and loaded`() = runBlocking {
+        repo.saveServerConfig(serverConfigResponse(stops = listOf(StopDto("1", "A", 8.0, 124.0, 250), StopDto("2", "B", 8.1, 124.0, 40))))
+        assertEquals(listOf(250.0, 40.0), repo.loadServerConfig()!!.stops.map { it.radiusMeters })
+    }
+
     @Test fun `the fare version is the server's, on the config and on the fare`() {
         val config = serverConfigResponse(version = 777).toServerConfig(0)
         assertEquals(777, config.version)
