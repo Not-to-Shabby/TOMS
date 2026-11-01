@@ -50,9 +50,57 @@ struct toms_heartbeat_msg {
 	uint8_t reset_reason;
 };
 
+/* Wire protocol revision reported by device_info. Bump on any layout change. */
+#define TOMS_PROTOCOL_VERSION 1u
+
+/* device_info flags */
+#define TOMS_INFO_FLAG_DEV_MODE 0x01u /* unbonded writes accepted, sim_card enabled */
+#define TOMS_INFO_FLAG_SIGNED 0x02u   /* values carry the 8-byte HMAC trailer */
+
+#define TOMS_VEHICLE_ID_MAX 32u
+#define TOMS_PAID_TIMEOUT_MIN_MS 1000u
+#define TOMS_PAID_TIMEOUT_MAX_MS 2000u
+#define TOMS_HEARTBEAT_MIN_S 1u
+#define TOMS_HEARTBEAT_MAX_S 120u
+
+struct toms_config_msg {
+	uint8_t vehicle_id[TOMS_VEHICLE_ID_MAX];
+	uint8_t vehicle_id_len;
+	uint8_t tones_mask; /* bit n enables enum toms_tone value n */
+	uint16_t paid_timeout_ms;
+	uint16_t heartbeat_interval_s;
+	uint8_t alarm_clear_policy;
+};
+
+struct toms_device_info {
+	uint8_t protocol_version;
+	uint8_t fw_major;
+	uint8_t fw_minor;
+	uint8_t fw_patch;
+	uint8_t flags; /* TOMS_INFO_FLAG_* */
+	uint16_t max_state_entries;
+};
+
+/* Defaults from PROTOCOL.md: all tones, 1500 ms paid timeout, 10 s heartbeat. */
+void toms_config_defaults(struct toms_config_msg *c);
+
 /* All encoders return the encoded length, or -ENOSPC if cap is too small,
  * -EINVAL on bad input. Decoders return the consumed length, or -EINVAL on
  * a malformed message. */
+
+int toms_codec_encode_ack(uint8_t *buf, size_t cap, uint8_t kind, uint32_t value);
+
+/* remaining_ms must be below 1000. */
+int toms_codec_decode_time_sync(const uint8_t *data, size_t len, uint32_t *epoch,
+				uint16_t *remaining_ms);
+
+/* Rejects a paid timeout outside 1000-2000 ms and a heartbeat outside 1-120 s. */
+int toms_codec_decode_config(const uint8_t *data, size_t len, struct toms_config_msg *c);
+
+int toms_codec_encode_device_info(uint8_t *buf, size_t cap, const struct toms_device_info *i);
+
+/* uid_len u8 + uid, used by the dev-mode sim_card write. */
+int toms_codec_decode_uid(const uint8_t *data, size_t len, uint8_t *uid, uint8_t *uid_len);
 
 int toms_codec_encode_card_read(uint8_t *buf, size_t cap, const struct toms_card_read_msg *m);
 int toms_codec_decode_card_read(const uint8_t *data, size_t len, struct toms_card_read_msg *m);

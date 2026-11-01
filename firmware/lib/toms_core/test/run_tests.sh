@@ -17,6 +17,9 @@ if [ -z "$CC_BIN" ]; then
 fi
 
 "$CC_BIN" -std=c99 -Wall -Wextra -Werror -I../include \
-	test_main.c ../src/crc16.c ../src/ring.c ../src/state_table.c ../src/codec.c \
+	test_main.c ../src/crc16.c ../src/ring.c ../src/state_table.c ../src/codec.c ../src/clock.c ../src/guard.c ../src/reset.c \
 	-o test_core
 ./test_core
+
+"$CC_BIN" -std=c99 -Wall -Wextra -Werror -I../include test_ota.c ../src/ota.c ../src/sha256.c -o test_ota
+./test_ota

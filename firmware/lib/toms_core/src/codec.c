@@ -161,3 +161,103 @@ int toms_codec_decode_state_update(const uint8_t *data, size_t len, uint32_t *ve
 	*count = n;
 	return (int)off;
 }
+
+void toms_config_defaults(struct toms_config_msg *c)
+{
+	memset(c, 0, sizeof(*c));
+	c->tones_mask = 0xFFu;
+	c->paid_timeout_ms = 1500u;
+	c->heartbeat_interval_s = 10u;
+	c->alarm_clear_policy = 0u;
+}
+
+int toms_codec_encode_ack(uint8_t *buf, size_t cap, uint8_t kind, uint32_t value)
+{
+	if (buf == NULL) {
+		return -EINVAL;
+	}
+	if (cap < 5u) {
+		return -ENOSPC;
+	}
+	buf[0] = kind;
+	PUT_U32(&buf[1], value);
+	return 5;
+}
+
+int toms_codec_decode_time_sync(const uint8_t *data, size_t len, uint32_t *epoch,
+				uint16_t *remaining_ms)
+{
+	if (data == NULL || epoch == NULL || remaining_ms == NULL || len < 6u) {
+		return -EINVAL;
+	}
+	uint16_t rem = GET_U16(&data[4]);
+	if (rem >= 1000u) {
+		return -EINVAL;
+	}
+	*epoch = GET_U32(&data[0]);
+	*remaining_ms = rem;
+	return 6;
+}
+
+int toms_codec_decode_config(const uint8_t *data, size_t len, struct toms_config_msg *c)
+{
+	if (data == NULL || c == NULL || len < 1u) {
+		return -EINVAL;
+	}
+	uint8_t id_len = data[0];
+	if (id_len > TOMS_VEHICLE_ID_MAX) {
+		return -EINVAL;
+	}
+	size_t need = 1u + id_len + 6u;
+	if (len < need) {
+		return -EINVAL;
+	}
+
+	const uint8_t *p = &data[1u + id_len];
+	uint16_t timeout = GET_U16(&p[1]);
+	uint16_t heartbeat = GET_U16(&p[3]);
+	if (timeout < TOMS_PAID_TIMEOUT_MIN_MS || timeout > TOMS_PAID_TIMEOUT_MAX_MS ||
+	    heartbeat < TOMS_HEARTBEAT_MIN_S || heartbeat > TOMS_HEARTBEAT_MAX_S) {
+		return -EINVAL;
+	}
+
+	memset(c, 0, sizeof(*c));
+	memcpy(c->vehicle_id, &data[1], id_len);
+	c->vehicle_id_len = id_len;
+	c->tones_mask = p[0];
+	c->paid_timeout_ms = timeout;
+	c->heartbeat_interval_s = heartbeat;
+	c->alarm_clear_policy = p[5];
+	return (int)need;
+}
+
+int toms_codec_encode_device_info(uint8_t *buf, size_t cap, const struct toms_device_info *i)
+{
+	if (buf == NULL || i == NULL) {
+		return -EINVAL;
+	}
+	if (cap < 7u) {
+		return -ENOSPC;
+	}
+	buf[0] = i->protocol_version;
+	buf[1] = i->fw_major;
+	buf[2] = i->fw_minor;
+	buf[3] = i->fw_patch;
+	buf[4] = i->flags;
+	PUT_U16(&buf[5], i->max_state_entries);
+	return 7;
+}
+
+int toms_codec_decode_uid(const uint8_t *data, size_t len, uint8_t *uid, uint8_t *uid_len)
+{
+	if (data == NULL || uid == NULL || uid_len == NULL || len < 1u) {
+		return -EINVAL;
+	}
+	uint8_t n = data[0];
+	if (n == 0 || n > TOMS_UID_MAX || len < 1u + n) {
+		return -EINVAL;
+	}
+	memcpy(uid, &data[1], n);
+	*uid_len = n;
+	return (int)(1u + n);
+}
