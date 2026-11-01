@@ -259,4 +259,63 @@ class RetrofitEventUploaderTest {
         assertTrue(res.exceptionOrNull()?.message?.contains("not enrolled") == true)
         assertEquals(0, server.requestCount)
     }
+
+    @Test
+    fun `conductor login succeeds with valid credentials and returns display name`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("""{"token":"jwt-123","user":{"id":5,"username":"juan","name":"Juan Dela Cruz","role":"conductor"}}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.login("juan", "password123")
+
+        assertTrue(res.isSuccess)
+        assertEquals("Juan Dela Cruz", res.getOrThrow())
+
+        val req = server.takeRequest()
+        assertEquals("/api/conductors/login", req.path)
+        val body = req.body.readUtf8()
+        assertTrue(body.contains("\"username\":\"juan\""))
+        assertTrue(body.contains("\"password\":\"password123\""))
+    }
+
+    @Test
+    fun `conductor login returns server error message on 401 invalid credentials`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(401).setHeader("Content-Type", "application/json")
+                .setBody("""{"error":"Invalid username or password"}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.login("juan", "wrongpass")
+
+        assertTrue(res.isFailure)
+        assertEquals("Invalid username or password", res.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun `conductor login returns server error message on 429 rate limit`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(429).setHeader("Content-Type", "application/json")
+                .setBody("""{"error":"Too many failed attempts. Try again later."}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.login("juan", "pass")
+
+        assertTrue(res.isFailure)
+        assertEquals("Too many failed attempts. Try again later.", res.exceptionOrNull()?.message)
+    }
+
+    @Test
+    fun `conductor login fails when server URL is blank`() = runBlocking {
+        val config = TestConfigStore(initialUrl = "")
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.login("juan", "pass")
+
+        assertTrue(res.isFailure)
+        assertEquals(NO_SERVER_MESSAGE, res.exceptionOrNull()?.message)
+        assertEquals(0, server.requestCount)
+    }
 }

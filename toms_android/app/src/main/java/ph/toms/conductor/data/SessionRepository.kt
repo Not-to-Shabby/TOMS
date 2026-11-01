@@ -3,6 +3,8 @@ package ph.toms.conductor.data
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
+import ph.toms.conductor.BuildConfig
+import ph.toms.conductor.sync.ConductorAuthService
 
 data class Vehicle(val id: String, val plate: String)
 data class RouteInfo(val id: String, val name: String)
@@ -14,6 +16,36 @@ interface SessionRepository {
     suspend fun login(username: String, password: String): Result<String>
     suspend fun vehicles(): List<Vehicle>
     suspend fun routes(): List<RouteInfo>
+}
+
+/**
+ * Communicates with POST /api/conductors/login on the server to verify real conductor credentials.
+ * When in test mode (BuildConfig.TEST_FARES), falls back to [stubRepo] if offline or no server is set.
+ */
+@Singleton
+class ServerSessionRepository @Inject constructor(
+    private val authService: ConductorAuthService,
+    private val stubRepo: StubSessionRepository,
+) : SessionRepository {
+
+    override suspend fun login(username: String, password: String): Result<String> {
+        val cleanUser = username.trim()
+        val cleanPass = password.trim()
+        if (cleanUser.isBlank() || cleanPass.isBlank()) {
+            return Result.failure(IllegalArgumentException("Enter username and password"))
+        }
+
+        if (BuildConfig.TEST_FARES) {
+            val serverResult = authService.login(cleanUser, cleanPass)
+            if (serverResult.isSuccess) return serverResult
+            return stubRepo.login(cleanUser, cleanPass)
+        }
+
+        return authService.login(cleanUser, cleanPass)
+    }
+
+    override suspend fun vehicles(): List<Vehicle> = stubRepo.vehicles()
+    override suspend fun routes(): List<RouteInfo> = stubRepo.routes()
 }
 
 @Singleton

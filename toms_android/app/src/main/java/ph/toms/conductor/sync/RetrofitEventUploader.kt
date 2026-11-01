@@ -81,6 +81,35 @@ interface TomsApiService {
     suspend fun fetchConfig(
         @Header("Authorization") authHeader: String?,
     ): DeviceConfigResponse
+
+    @POST("api/conductors/login")
+    suspend fun loginConductor(
+        @Body request: ConductorLoginRequest,
+    ): ConductorLoginResponse
+}
+
+@Serializable
+data class ConductorLoginRequest(
+    val username: String,
+    val password: String,
+)
+
+@Serializable
+data class ConductorUserDto(
+    val id: Int,
+    val username: String,
+    val name: String? = null,
+    val role: String? = null,
+)
+
+@Serializable
+data class ConductorLoginResponse(
+    val token: String,
+    val user: ConductorUserDto,
+)
+
+interface ConductorAuthService {
+    suspend fun login(username: String, password: String): Result<String>
 }
 
 interface CardRegistrySync {
@@ -91,7 +120,7 @@ interface CardRegistrySync {
 class RetrofitEventUploader @Inject constructor(
     private val config: DeviceConfigStore,
     private val okHttpClient: OkHttpClient,
-) : EventUploader, CardRegistrySync, ConfigSync {
+) : EventUploader, CardRegistrySync, ConfigSync, ConductorAuthService {
 
     override val channel: String = "data_a"
 
@@ -194,6 +223,26 @@ class RetrofitEventUploader @Inject constructor(
             Result.success(ApprovedCardList(res.cards, res.statuses))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    override suspend fun login(username: String, password: String): Result<String> {
+        val api = createApi() ?: return Result.failure(
+            IllegalStateException(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL"),
+        )
+        return try {
+            val res = api.loginConductor(ConductorLoginRequest(username, password))
+            val displayName = res.user.name?.takeIf { it.isNotBlank() } ?: res.user.username
+            Result.success(displayName)
+        } catch (e: HttpException) {
+            val errorMsg = serverReason(e) ?: when (e.code()) {
+                401 -> "Invalid username or password"
+                429 -> "Too many failed attempts. Try again later."
+                else -> "Server error (${e.code()})"
+            }
+            Result.failure(Exception(errorMsg))
+        } catch (e: Exception) {
+            Result.failure(Exception(e.message ?: "Network error connecting to server"))
         }
     }
 }
