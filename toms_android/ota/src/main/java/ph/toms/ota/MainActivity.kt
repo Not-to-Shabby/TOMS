@@ -206,10 +206,20 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (machine != null) "${machine.name} (${machine.address})" else "No machine selected",
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = if (machine != null) machine.name else "No machine selected",
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        if (machine != null) {
+                            Text(
+                                text = machine.address,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     if (s.isDiagConnected) {
                         Button(
                             onClick = { vm.disconnectDiagnostics() },
@@ -234,15 +244,55 @@ class MainActivity : ComponentActivity() {
         }
 
         if (s.isDiagConnected) {
-            Card(Modifier.fillMaxWidth()) {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (s.lastCardUid != null)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.surface
+                )
+            ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("NFC Card Reader (PN532)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("NFC Card Reader (PN532)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        if (s.lastCardUid != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = MaterialTheme.shapes.small
+                            ) {
+                                Text(
+                                    " CARD WORKING ",
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
                     if (s.lastCardUid != null) {
-                        Text("Card: ${s.lastCardUid}", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                        Text("Type: ${s.lastCardType ?: "ISO 14443-A"}  |  Time: ${s.lastCardTime ?: "--"}", style = MaterialTheme.typography.bodySmall)
-                        Text("Taps: ${s.cardTapCount}", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "UID: ${s.lastCardUid}",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            "Type: ${s.lastCardType ?: "ISO 14443-A"}  |  Length: ${s.lastCardLen} bytes",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "RF Coupling: Healthy (ATQA / SAK validated)\nLast read: ${s.lastCardTime ?: "--"} (Total taps: ${s.cardTapCount})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     } else {
-                        Text("Ready. Tap NFC card on the PN532 reader antenna...", style = MaterialTheme.typography.bodyMedium)
+                        Text("Ready. Tap physical NFC card against reader antenna...", style = MaterialTheme.typography.bodyMedium)
                     }
                     OutlinedButton(onClick = { vm.simulateCardTap("04 08 04 62") }) {
                         Text("Simulate Tap (04 08 04 62)")

@@ -168,6 +168,10 @@ class BleTransport private constructor(
             log("paired")
         }
 
+        // Refresh Android's internal GATT attribute cache so newly added characteristics
+        // (like 0x0E for diagnostics) are discovered instead of using stale cached tables.
+        refreshGatt(gatt!!)
+
         log("discovering services")
         gatt!!.discoverServices()
         withTimeout(timeoutMs) { servicesDone.await() }
@@ -178,6 +182,11 @@ class BleTransport private constructor(
         simCardChar = svc.getCharacteristic(Ota.SIM_CARD)
         cardReadChar = svc.getCharacteristic(Ota.CARD_READ)
 
+        val charHexList = svc.characteristics.map {
+            "%02X".format(it.uuid.leastSignificantBits and 0xFF)
+        }
+        log("chars found: $charHexList (diag: ${if (diagChar != null) "YES" else "MISSING"})")
+
         log("requesting MTU 65 (the machine's maximum)")
         gatt!!.requestMtu(65)
         withTimeout(timeoutMs) { mtuDone.await() }
@@ -186,6 +195,15 @@ class BleTransport private constructor(
         diagChar?.let { runCatching { subscribe(it) } }
         cardReadChar?.let { runCatching { subscribe(it) } }
         log("subscribed to channels")
+    }
+
+    private fun refreshGatt(g: BluetoothGatt): Boolean {
+        return try {
+            val method = g.javaClass.getMethod("refresh")
+            (method.invoke(g) as? Boolean) ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     @Suppress("DEPRECATION")

@@ -34,6 +34,7 @@ data class OtaUiState(
     val isDiagConnected: Boolean = false,
     val diagStatus: String = "Not connected",
     val lastCardUid: String? = null,
+    val lastCardLen: Int = 0,
     val lastCardType: String? = null,
     val lastCardTime: String? = null,
     val cardTapCount: Int = 0,
@@ -270,6 +271,7 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                         _state.update {
                             it.copy(
                                 lastCardUid = card.uidHex,
+                                lastCardLen = card.uidLen,
                                 lastCardType = atypeName,
                                 lastCardTime = now,
                                 cardTapCount = it.cardTapCount + 1

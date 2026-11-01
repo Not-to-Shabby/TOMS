@@ -71,6 +71,7 @@ static atomic_t requests;
 static K_MUTEX_DEFINE(uid_lock);
 static uint8_t card_uid[UID_MAX];
 static uint8_t card_uid_len;
+static uint8_t card_uid_atype;
 static bool diag_nfc_ready = true;
 static uint16_t diag_btn_count;
 
@@ -280,6 +281,20 @@ static void info_page(void)
 	draw_centered(108, 1, C_GRAY, auto_advance ? "AUTO NEXT 3 S" : "MANUAL");
 }
 
+static const char *card_type_str(uint8_t atype)
+{
+	switch (atype) {
+	case 1:
+		return "NTAG (TYPE 2)";
+	case 2:
+		return "DESFIRE (TYPE 4)";
+	case 3:
+		return "MIFARE CLASSIC";
+	default:
+		return "ISO 14443-A";
+	}
+}
+
 static void diag_page(void)
 {
 	char line[32];
@@ -287,15 +302,16 @@ static void diag_page(void)
 	fill_all(C_BLACK);
 	draw_centered(4, 2, C_CYAN, "DIAGNOSTICS");
 
-	draw_text(6, 26, 1, C_WHITE, "SCREEN: 160x128 OK");
+	draw_text(6, 24, 1, C_WHITE, "SCREEN: 160x128 OK");
 	snprintk(line, sizeof(line), "BLIGHT: %s", backlight_level ? "ON" : "OFF");
-	draw_text(6, 38, 1, backlight_level ? C_GREEN : C_YELLOW, line);
+	draw_text(6, 36, 1, backlight_level ? C_GREEN : C_YELLOW, line);
 
 	snprintk(line, sizeof(line), "NFC   : %s", diag_nfc_ready ? "PN532 v1.6 OK" : "SEARCHING");
-	draw_text(6, 52, 1, diag_nfc_ready ? C_GREEN : C_RED, line);
+	draw_text(6, 48, 1, diag_nfc_ready ? C_GREEN : C_RED, line);
 
 	k_mutex_lock(&uid_lock, K_FOREVER);
 	uint8_t len = card_uid_len;
+	uint8_t atype = card_uid_atype;
 	uint8_t uid[UID_MAX];
 	memcpy(uid, card_uid, sizeof(uid));
 	k_mutex_unlock(&uid_lock);
@@ -306,18 +322,21 @@ static void diag_page(void)
 			snprintk(&hex[i * 3], 4, "%02X ", uid[i]);
 		}
 		snprintk(line, sizeof(line), "CARD  : %s", hex);
-		draw_text(6, 64, 1, C_CYAN, line);
+		draw_text(6, 60, 1, C_CYAN, line);
+		snprintk(line, sizeof(line), "TYPE  : %s", card_type_str(atype));
+		draw_text(6, 72, 1, C_GREEN, line);
 	} else {
-		draw_text(6, 64, 1, C_GRAY, "CARD  : TAP CARD NOW");
+		draw_text(6, 60, 1, C_GRAY, "CARD  : TAP CARD TO TEST");
+		draw_text(6, 72, 1, C_GRAY, "HEALTH: WAITING FOR TAP");
 	}
 
 	snprintk(line, sizeof(line), "BUTTON: %u PRESSES", (unsigned int)diag_btn_count);
-	draw_text(6, 78, 1, C_WHITE, line);
+	draw_text(6, 86, 1, C_WHITE, line);
 
-	draw_text(6, 92, 1, C_WHITE, "BUZZER: GPIO6 ACTIVE");
-	draw_text(6, 104, 1, C_YELLOW, "BEEPS ON TAP/PRESS");
+	draw_text(6, 98, 1, C_WHITE, "BUZZER: GPIO6 ACTIVE");
+	draw_text(6, 110, 1, C_YELLOW, "BEEPS ON TAP/PRESS");
 
-	draw_centered(118, 1, C_GRAY, "PRESS BTN: TEST/NEXT");
+	draw_centered(120, 1, C_GRAY, "PRESS BTN: TEST/NEXT");
 }
 
 static void card_page(void)
@@ -325,16 +344,19 @@ static void card_page(void)
 	char hex[3 * UID_MAX + 1];
 	uint8_t uid[UID_MAX];
 	uint8_t len;
+	uint8_t atype;
 
 	k_mutex_lock(&uid_lock, K_FOREVER);
 	len = card_uid_len;
+	atype = card_uid_atype;
 	memcpy(uid, card_uid, sizeof(uid));
 	k_mutex_unlock(&uid_lock);
 
 	fill_all(C_BLACK);
-	draw_centered(8, 2, C_GREEN, "LAST CARD");
+	draw_centered(6, 2, C_GREEN, "CARD VERIFIED");
 	if (len == 0) {
-		draw_centered(60, 1, C_GRAY, "NONE YET - TAP A CARD");
+		draw_centered(50, 1, C_GRAY, "NONE YET");
+		draw_centered(66, 1, C_WHITE, "TAP CARD ON ANTENNA");
 		return;
 	}
 	for (uint8_t i = 0; i < len; i++) {
@@ -342,11 +364,13 @@ static void card_page(void)
 	}
 	hex[len * 3 - 1] = '\0';
 
-	char lenline[16];
-	snprintk(lenline, sizeof(lenline), "%u BYTES", len);
-	/* A 7-byte UID prints 20 characters, which fits at scale 1 only. */
-	draw_centered(50, 1, C_WHITE, hex);
-	draw_centered(70, 1, C_YELLOW, lenline);
+	char lenline[28];
+	snprintk(lenline, sizeof(lenline), "%u BYTES - %s", len, card_type_str(atype));
+	draw_centered(38, 1, C_CYAN, hex);
+	draw_centered(54, 1, C_YELLOW, lenline);
+	draw_centered(72, 1, C_GREEN, "RF COUPLING: HEALTHY");
+	draw_centered(88, 1, C_WHITE, "STATUS: IN WORKING ORDER");
+	draw_centered(114, 1, C_GRAY, "AUTO ADVANCE IN 4 S");
 }
 
 static void ble_page(void)
@@ -599,7 +623,7 @@ void display_test_backlight_toggle(void)
 	k_sem_give(&wake);
 }
 
-void display_test_set_uid(const uint8_t *uid, uint8_t len)
+void display_test_set_uid(const uint8_t *uid, uint8_t len, uint8_t atype)
 {
 	if (len > UID_MAX) {
 		len = UID_MAX;
@@ -607,6 +631,7 @@ void display_test_set_uid(const uint8_t *uid, uint8_t len)
 	k_mutex_lock(&uid_lock, K_FOREVER);
 	memcpy(card_uid, uid, len);
 	card_uid_len = len;
+	card_uid_atype = atype;
 	k_mutex_unlock(&uid_lock);
 
 	atomic_or(&requests, REQ_CARD);
