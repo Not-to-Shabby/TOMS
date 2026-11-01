@@ -18,11 +18,16 @@ import ph.toms.conductor.data.db.DatabaseKeyProvider
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.feedback.DeviceFeedback
 import ph.toms.conductor.feedback.Feedback
+import ph.toms.conductor.security.KeystoreSecretCipher
+import ph.toms.conductor.security.SecretCipher
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.PrefsDeviceConfig
 import ph.toms.conductor.settings.PrefsSettings
 import ph.toms.conductor.settings.SettingsStore
+import ph.toms.conductor.BuildConfig
+import ph.toms.conductor.domain.TomsConfig
 import ph.toms.conductor.sync.CardRegistrySync
+import ph.toms.conductor.sync.ConfigSync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
@@ -47,6 +52,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun cardRegistrySync(impl: RetrofitEventUploader): CardRegistrySync
+
+    @Binds
+    abstract fun configSync(impl: RetrofitEventUploader): ConfigSync
 }
 
 @Module
@@ -63,6 +71,13 @@ object ProvidersModule {
             .addMigrations(*ALL_MIGRATIONS)
             .build()
     }
+
+    @Provides @Singleton
+    fun secretCipher(): SecretCipher = KeystoreSecretCipher()
+
+    /** What the phone works from before any fares are downloaded: nothing, unless a debug build asks for the test fares. */
+    @Provides @Singleton
+    fun initialConfig(): InitialConfig = InitialConfig(if (BuildConfig.TEST_FARES) TestConfig.config else TomsConfig.EMPTY)
 
     @Provides @Singleton
     fun deviceId(config: DeviceConfigStore): String = config.deviceId

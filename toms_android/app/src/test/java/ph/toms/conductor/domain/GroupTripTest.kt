@@ -246,4 +246,71 @@ class TapResolverTest {
             assertFalse(s.name, resolve("04aa", s) is TapOutcome.StartTrip)
         }
     }
+
+    // ---- cards the office has taken out of service
+
+    private val blockedCfg = cfg.copy(
+        approvedCards = ApprovedCards(
+            mapOf("04AA" to "uuid-1"),
+            mapOf("0BAD1111" to "lost", "0BAD2222" to "suspended", "0BAD3333" to "retired"),
+        ),
+    )
+
+    private fun resolveBlocked(uid: String, state: CardState = CardState.AVAILABLE, trip: Trip? = open) =
+        TapResolver.resolve(uid, blockedCfg, { state }, { trip })
+
+    @Test fun `a free card the office marked lost is refused with the reason`() {
+        assertEquals(TapOutcome.CardBlocked("0BAD1111", "lost"), resolveBlocked("0b:ad:11:11"))
+    }
+
+    @Test fun `a suspended and a retired card are refused with their own reason`() {
+        assertEquals(TapOutcome.CardBlocked("0BAD2222", "suspended"), resolveBlocked("0BAD2222"))
+        assertEquals(TapOutcome.CardBlocked("0BAD3333", "retired"), resolveBlocked("0bad3333"))
+    }
+
+    @Test fun `a card with a passenger still aboard stays readable even if the office marked it lost`() {
+        // The fare is still owed: the conductor must still see the trip and be able to collect it.
+        assertEquals(TapOutcome.ShowTrip(open, CardState.ASSIGNED_UNPAID), resolveBlocked("0BAD1111", CardState.ASSIGNED_UNPAID))
+        assertEquals(TapOutcome.ShowTrip(open, CardState.RETURNED), resolveBlocked("0BAD2222", CardState.RETURNED))
+    }
+
+    @Test fun `a blocked card with an open state but no trip on record still needs attention`() {
+        assertEquals(TapOutcome.NeedsAttention(null, CardState.ASSIGNED_PAID), resolveBlocked("0BAD1111", CardState.ASSIGNED_PAID, trip = null))
+    }
+
+    @Test fun `a blocked card is never allowed to start a trip`() {
+        for (s in CardState.values()) {
+            assertFalse(s.name, resolveBlocked("0BAD1111", s) is TapOutcome.StartTrip)
+        }
+    }
+
+    @Test fun `a card that is not in either list is still just unknown`() {
+        assertEquals(TapOutcome.UnknownCard("CAFE0000"), resolveBlocked("cafe0000"))
+    }
+
+    @Test fun `an approved card is unaffected by the new statuses`() {
+        assertEquals(TapOutcome.StartTrip("04AA"), resolveBlocked("04aa"))
+    }
+
+    @Test fun `a card that is both approved and listed as blocked is treated as approved`() {
+        // Defensive: the server never sends both, but if it did, the phone must not lock out a working card.
+        val both = cfg.copy(approvedCards = ApprovedCards(mapOf("04AA" to "uuid-1"), mapOf("04AA" to "lost")))
+        assertEquals(TapOutcome.StartTrip("04AA"), TapResolver.resolve("04aa", both, { CardState.AVAILABLE }, { open }))
+        assertEquals(null, both.approvedCards.blockedStatusFor("04AA"))
+    }
+}
+
+class ApprovedCardsTest {
+    @Test fun `statuses are matched however the chip id is written`() {
+        val cards = ApprovedCards(emptyMap(), mapOf("0b:ad:11:11" to "lost"))
+        assertEquals("lost", cards.blockedStatusFor("0BAD1111"))
+        assertEquals("lost", cards.blockedStatusFor("0b-ad-11-11"))
+        assertEquals(null, cards.blockedStatusFor("FFFFFFFF"))
+    }
+
+    @Test fun `no statuses means nothing is blocked, as with an older server`() {
+        val cards = ApprovedCards(mapOf("04AA" to "uuid-1"))
+        assertEquals(null, cards.blockedStatusFor("04AA"))
+        assertEquals(1, cards.size)
+    }
 }

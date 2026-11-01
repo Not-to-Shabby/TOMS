@@ -146,6 +146,42 @@ class OutboxTest {
         assertEquals(0, db.outbox().pendingCountNow())
     }
 
+    @Test fun `a rejected event is parked with its reason and is not retried`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        val id = db.outbox().pending(10).single().eventId
+        val up = FakeUploader { UploadResult.Acked(emptySet(), mapOf(id to "unknown device")) }
+        val report = flusher(up).flush()
+        assertEquals(1, report.parked)
+        assertEquals(0, report.delivered)
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertEquals(1, db.outbox().parkedCountNow())
+        assertEquals("unknown device", db.outbox().parkedReason(id))
+        flusher(up).flush()
+        assertEquals(1, up.seen.size)
+    }
+
+    @Test fun `a rejected event does not block the events behind it`() = runBlocking {
+        repeat(3) { i -> repo.recordTrip(trip("t$i", "U$i"), CardState.ASSIGNED_UNPAID, 1000L + i) }
+        val ids = db.outbox().pending(10).map { it.eventId }
+        val up = FakeUploader { b ->
+            UploadResult.Acked(b.map { it.eventId }.filter { it != ids[0] }.toSet(), mapOf(ids[0] to "bad payload"))
+        }
+        val report = flusher(up, batch = 2).flush()
+        assertEquals(2, report.delivered)
+        assertEquals(1, report.parked)
+        assertEquals(null, report.failure)
+        assertEquals(0, db.outbox().pendingCountNow())
+    }
+
+    @Test fun `parked events can be put back in the queue`() = runBlocking {
+        repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)
+        val id = db.outbox().pending(10).single().eventId
+        flusher(FakeUploader { UploadResult.Acked(emptySet(), mapOf(id to "server bug")) }).flush()
+        assertEquals(1, db.outbox().unparkAll())
+        assertEquals(1, db.outbox().pendingCountNow())
+        assertEquals(0, db.outbox().parkedCountNow())
+    }
+
     @Test fun `large backlog drains in batches in order`() = runBlocking {
         repeat(120) { i -> repo.recordTrip(trip("t$i", "U$i"), CardState.ASSIGNED_UNPAID, 1000L + i) }
         val up = FakeUploader { b -> UploadResult.Acked(b.map { it.eventId }.toSet()) }

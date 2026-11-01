@@ -6,10 +6,14 @@ import ph.toms.conductor.domain.FareConfig
 import ph.toms.conductor.domain.Stop
 import ph.toms.conductor.domain.TomsConfig
 
+/** What a phone starts from before it has downloaded anything. Provided by Hilt; unit tests pass their own. */
+class InitialConfig(val config: TomsConfig)
+
 /**
- * Local seed used until the server config and card registry exist (Phase 1.4/1.6).
- * Stop coordinates, fare numbers and discount rates are placeholders for on-device testing only;
- * they are not verified fares. The card UIDs are the four cards read on the Tecno Pova 4.
+ * Placeholder stops, fare and discounts for unit tests and, only when a debug build is made with
+ * `-PtestFares=true`, for trying the app with no server. They are not verified fares and a release build
+ * never uses them: it starts with [TomsConfig.EMPTY] and takes the fares from the server.
+ * The card UIDs are the four cards read on the Tecno Pova 4.
  */
 object TestConfig {
     val config = TomsConfig(

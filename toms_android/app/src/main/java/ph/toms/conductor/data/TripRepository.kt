@@ -3,21 +3,26 @@ package ph.toms.conductor.data
 import androidx.room.withTransaction
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import ph.toms.conductor.data.db.CardEntity
 import ph.toms.conductor.data.db.ConfigCacheEntity
 import ph.toms.conductor.data.db.EventEntity
 import ph.toms.conductor.data.db.OutboxEntity
+import ph.toms.conductor.data.db.ServerConfigEntity
 import ph.toms.conductor.data.db.ShiftEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.db.TripEntity
+import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.data.db.PassengerJson
 import ph.toms.conductor.data.db.PassengerLineRecord
 import ph.toms.conductor.domain.GeoFix
 import ph.toms.conductor.domain.LineQuote
+import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.domain.Shift
 import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ShiftTrip
@@ -114,6 +119,9 @@ class TripRepository(
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
     fun pendingCount(): Flow<Int> = db.outbox().pendingCount()
+
+    /** Events the server refused. They are kept, not retried, and are not counted in [pendingCount]. */
+    fun parkedCount(): Flow<Int> = db.outbox().parkedCount()
 
     // ---- shifts
 
@@ -280,21 +288,60 @@ class TripRepository(
     suspend fun writtenOffTripIds(): Set<String> =
         db.events().ofType(EventTypes.FARE_WRITTEN_OFF).mapNotNull { it.tripId }.toSet()
 
-    suspend fun loadApprovedCards(): Map<String, String>? {
-        val cached = db.config().get("approved_cards") ?: return null
-        return runCatching { json.decodeFromString<Map<String, String>>(cached.json) }.getOrNull()
+    /**
+     * The saved card list, or null if there is none yet. The statuses live under their own key, so a phone that
+     * saved only the card map before this existed still loads it (with no statuses) instead of losing it.
+     */
+    suspend fun loadApprovedCardList(): ApprovedCardList? {
+        val cards = db.config().get("approved_cards")
+            ?.let { runCatching { json.decodeFromString<Map<String, String>>(it.json) }.getOrNull() }
+            ?: return null
+        val statuses = db.config().get("approved_card_statuses")
+            ?.let { runCatching { json.decodeFromString<Map<String, String>>(it.json) }.getOrNull() }
+            ?: emptyMap()
+        return ApprovedCardList(cards, statuses)
     }
 
-    suspend fun saveApprovedCards(cards: Map<String, String>) {
-        db.config().put(
-            ConfigCacheEntity(
-                key = "approved_cards",
-                version = 1,
-                json = json.encodeToString(cards),
-                fetchedAtMillis = System.currentTimeMillis(),
+    suspend fun loadApprovedCards(): Map<String, String>? = loadApprovedCardList()?.cards
+
+    /** Saves the list exactly as the server sent it, including an empty one: when the server has no cards left, the phone must too. */
+    suspend fun saveApprovedCardList(list: ApprovedCardList) {
+        val now = System.currentTimeMillis()
+        db.config().put(ConfigCacheEntity(key = "approved_cards", version = 1, json = json.encodeToString(list.cards), fetchedAtMillis = now))
+        db.config().put(ConfigCacheEntity(key = "approved_card_statuses", version = 1, json = json.encodeToString(list.statuses), fetchedAtMillis = now))
+    }
+
+    suspend fun saveApprovedCards(cards: Map<String, String>) = saveApprovedCardList(ApprovedCardList(cards))
+
+    // ---- fares, stops and discounts from the server
+
+    /**
+     * Saves what the server sent as the config to work from. It is checked first ([toServerConfig]); a response
+     * that fails a check throws [InvalidServerConfig] and nothing is saved, so the copy already on the phone stays.
+     * Returns the config that is now saved.
+     */
+    suspend fun saveServerConfig(response: DeviceConfigResponse): ServerConfig {
+        val config = response.toServerConfig(clock())
+        db.serverConfig().put(
+            ServerConfigEntity(
+                version = config.version,
+                routeName = config.routeName,
+                json = json.encodeToString(response),
+                fetchedAtMillis = config.fetchedAtMillis,
             ),
         )
+        return config
     }
+
+    /** The saved config, or null when none was ever downloaded or the saved copy can no longer be read or fails its checks. */
+    suspend fun loadServerConfig(): ServerConfig? = db.serverConfig().get()?.let(::readSavedConfig)
+
+    /** The saved config now and whenever it changes, including by a sync that ran while no screen was open. */
+    fun observeServerConfig(): Flow<ServerConfig?> = db.serverConfig().observe().map { row -> row?.let(::readSavedConfig) }
+
+    /** Reads a saved copy back through the same checks as a fresh one, so a damaged or outdated row reads as "none". */
+    private fun readSavedConfig(row: ServerConfigEntity): ServerConfig? =
+        runCatching { json.decodeFromString<DeviceConfigResponse>(row.json).toServerConfig(row.fetchedAtMillis) }.getOrNull()
 
     private suspend fun appendEvent(
         type: String,

@@ -10,6 +10,9 @@ sealed interface TapResult {
 
     data class UnknownCard(val nfcUid: String) : TapResult
 
+    /** The registry knows this card, but it is [status] (suspended, lost or retired) and must not be used. */
+    data class CardBlocked(val nfcUid: String, val status: String) : TapResult
+
     /** The card is lost or in an alarm state: the conductor must deal with it first. */
     data class NeedsAttention(val trip: Trip?, val cardState: CardState) : TapResult
 
@@ -37,6 +40,7 @@ object BoardFlow {
     ): TapResult {
         return when (val outcome = TapResolver.resolve(nfcUid, config, stateOf, tripFor)) {
             is TapOutcome.UnknownCard -> TapResult.UnknownCard(outcome.nfcUid)
+            is TapOutcome.CardBlocked -> TapResult.CardBlocked(outcome.nfcUid, outcome.status)
             is TapOutcome.ShowTrip -> TapResult.Existing(outcome.trip, outcome.state)
             is TapOutcome.NeedsAttention -> TapResult.NeedsAttention(outcome.trip, outcome.state)
             is TapOutcome.StartTrip -> {

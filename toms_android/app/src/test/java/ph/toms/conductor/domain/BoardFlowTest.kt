@@ -68,6 +68,15 @@ class BoardFlowTest {
         assertEquals(TapResult.UnknownCard("DEADBEEF"), tap("de:ad:be:ef", PassengerTally.starting()))
     }
 
+    @Test fun `a card the office took out of service is refused with its reason, and nothing starts`() {
+        val blocked = config.copy(approvedCards = ApprovedCards(mapOf("04AA" to "uuid-1"), mapOf("0BAD1111" to "lost")))
+        val r = BoardFlow.handleTap(
+            nfcUid = "0b:ad:11:11", passengers = PassengerTally.starting(), boardingStopId = "a", destinationStopId = "c",
+            config = blocked, stateOf = { CardState.AVAILABLE }, tripFor = { null }, newTripId = { "t" }, nowMillis = 1000,
+        )
+        assertEquals(TapResult.CardBlocked("0BAD1111", "lost"), r)
+    }
+
     @Test fun `an empty group is invalid, not a free trip`() {
         assertEquals(TapResult.Invalid(TripRejection.NO_PASSENGERS), tap("04aa", PassengerTally()))
     }

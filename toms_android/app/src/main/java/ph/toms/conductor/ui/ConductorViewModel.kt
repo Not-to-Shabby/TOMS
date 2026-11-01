@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ph.toms.conductor.data.SavedTrip
 import ph.toms.conductor.data.StartShiftResult
-import ph.toms.conductor.data.TestConfig
+import ph.toms.conductor.data.InitialConfig
 import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.domain.Shift
 import ph.toms.conductor.domain.ShiftSummary
@@ -43,8 +43,11 @@ import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.SettingsStore
+import ph.toms.conductor.domain.ConfigInfo
+import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.sync.CardRegistrySync
-import ph.toms.conductor.sync.OutboxFlusher
+import ph.toms.conductor.sync.ConfigRefresh
+import ph.toms.conductor.sync.ConfigRefresher
 
 enum class Tab { Board, Collect, Calc, More }
 
@@ -77,14 +80,18 @@ data class ConductorState(
     /** Set when a shift has just been ended, so its figures are shown once before moving on. */
     val endedSummary: ShiftSummary? = null,
     val endedContinues: Boolean = false,
-    val config: TomsConfig = TestConfig.config,
+    /** The fares, stops and discounts in use. Empty until the server's have been downloaded. */
+    val config: TomsConfig = TomsConfig.EMPTY,
+    /** Which downloaded fares are loaded and when they arrived. Null while none are. */
+    val configInfo: ConfigInfo? = null,
+    /** Why the last attempt to download fares changed nothing, for the More screen. Null when it worked. */
+    val configMessage: String? = null,
     val tab: Tab = Tab.Board,
-    val boardingStopId: String = TestConfig.config.stops.first().id,
-    val destinationStopId: String = TestConfig.config.stops.getOrElse(1) { TestConfig.config.stops.first() }.id,
+    val boardingStopId: String = "",
+    val destinationStopId: String = "",
     val tally: PassengerTally = PassengerTally.starting(),
     val result: BoardResult? = null,
     val openTrips: List<OpenTrip> = emptyList(),
-    val pendingCount: Int = 0,
     val fix: GeoFix? = null,
     val nearestStop: StopMatch? = null,
     val calcMode: CalcMode = CalcMode.CHANGE,
@@ -96,13 +103,21 @@ data class ConductorState(
     val focusTripId: String? = null,
     /** A short message for tabs other than Board, such as "Open Board to start a trip". */
     val notice: String? = null,
-    val deviceId: String = "",
-    val serverUrl: String = "",
-    val isEnrolled: Boolean = false,
-    val isUploading: Boolean = false,
-    val uploadMessage: String? = null,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
+
+    /** A trip needs two stops to be priced. Without them no fare was ever published to this phone. */
+    val faresLoaded: Boolean get() = config.stops.size >= 2
+}
+
+/** What the Board says, and the tap shows, when no fares have been downloaded. A paid trip is not started. */
+const val NO_FARES_MESSAGE = "No fares loaded. Connect and sync."
+
+/** Keeps the chosen stops when the new config still has them; otherwise the first stop, and the second as the destination. */
+private fun TomsConfig.pickStops(boarding: String, destination: String): Pair<String, String> {
+    val b = boarding.takeIf { stop(it) != null } ?: stops.firstOrNull()?.id ?: ""
+    val d = destination.takeIf { stop(it) != null } ?: stops.getOrNull(1)?.id ?: stops.firstOrNull()?.id ?: ""
+    return b to d
 }
 
 @HiltViewModel
@@ -112,17 +127,20 @@ class ConductorViewModel @Inject constructor(
     private val feedback: Feedback,
     private val settings: SettingsStore,
     private val deviceConfig: DeviceConfigStore,
-    private val flusher: OutboxFlusher,
     private val cardSync: CardRegistrySync,
+    private val configRefresher: ConfigRefresher,
+    initial: InitialConfig,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
-        ConductorState(
-            handedness = settings.handedness.value,
-            deviceId = deviceConfig.deviceId,
-            serverUrl = deviceConfig.serverUrl.value,
-            isEnrolled = !deviceConfig.deviceToken.value.isNullOrBlank(),
-        ),
+        initial.config.pickStops("", "").let { (boarding, destination) ->
+            ConductorState(
+                handedness = settings.handedness.value,
+                config = initial.config,
+                boardingStopId = boarding,
+                destinationStopId = destination,
+            )
+        },
     )
     val state: StateFlow<ConductorState> = _state.asStateFlow()
 
@@ -133,25 +151,48 @@ class ConductorViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            trips.loadApprovedCards()?.let { cached ->
-                if (cached.isNotEmpty()) {
-                    _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached))) }
+            trips.loadApprovedCardList()?.let { cached ->
+                if (cached.cards.isNotEmpty() || cached.statuses.isNotEmpty()) {
+                    _state.update { it.copy(config = it.config.copy(approvedCards = ApprovedCards(cached.cards, cached.statuses))) }
                 }
             }
-            if (_state.value.isEnrolled) {
+            if (!deviceConfig.deviceToken.value.isNullOrBlank()) {
                 syncApprovedCards()
             }
         }
         viewModelScope.launch { reloadCards() }
-        viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
-        viewModelScope.launch { deviceConfig.serverUrl.collect { u -> _state.update { it.copy(serverUrl = u) } } }
+        // The saved fares: what is on the phone now, and any copy a sync saves later, even one made by the background worker.
+        viewModelScope.launch { trips.observeServerConfig().collect { saved -> if (saved != null) applyServerConfig(saved) } }
+        // Enrolling a phone (a token appears), and starting the app with one, fetches the card list and the fares.
         viewModelScope.launch {
             deviceConfig.deviceToken.collect { tok ->
-                val enrolled = !tok.isNullOrBlank()
-                _state.update { it.copy(isEnrolled = enrolled) }
-                if (enrolled) syncApprovedCards()
+                if (!tok.isNullOrBlank()) {
+                    syncApprovedCards()
+                    refreshConfig()
+                }
             }
+        }
+    }
+
+    /**
+     * Switches to the downloaded fares. Trips already made keep the fare and version they were made with; only
+     * trips started from now on are priced with these. The approved cards are not part of the fares, so they stay.
+     */
+    private fun applyServerConfig(saved: ServerConfig) = _state.update { s ->
+        val config = saved.applyTo(s.config)
+        val (boarding, destination) = config.pickStops(s.boardingStopId, s.destinationStopId)
+        s.copy(config = config, configInfo = saved.info(), boardingStopId = boarding, destinationStopId = destination)
+    }
+
+    /** Asks the server for this phone's fares. A failed or empty answer changes nothing: the saved fares stay in use. */
+    fun refreshConfig() {
+        viewModelScope.launch {
+            val message = when (val r = runCatching { configRefresher.refresh() }.getOrElse { ConfigRefresh.Kept(it.message ?: "Could not save the fares.") }) {
+                is ConfigRefresh.Updated -> null
+                is ConfigRefresh.Kept -> r.reason
+            }
+            _state.update { it.copy(configMessage = message) }
         }
     }
 
@@ -305,6 +346,10 @@ class ConductorViewModel @Inject constructor(
         // Every trip belongs to a shift, so no trip is started until one is open.
         val shiftId = s0.shift?.id ?: return refuse("No shift open")
 
+        // No fares were ever downloaded, so a new trip could only be charged from invented numbers. It is refused.
+        // A card that is already out still shows its trip, because that charges nobody.
+        if (!s0.faresLoaded && (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE) return refuse(NO_FARES_MESSAGE)
+
         val result = BoardFlow.handleTap(
             nfcUid = read.uidHex,
             passengers = s0.tally,
@@ -333,11 +378,20 @@ class ConductorViewModel @Inject constructor(
                 _state.update { it.copy(result = BoardResult.Existing(result.trip, result.cardState)) }
             }
             is TapResult.UnknownCard -> refuse("Card not recognised")
+            is TapResult.CardBlocked -> refuse(blockedCardText(result.status))
             is TapResult.NeedsAttention -> refuse(
                 if (result.cardState == CardState.LOST) "Card marked lost. See Collect." else "Unpaid return. See Collect.",
             )
             is TapResult.Invalid -> refuse(reasonText(result.reason))
         }
+    }
+
+    /** What the conductor reads when a card that the office has taken out of service is tapped. */
+    private fun blockedCardText(status: String): String = when (status) {
+        "lost" -> "Card reported lost. Keep it and tell the office."
+        "retired" -> "Card retired. Do not use."
+        "suspended" -> "Card suspended. Do not use."
+        else -> "Card not in service."
     }
 
     private fun refuse(message: String) {
@@ -406,39 +460,22 @@ class ConductorViewModel @Inject constructor(
         it.copy(tab = Tab.Calc, calcMode = CalcMode.CHANGE, calcDueCentavos = it.preview?.totalCentavos ?: 0)
     }
 
-    // ---- sync & diagnostics
-
-    fun flushNow() {
-        if (_state.value.isUploading) return
-        _state.update { it.copy(isUploading = true, uploadMessage = null) }
-        viewModelScope.launch {
-            val report = flusher.flush()
-            syncApprovedCards()
-            val msg = if (report.failure != null) {
-                "Upload failed: ${report.failure}"
-            } else {
-                "Uploaded ${report.delivered} event(s)"
-            }
-            _state.update { it.copy(isUploading = false, uploadMessage = msg) }
-        }
-    }
+    // ---- approved cards (uploads, enrollment and the server URL are in SyncViewModel)
 
     fun syncApprovedCards() {
         viewModelScope.launch {
+            // Only a successful answer changes the list. A failed fetch (no signal, server down) leaves the saved
+            // list alone, so the conductor keeps working. An answer with no cards is real: every card was taken
+            // out of service, and the phone must stop accepting them.
             cardSync.fetchApprovedCards()
-                .onSuccess { cardsMap ->
-                    if (cardsMap.isNotEmpty()) {
-                        trips.saveApprovedCards(cardsMap)
-                        _state.update {
-                            it.copy(config = it.config.copy(approvedCards = ApprovedCards(cardsMap)))
-                        }
+                .onSuccess { list ->
+                    trips.saveApprovedCardList(list)
+                    _state.update {
+                        it.copy(config = it.config.copy(approvedCards = ApprovedCards(list.cards, list.statuses)))
                     }
                 }
         }
     }
-
-    fun updateServerUrl(url: String) = deviceConfig.setServerUrl(url)
-    fun updateDeviceToken(token: String?) = deviceConfig.setDeviceToken(token)
 
     // ---- location
 

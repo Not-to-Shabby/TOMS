@@ -97,6 +97,57 @@ class RetrofitEventUploaderTest {
     }
 
     @Test
+    fun `rejected events are reported with their reason by id or by batch index`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"accepted":["e1"],"duplicates":[],"rejected":[
+                        {"index":1,"event_id":"e2","reason":"unknown device"},
+                        {"index":2,"reason":"bad payload"}]}""",
+                ),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val uploader = RetrofitEventUploader(config, okHttpClient)
+        val res = uploader.upload(listOf(pendingEvent("e1", 1), pendingEvent("e2", 2), pendingEvent("e3", 3)))
+
+        res as UploadResult.Acked
+        assertEquals(setOf("e1"), res.eventIds)
+        assertEquals(mapOf("e2" to "unknown device", "e3" to "bad payload"), res.rejected)
+    }
+
+    @Test
+    fun `the cached service follows a changed server url`() = runBlocking {
+        val other = MockWebServer().apply { start() }
+        try {
+            val url = MutableStateFlow(server.url("/").toString())
+            val config = object : DeviceConfigStore {
+                override val deviceId = "dev-test-1"
+                override val serverUrl: StateFlow<String> = url
+                override val deviceToken: StateFlow<String?> = MutableStateFlow("dev-test-1.secret123")
+                override fun setServerUrl(url: String) {}
+                override fun setDeviceToken(token: String?) {}
+            }
+            val ok = """{"accepted":["e1"],"duplicates":[],"rejected":[]}"""
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            other.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(ok))
+            val uploader = RetrofitEventUploader(config, okHttpClient)
+
+            uploader.upload(listOf(pendingEvent()))
+            uploader.upload(listOf(pendingEvent()))
+            assertEquals(2, server.requestCount)
+            url.value = other.url("/").toString()
+            uploader.upload(listOf(pendingEvent()))
+            assertEquals(2, server.requestCount)
+            assertEquals(1, other.requestCount)
+        } finally {
+            other.shutdown()
+        }
+    }
+
+    @Test
     fun `HTTP 401 returns failed with status`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("""{"error":"unauthorized"}"""))
         val config = TestConfigStore(initialUrl = server.url("/").toString())
@@ -131,14 +182,54 @@ class RetrofitEventUploaderTest {
         val res = uploader.fetchApprovedCards()
 
         assertTrue(res.isSuccess)
-        val cards = res.getOrThrow()
+        val list = res.getOrThrow()
+        val cards = list.cards
         assertEquals(2, cards.size)
         assertEquals("uuid-123", cards["AABBCCDD"])
         assertEquals("uuid-456", cards["11223344"])
+        // An older server sends no statuses: that is "none", not a failure.
+        assertTrue(list.statuses.isEmpty())
 
         val recorded = server.takeRequest()
         assertEquals("/api/cards/approved", recorded.path)
         assertEquals("Bearer dev-test-1.secret123", recorded.getHeader("Authorization"))
+    }
+
+    @Test
+    fun `fetchApprovedCards reads the statuses of cards that must not be used`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody(
+                    """{"cards":{"AABBCCDD":"uuid-123"},"statuses":{"11223344":"lost","55667788":"suspended"},"count":1,"timestamp":"x"}""",
+                ),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val list = RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().getOrThrow()
+
+        assertEquals(mapOf("AABBCCDD" to "uuid-123"), list.cards)
+        assertEquals(mapOf("11223344" to "lost", "55667788" to "suspended"), list.statuses)
+    }
+
+    @Test
+    fun `fetchApprovedCards copes with an empty list from the server`() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json")
+                .setBody("""{"cards":{},"statuses":{},"count":0}"""),
+        )
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        val list = RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().getOrThrow()
+
+        assertTrue(list.cards.isEmpty())
+        assertTrue(list.statuses.isEmpty())
+    }
+
+    @Test
+    fun `fetchApprovedCards fails, rather than returning an empty list, when the server errors`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(500).setBody("""{"error":"boom"}"""))
+        val config = TestConfigStore(initialUrl = server.url("/").toString())
+        assertTrue(RetrofitEventUploader(config, okHttpClient).fetchApprovedCards().isFailure)
     }
 
     @Test

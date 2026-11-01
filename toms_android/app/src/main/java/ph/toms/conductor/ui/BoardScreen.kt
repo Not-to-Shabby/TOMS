@@ -63,11 +63,18 @@ fun BoardScreen(
     onClearAlarm: (Trip) -> Unit,
     onUseNearest: () -> Unit,
     onCalcPreview: () -> Unit,
+    onRetry: () -> Unit = {},
 ) {
     var picking by remember { mutableStateOf<Boolean?>(null) } // true = from, false = to, null = closed
     val config = state.config
     val nameOf = { id: String? -> if (id == null) "Regular" else config.category(id)?.name ?: id }
     val stopName = { id: String -> config.stop(id)?.name ?: "Choose" }
+
+    // No fares were ever downloaded, so there is nothing to charge from. Say so instead of showing an empty board.
+    if (!state.faresLoaded) {
+        NoFares(state.configMessage, onRetry)
+        return
+    }
 
     picking?.let { fromPicker ->
         StopPicker(
@@ -116,6 +123,25 @@ fun BoardScreen(
         QuietButton("Clear", onClear, Modifier.fillMaxWidth())
 
         ResultArea(state, nameOf, onPaid, onCalc, onReturn, onClearAlarm, Modifier.weight(1f))
+    }
+}
+
+@Composable
+private fun NoFares(reason: String?, onRetry: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(Gap, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(NO_FARES_MESSAGE, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+        Text(
+            "A trip is not started until the fares for this route have been downloaded.",
+            style = MaterialTheme.typography.bodyLarge,
+            color = TomsColors.InkSoft,
+            textAlign = TextAlign.Center,
+        )
+        reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad, textAlign = TextAlign.Center) }
+        BigButton("Sync now", onRetry)
     }
 }
 

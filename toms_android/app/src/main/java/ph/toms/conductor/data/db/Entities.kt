@@ -73,7 +73,10 @@ data class EventEntity(
     val cardState: String? = null,
 )
 
-/** One row per event awaiting or having completed delivery. [deliveredAtMillis] null means pending. */
+/**
+ * One row per event awaiting or having completed delivery. [deliveredAtMillis] null means pending, unless
+ * [parkedAtMillis] is set: the server refused the event with [parkedReason], so it is kept but not retried.
+ */
 @Entity(tableName = "outbox")
 data class OutboxEntity(
     @PrimaryKey val eventId: String,
@@ -81,6 +84,22 @@ data class OutboxEntity(
     val deliveredAtMillis: Long? = null,
     val attemptCount: Int = 0,
     val lastAttemptAtMillis: Long? = null,
+    val parkedAtMillis: Long? = null,
+    val parkedReason: String? = null,
+)
+
+/**
+ * The last good copy of what `GET /api/device/config` sent, so the phone works offline. One row (id 1):
+ * a new copy replaces it. [json] is the response as the server sent it; [version] and [routeName] are
+ * kept beside it so the More screen can show them without reading the JSON.
+ */
+@Entity(tableName = "server_config")
+data class ServerConfigEntity(
+    @PrimaryKey val id: Int = 1,
+    val version: Int,
+    val routeName: String,
+    val json: String,
+    val fetchedAtMillis: Long,
 )
 
 @Entity(tableName = "config_cache")
