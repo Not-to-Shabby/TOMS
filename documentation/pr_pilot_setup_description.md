@@ -2,7 +2,7 @@ TITLE: Pilot setup: public health route, live check, and a pilot setup script
 
 BASE: main
 
-Four commits, each with its tests. Nothing here changes the Content-Security-Policy, the Android app, the compose files, backup.sh or secret handling.
+Five commits: three features, each with its tests, one fix, and this description. Nothing here changes the Content-Security-Policy, the Android app, the compose files, backup.sh or secret handling.
 
 ## 1. Public health route (7b90e71)
 - `GET /api/health` runs `SELECT 1` and answers `{"status":"ok"}` with 200. If the database fails it answers 503 `{"status":"error"}` with no error text.
