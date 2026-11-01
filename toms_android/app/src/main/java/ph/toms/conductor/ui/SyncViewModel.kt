@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.data.db.ParkedEvent
 import ph.toms.conductor.settings.DeviceConfigStore
+import ph.toms.conductor.sync.NO_SERVER_MESSAGE
 import ph.toms.conductor.sync.OutboxFlusher
 
 /** Everything about talking to the server: who this phone is, what is waiting to go, and how the last upload went. */
@@ -28,7 +29,10 @@ data class SyncState(
     val uploadMessage: String? = null,
     /** Set when the token could not be stored safely. Null when all is well. */
     val tokenWarning: String? = null,
-)
+) {
+    /** A release build starts with no server address. Until one is set nothing is uploaded or synced. */
+    val needsServer: Boolean get() = serverUrl.isBlank()
+}
 
 @HiltViewModel
 class SyncViewModel @Inject constructor(
@@ -61,6 +65,11 @@ class SyncViewModel @Inject constructor(
     /** Sends what is waiting. [onFlushed] runs when the upload attempt is over, for work that follows it, such as a card list refresh. */
     fun flushNow(onFlushed: () -> Unit = {}) {
         if (_state.value.isUploading) return
+        // No server address: nothing is tried, so the waiting events are not counted as failed attempts either.
+        if (_state.value.serverUrl.isBlank()) {
+            _state.update { it.copy(uploadMessage = NO_SERVER_MESSAGE) }
+            return
+        }
         _state.update { it.copy(isUploading = true, uploadMessage = null) }
         viewModelScope.launch {
             val report = flusher.flush()
@@ -82,6 +91,10 @@ class SyncViewModel @Inject constructor(
      */
     fun retryRefused(onFlushed: () -> Unit = {}) {
         if (_state.value.isUploading) return
+        if (_state.value.needsServer) {
+            _state.update { it.copy(uploadMessage = NO_SERVER_MESSAGE) }
+            return
+        }
         viewModelScope.launch {
             trips.retryParked()
             flushNow(onFlushed)

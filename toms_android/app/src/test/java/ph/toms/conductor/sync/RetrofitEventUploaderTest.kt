@@ -118,6 +118,23 @@ class RetrofitEventUploaderTest {
     }
 
     @Test
+    fun `with no server address nothing is sent or fetched and the reason says to set one`() = runBlocking {
+        val uploader = RetrofitEventUploader(TestConfigStore(initialUrl = ""), okHttpClient)
+        val uploaded = uploader.upload(listOf(pendingEvent()))
+        val fares = uploader.fetchConfig()
+        val cards = uploader.fetchApprovedCards()
+
+        assertEquals("Set the server address on More", (uploaded as UploadResult.Failed).reason)
+        assertEquals("Set the server address on More", (fares as ConfigFetch.Failed).reason)
+        assertEquals("Set the server address on More", cards.exceptionOrNull()?.message)
+        assertEquals(0, server.requestCount)
+
+        val blank = RetrofitEventUploader(TestConfigStore(initialUrl = "   "), okHttpClient)
+        assertTrue(blank.upload(listOf(pendingEvent())) is UploadResult.Failed)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun `the cached service follows a changed server url`() = runBlocking {
         val other = MockWebServer().apply { start() }
         try {

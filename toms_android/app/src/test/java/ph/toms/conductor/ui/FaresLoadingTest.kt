@@ -55,9 +55,11 @@ class FaresLoadingTest {
     private val token = MutableStateFlow<String?>(null)
     private var eventSeq = 0
 
-    private class Device(override val deviceToken: MutableStateFlow<String?>) : DeviceConfigStore {
+    private val url = MutableStateFlow("https://toms.example")
+
+    private inner class Device(override val deviceToken: MutableStateFlow<String?>) : DeviceConfigStore {
         override val deviceId = "dev-1"
-        override val serverUrl = MutableStateFlow("https://toms.example")
+        override val serverUrl = url
         override fun setServerUrl(url: String) { serverUrl.value = url }
         override fun setDeviceToken(token: String?) { deviceToken.value = token }
     }
@@ -108,6 +110,22 @@ class FaresLoadingTest {
 
     private val card = "6FF1AD39"
 
+    /**
+     * Waits for the fares AND the card list. They arrive from two separate background loads, so waiting for the fares
+     * alone lets a tap run before the cards are known and be refused as an unknown card, depending on timing.
+     */
+    private fun awaitReady(vm: ConductorViewModel) =
+        settle { vm.state.value.faresLoaded && vm.state.value.config.approvedCards.size > 0 }
+
+
+    /** The started trip, or a failure that says why the tap was refused instead of a bare cast error. */
+    private fun startedTrip(vm: ConductorViewModel) = when (val r = vm.state.value.result) {
+        is BoardResult.Started -> r.trip
+        is BoardResult.Refused -> throw AssertionError("tap refused: \"${r.message}\" (cards=${vm.state.value.config.approvedCards.size}, fares=${vm.state.value.faresLoaded})")
+        else -> throw AssertionError("expected a started trip, got $r")
+    }
+
+
     // ---- no cache: no paid trip
 
     @Test fun `with no fares loaded the board says so and a tap starts no trip`() {
@@ -140,13 +158,81 @@ class FaresLoadingTest {
         assertEquals("s1", vm.state.value.boardingStopId)
     }
 
+    // ---- a release build starts with no server address
+
+    @Test fun `with no server address the board says to set it, and nothing is fetched`() {
+        url.value = ""
+        token.value = "dev-1.secret"
+        val vm = newVm()
+        settle()
+
+        assertTrue(vm.state.value.needsServer)
+        assertEquals("Set the server address on More", vm.state.value.noFaresMessage)
+        assertEquals("nothing asked of the network", 0, configSync.calls)
+        vm.refreshConfig()
+        vm.syncApprovedCards()
+        settle()
+        assertEquals(0, configSync.calls)
+        assertNull("no message is shown as if a fetch had failed", vm.state.value.configMessage)
+    }
+
+    @Test fun `a tap with no server address is refused with the address message, and starts no trip`() {
+        url.value = ""
+        val vm = newVm()
+
+        tap(vm)
+
+        val result = vm.state.value.result as BoardResult.Refused
+        assertEquals("Set the server address on More", result.message)
+        assertEquals(0, runBlocking { db.trips().all().size })
+    }
+
+    @Test fun `setting the address fetches the fares straight away and the board clears`() {
+        url.value = ""
+        configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 77))
+        token.value = "dev-1.secret"
+        val vm = newVm()
+        settle()
+        assertFalse(vm.state.value.faresLoaded)
+        assertEquals(0, configSync.calls)
+
+        url.value = "https://toms.perchbuilds.me"
+        awaitReady(vm)
+
+        assertFalse(vm.state.value.needsServer)
+        assertTrue(vm.state.value.faresLoaded)
+        assertEquals(77, vm.state.value.configInfo!!.version)
+    }
+
+    @Test fun `with an address but no fares the board still says to sync`() {
+        val vm = newVm()
+        assertFalse(vm.state.value.needsServer)
+        assertEquals("No fares loaded. Connect and sync.", vm.state.value.noFaresMessage)
+    }
+
+    @Test fun `saved fares keep working when the address is empty, only new downloads stop`() {
+        // A phone that was set up earlier has both the fares and the card list saved.
+        runBlocking {
+            repo.saveServerConfig(serverConfigResponse(version = 90, baseFareCentavos = 2200))
+            repo.saveApprovedCardList(ApprovedCardList(mapOf(card to "00000000-0000-4000-8000-00000000f1a1")))
+        }
+        url.value = ""
+        val vm = newVm()
+        awaitReady(vm)
+
+        tap(vm)
+
+        assertEquals(2200, startedTrip(vm).fareCentavos)
+        assertEquals(0, configSync.calls)
+    }
+
     // ---- syncing makes it usable
 
     @Test fun `once the fares are downloaded a tap starts a trip priced from them`() {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 4242, baseFareCentavos = 1800))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
 
         val s = vm.state.value
         assertTrue(s.faresLoaded)
@@ -167,7 +253,7 @@ class FaresLoadingTest {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 555))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
         tap(vm)
 
         val payload = runBlocking { db.events().all() }.first { it.type == EventTypes.TRIP_CREATED }.payload
@@ -196,7 +282,7 @@ class FaresLoadingTest {
         assertTrue(vm.state.value.faresLoaded)
         assertEquals("no signal", vm.state.value.configMessage)
         tap(vm)
-        assertEquals(2200, (vm.state.value.result as BoardResult.Started).trip.fareCentavos)
+        assertEquals(2200, startedTrip(vm).fareCentavos)
     }
 
     @Test fun `a 404 says why on More and keeps the saved fares`() {
@@ -231,7 +317,7 @@ class FaresLoadingTest {
 
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 3))
         vm.refreshConfig()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
 
         assertNull(vm.state.value.configMessage)
         assertEquals(3, vm.state.value.configInfo!!.version)
@@ -251,10 +337,10 @@ class FaresLoadingTest {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 100, baseFareCentavos = 1500))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
 
         tap(vm, "6F:F1:AD:39", 10_000)
-        val first = (vm.state.value.result as BoardResult.Started).trip
+        val first = startedTrip(vm)
         assertEquals(100, first.fareVersion)
         assertEquals(1500, first.fareCentavos)
 
@@ -264,7 +350,7 @@ class FaresLoadingTest {
         settle { vm.state.value.configInfo?.version == 101 }
 
         tap(vm, "36:AF:5E:75", 20_000)
-        val second = (vm.state.value.result as BoardResult.Started).trip
+        val second = startedTrip(vm)
         assertEquals(101, second.fareVersion)
         assertEquals(2000, second.fareCentavos)
 
@@ -279,7 +365,7 @@ class FaresLoadingTest {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 100))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
         tap(vm, "6F:F1:AD:39", 10_000)
         assertEquals(CardState.ASSIGNED_UNPAID, vm.state.value.openTrips.single().state)
 
@@ -293,7 +379,7 @@ class FaresLoadingTest {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(version = 100))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
         vm.selectBoarding("12")
         vm.selectDestination("13")
 
@@ -318,7 +404,7 @@ class FaresLoadingTest {
         configSync.next = ConfigFetch.Loaded(serverConfigResponse(discounts = listOf(DiscountDto("senior", "Senior citizen", 30))))
         token.value = "dev-1.secret"
         val vm = newVm()
-        settle { vm.state.value.faresLoaded }
+        awaitReady(vm)
         assertEquals(listOf("senior"), vm.state.value.config.discountCategories.map { it.id })
         assertEquals("Senior citizen", vm.state.value.config.category("senior")!!.name)
         assertNull("the test student discount is gone", vm.state.value.config.category("student"))

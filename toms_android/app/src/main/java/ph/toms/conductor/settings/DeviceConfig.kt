@@ -9,6 +9,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import ph.toms.conductor.BuildConfig
 import ph.toms.conductor.security.SecretCipher
 
 private val NO_WARNING: StateFlow<String?> = MutableStateFlow<String?>(null).asStateFlow()
@@ -123,7 +124,11 @@ class PrefsDeviceConfig @Inject constructor(
         const val STORAGE_WARNING = "Could not store the token securely. Re-enter it after restarting."
         const val MIGRATION_WARNING = "Could not encrypt the saved token yet. It still works, and will be encrypted when the phone allows it."
 
-        /** Default points to local port 3000 (accessible via `adb reverse tcp:3000 tcp:3000` or emulator 10.0.2.2). */
-        const val DEFAULT_URL = "http://127.0.0.1:3000"
+        /**
+         * What a phone points at before anyone sets an address. Debug builds: the local backend on port 3000 (reached
+         * with `adb reverse tcp:3000 tcp:3000` or the emulator's 10.0.2.2). Release builds: nothing, so the owner has to
+         * set the server on More, and until then the app asks for it instead of trying the network.
+         */
+        val DEFAULT_URL: String = BuildConfig.DEFAULT_SERVER_URL
     }
 }

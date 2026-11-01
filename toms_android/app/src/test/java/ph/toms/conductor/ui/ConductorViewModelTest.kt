@@ -388,6 +388,29 @@ class ConductorViewModelTest {
     }
 
     @Test
+    fun `with no server address upload now and retry refused try nothing and say what to do`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        val before = db.outbox().pending(10).map { it.attemptCount }
+        deviceConfig.setServerUrl("")
+        waitUntil { syncVm.state.value.needsServer }
+
+        syncVm.flushNow()
+        advanceUntilIdle()
+
+        assertTrue(syncVm.state.value.needsServer)
+        assertEquals("Set the server address on More", syncVm.state.value.uploadMessage)
+        assertTrue(!syncVm.state.value.isUploading)
+        assertEquals("no attempt was counted against the waiting events", before, db.outbox().pending(10).map { it.attemptCount })
+        assertTrue("the events are still waiting", db.outbox().pendingCountNow() > 0)
+
+        syncVm.retryRefused()
+        advanceUntilIdle()
+        assertEquals("Set the server address on More", syncVm.state.value.uploadMessage)
+    }
+
+    @Test
     fun `retry refused events sends them again, and a second refusal parks them again`() = runTest {
         advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))

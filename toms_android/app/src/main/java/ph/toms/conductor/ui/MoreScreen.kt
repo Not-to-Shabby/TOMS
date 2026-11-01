@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.util.Date
 import ph.toms.conductor.settings.Handedness
+import ph.toms.conductor.sync.NO_SERVER_MESSAGE
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
 import ph.toms.conductor.ui.theme.QuietButton
@@ -122,6 +123,14 @@ fun MoreScreen(
         )
 
         Text("Server Sync", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
+        if (sync.needsServer) {
+            Text(NO_SERVER_MESSAGE, style = MaterialTheme.typography.titleMedium, color = TomsColors.Bad)
+            Text(
+                "Nothing is uploaded or downloaded until the server address is set. Use Change below, then Set Token.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TomsColors.InkSoft,
+            )
+        }
         Fact("Device ID", sync.deviceId.ifEmpty { "loading..." })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -142,7 +151,7 @@ fun MoreScreen(
         BigButton(
             text = if (sync.isUploading) "Uploading..." else "Upload now (${sync.pendingCount} pending)",
             onClick = onUploadNow,
-            enabled = !sync.isUploading && sync.isEnrolled,
+            enabled = !sync.isUploading && sync.isEnrolled && !sync.needsServer,
         )
         sync.uploadMessage?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded") && "refused" !in it) TomsColors.Good else TomsColors.Bad)
@@ -153,7 +162,7 @@ fun MoreScreen(
                 text = "Retry refused events (${sync.parkedCount})",
                 onClick = onRetryRefused,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !sync.isUploading && sync.isEnrolled,
+                enabled = !sync.isUploading && sync.isEnrolled && !sync.needsServer,
             )
         }
 

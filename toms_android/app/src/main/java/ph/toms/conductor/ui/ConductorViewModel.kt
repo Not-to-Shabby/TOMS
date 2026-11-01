@@ -48,6 +48,7 @@ import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigRefresh
 import ph.toms.conductor.sync.ConfigRefresher
+import ph.toms.conductor.sync.NO_SERVER_MESSAGE
 
 enum class Tab { Board, Collect, Calc, More }
 
@@ -86,6 +87,8 @@ data class ConductorState(
     val configInfo: ConfigInfo? = null,
     /** Why the last attempt to download fares changed nothing, for the More screen. Null when it worked. */
     val configMessage: String? = null,
+    /** True while no server address is set (a release build starts that way). Nothing is downloaded until one is. */
+    val needsServer: Boolean = false,
     val tab: Tab = Tab.Board,
     val boardingStopId: String = "",
     val destinationStopId: String = "",
@@ -108,6 +111,9 @@ data class ConductorState(
 
     /** A trip needs two stops to be priced. Without them no fare was ever published to this phone. */
     val faresLoaded: Boolean get() = config.stops.size >= 2
+
+    /** What the Board and a refused tap say while there are no fares: the missing address first, since nothing can sync without it. */
+    val noFaresMessage: String get() = if (needsServer) NO_SERVER_MESSAGE else NO_FARES_MESSAGE
 }
 
 /** What the Board says, and the tap shows, when no fares have been downloaded. A paid trip is not started. */
@@ -139,6 +145,7 @@ class ConductorViewModel @Inject constructor(
                 config = initial.config,
                 boardingStopId = boarding,
                 destinationStopId = destination,
+                needsServer = deviceConfig.serverUrl.value.isBlank(),
             )
         },
     )
@@ -173,6 +180,16 @@ class ConductorViewModel @Inject constructor(
                 }
             }
         }
+        // Setting the server address (or changing it) fetches the card list and the fares from the new place.
+        viewModelScope.launch {
+            deviceConfig.serverUrl.collect { url ->
+                _state.update { it.copy(needsServer = url.isBlank()) }
+                if (url.isNotBlank() && !deviceConfig.deviceToken.value.isNullOrBlank()) {
+                    syncApprovedCards()
+                    refreshConfig()
+                }
+            }
+        }
     }
 
     /**
@@ -187,6 +204,8 @@ class ConductorViewModel @Inject constructor(
 
     /** Asks the server for this phone's fares. A failed or empty answer changes nothing: the saved fares stay in use. */
     fun refreshConfig() {
+        // No server address: nothing is asked of the network, and the Board already says what to do.
+        if (_state.value.needsServer) return
         viewModelScope.launch {
             val message = when (val r = runCatching { configRefresher.refresh() }.getOrElse { ConfigRefresh.Kept(it.message ?: "Could not save the fares.") }) {
                 is ConfigRefresh.Updated -> null
@@ -348,7 +367,7 @@ class ConductorViewModel @Inject constructor(
 
         // No fares were ever downloaded, so a new trip could only be charged from invented numbers. It is refused.
         // A card that is already out still shows its trip, because that charges nobody.
-        if (!s0.faresLoaded && (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE) return refuse(NO_FARES_MESSAGE)
+        if (!s0.faresLoaded && (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE) return refuse(s0.noFaresMessage)
 
         val result = BoardFlow.handleTap(
             nfcUid = read.uidHex,
@@ -463,6 +482,7 @@ class ConductorViewModel @Inject constructor(
     // ---- approved cards (uploads, enrollment and the server URL are in SyncViewModel)
 
     fun syncApprovedCards() {
+        if (_state.value.needsServer) return
         viewModelScope.launch {
             // Only a successful answer changes the list. A failed fetch (no signal, server down) leaves the saved
             // list alone, so the conductor keeps working. An answer with no cards is real: every card was taken

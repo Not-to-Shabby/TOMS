@@ -71,4 +71,20 @@ class DeviceConfigTokenTest {
         c.setDeviceToken("   ")
         assertNull(c.deviceToken.value)
     }
+
+    @Test fun `a debug build starts at the local backend, a release build at nothing`() {
+        val url = config().serverUrl.value
+        assertEquals(ph.toms.conductor.BuildConfig.DEFAULT_SERVER_URL, url)
+        if (ph.toms.conductor.BuildConfig.DEBUG) assertEquals("http://127.0.0.1:3000", url) else assertEquals("", url)
+    }
+
+    @Test fun `an address the owner sets is kept, and clearing it makes the phone ask for one`() {
+        val c = config()
+        c.setServerUrl("  https://toms.perchbuilds.me/  ")
+        assertEquals("https://toms.perchbuilds.me", c.serverUrl.value)
+        assertEquals("https://toms.perchbuilds.me", config().serverUrl.value)
+        c.setServerUrl("")
+        assertEquals("", c.serverUrl.value)
+        assertEquals("an empty address stays empty after a restart, not the default", "", config().serverUrl.value)
+    }
 }

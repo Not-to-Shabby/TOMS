@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import ph.toms.conductor.settings.DeviceConfigStore
 import java.util.concurrent.TimeUnit
 
 @HiltWorker
@@ -20,9 +21,13 @@ class UploadWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val flusher: OutboxFlusher,
     private val configRefresher: ConfigRefresher,
+    private val deviceConfig: DeviceConfigStore,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        // No server address yet: nothing is tried, so waiting events are not marked as failed attempts, and a retry
+        // later is pointless until the owner sets the address on More.
+        if (deviceConfig.serverUrl.value.isBlank()) return Result.success()
         // The fares are fetched on the same schedule as the upload. A failed fetch changes nothing and does not
         // fail the run: the saved fares stay in use, and the next run tries again.
         runCatching { configRefresher.refresh() }

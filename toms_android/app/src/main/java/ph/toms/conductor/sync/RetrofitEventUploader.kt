@@ -23,6 +23,9 @@ import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 
+/** What the app says when no server address has been set yet (a release build starts with none). */
+const val NO_SERVER_MESSAGE = "Set the server address on More"
+
 @Serializable
 data class EventUploadItem(
     @SerialName("event_id") val eventId: String,
@@ -100,6 +103,8 @@ class RetrofitEventUploader @Inject constructor(
 
     @Synchronized
     private fun createApi(): TomsApiService? {
+        // No address set: nothing is built, so nothing can try the network.
+        if (config.serverUrl.value.isBlank()) return null
         val baseUrl = config.serverUrl.value.trimEnd('/') + "/"
         cachedApi?.let { (url, api) -> if (url == baseUrl) return api }
         return try {
@@ -122,7 +127,7 @@ class RetrofitEventUploader @Inject constructor(
             return UploadResult.Failed("device not enrolled (no token configured)")
         }
 
-        val api = createApi() ?: return UploadResult.Failed("invalid server URL")
+        val api = createApi() ?: return UploadResult.Failed(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL")
 
         val items = batch.map { p ->
             val payloadElement = runCatching { json.parseToJsonElement(p.payload) }
@@ -156,7 +161,7 @@ class RetrofitEventUploader @Inject constructor(
     override suspend fun fetchConfig(): ConfigFetch {
         val token = config.deviceToken.value
         if (token.isNullOrBlank()) return ConfigFetch.Failed("Not enrolled. Set the device token on More.")
-        val api = createApi() ?: return ConfigFetch.Failed("The server URL is not valid.")
+        val api = createApi() ?: return ConfigFetch.Failed(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "The server URL is not valid.")
         return try {
             ConfigFetch.Loaded(api.fetchConfig("Bearer $token"))
         } catch (e: HttpException) {
@@ -181,7 +186,9 @@ class RetrofitEventUploader @Inject constructor(
         if (token.isNullOrBlank()) {
             return Result.failure(IllegalStateException("device not enrolled (no token configured)"))
         }
-        val api = createApi() ?: return Result.failure(IllegalStateException("invalid server URL"))
+        val api = createApi() ?: return Result.failure(
+            IllegalStateException(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL"),
+        )
         return try {
             val res = api.fetchApprovedCards("Bearer $token")
             Result.success(ApprovedCardList(res.cards, res.statuses))
