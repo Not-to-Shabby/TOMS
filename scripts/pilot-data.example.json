@@ -1,0 +1,36 @@
+{
+  "_comment": "EXAMPLE ONLY. Every value here is fake. Copy this file to scripts/pilot-data.json (git-ignored) and put the real route, stops and fares there. Never commit the real file.",
+  "vehicle": {
+    "id": "EXAMPLE-BUS-01",
+    "plate_number": "EXA 0000",
+    "max_capacity": 20
+  },
+  "conductor": {
+    "username": "example.conductor",
+    "name": "Example Conductor",
+    "contact_number": "09000000000",
+    "address": "Example address"
+  },
+  "route": {
+    "name": "Example Route A to B",
+    "path": {
+      "name": "Main",
+      "color": "#2ed573"
+    },
+    "stops": [
+      { "name": "Stop A (origin)", "lat": 8.2000, "lon": 124.2000, "radius_m": 100 },
+      { "name": "Stop B (middle)", "lat": 8.2100, "lon": 124.2100, "radius_m": 100 },
+      { "name": "Stop C (terminal)", "lat": 8.2200, "lon": 124.2200, "radius_m": 100 }
+    ]
+  },
+  "fare": {
+    "base_fare_pesos": 15.0,
+    "base_distance_km": 4.0,
+    "per_km_pesos": 2.5,
+    "rounding_step_cents": 100,
+    "discounts": { "student": 20, "pwd": 20, "senior": 20 },
+    "order_reference": "EXAMPLE-ORDER-000",
+    "effective_date": "2026-01-01",
+    "document_path": null
+  }
+}

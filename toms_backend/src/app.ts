@@ -89,6 +89,17 @@ export function createApp({
     res.json({ status: 'ok', timestamp: new Date() });
   });
 
+  // For an uptime monitor, reached through the public /api/ path. It says nothing about the version, the
+  // configuration or the reason for a failure: a stranger learns only that the service is up or down.
+  app.get('/api/health', async (_req, res) => {
+    try {
+      await pool.query('SELECT 1');
+      res.json({ status: 'ok' });
+    } catch {
+      res.status(503).json({ status: 'error' });
+    }
+  });
+
   // --- Sign in ------------------------------------------------------------------------------
 
   const loginBody = z.object({ username: z.string().trim().min(1).max(64), password: z.string().min(1).max(200) });

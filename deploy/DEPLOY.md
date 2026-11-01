@@ -140,6 +140,17 @@ the card refusal messages (branch `v2/android-card-status`). Do not run a trip o
 - [ ] A test trip on mobile data, then a backup restored once into a scratch database (step 10).
 - [ ] The phone's fares and stops are still placeholders (`TestConfig.kt`). The app never downloads the server's fare matrix, so a paid trip is charged the placeholder fare. Do not start a real paid trip until this is fixed.
 
+## Checking the live server and setting up the pilot
+- **Check the live server** from your PC, read-only (it logs in to nothing and changes nothing):
+  `bash deploy/verify.sh https://toms.perchbuilds.me`. It prints PASS or FAIL per check and exits 1 if any fail.
+  Then, from another machine, `nmap -Pn toms.perchbuilds.me` should show only 22, 80 and 443 open.
+- **Set up the pilot data** (vehicle, conductor, route, stops, fares) without clicking through the dashboard:
+  copy `scripts/pilot-data.example.json` to `scripts/pilot-data.json`, put the real values in it (it is git-ignored),
+  then run `node scripts/setup-pilot.mjs --server https://toms.perchbuilds.me --dry-run` to check it, and the same
+  command without `--dry-run` to apply it. Re-running is safe: it creates only what is missing.
+- **Enrol a phone**: `node scripts/setup-pilot.mjs --server https://toms.perchbuilds.me enrol-device <device-id> <vehicle-id>`.
+  It prints the device token once. Copy it into the app at More > Server Sync > Set Token and save it nowhere else.
+
 ## Day-to-day
 - Logs: `docker compose -f docker-compose.prod.yml logs -f api`
 - Update: `cd ~/toms/src && git pull && cd deploy && docker compose -f docker-compose.prod.yml up -d --build`

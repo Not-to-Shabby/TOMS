@@ -46,3 +46,6 @@ Thumbs.db
 
 # ESP-IDF component manager downloads
 managed_components/
+
+# Pilot setup data: the real route, stops and fares. Never commit it.
+scripts/pilot-data.json
