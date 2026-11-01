@@ -37,8 +37,50 @@ object Ota {
     private const val BASE_HI = "544f4d53-5245-5455-524e-414348494e"
     fun uuid(suffix: Int): UUID = UUID.fromString(BASE_HI + "%02x".format(suffix))
     val SERVICE: UUID = uuid(0x45)
+    val CARD_READ: UUID = uuid(0x01)
+    val SIM_CARD: UUID = uuid(0x0B)
     val CONTROL: UUID = uuid(0x0C)
     val DATA: UUID = uuid(0x0D)
+    val DIAG: UUID = uuid(0x0E)
+
+    fun simCardFrame(uid: ByteArray): ByteArray {
+        val b = ByteBuffer.allocate(1 + uid.size).order(ByteOrder.LITTLE_ENDIAN)
+        b.put(uid.size.toByte())
+        b.put(uid)
+        return b.array()
+    }
+
+    fun diagCmdFrame(cmd: Int, arg: Int = 0): ByteArray = byteArrayOf(cmd.toByte(), arg.toByte())
+
+    fun parseCardRead(b: ByteArray): CardReadEvent? {
+        if (b.size < 13) return null
+        val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+        val readSeq = bb.int.toLong() and 0xFFFFFFFFL
+        val timestamp = bb.int.toLong() and 0xFFFFFFFFL
+        val bootMs = bb.int.toLong() and 0xFFFFFFFFL
+        val uidLen = bb.get().toInt() and 0xFF
+        if (uidLen < 1 || uidLen > 10 || b.size < 13 + uidLen) return null
+        val uidBytes = ByteArray(uidLen)
+        bb.get(uidBytes)
+        val atype = if (bb.hasRemaining()) bb.get().toInt() and 0xFF else 0
+        val hex = uidBytes.joinToString(" ") { "%02X".format(it) }
+        return CardReadEvent(hex, uidLen, atype, bootMs)
+    }
+
+    fun parseDiagEvent(b: ByteArray): DiagEvent {
+        if (b.isEmpty()) return DiagEvent.Unknown(b)
+        val op = b[0].toInt() and 0xFF
+        return when (op) {
+            0x81 -> {
+                val count = if (b.size >= 3) (b[1].toInt() and 0xFF) or ((b[2].toInt() and 0xFF) shl 8) else 0
+                DiagEvent.ButtonPress(count)
+            }
+            else -> {
+                val arg = if (b.size >= 2) b[1].toInt() and 0xFF else 0
+                DiagEvent.Ack(op and 0x7F, arg)
+            }
+        }
+    }
 
     fun startFrame(size: Int, sha256: ByteArray): ByteArray {
         require(sha256.size == 32) { "SHA-256 must be 32 bytes" }
@@ -115,6 +157,19 @@ sealed interface OtaEvent {
     data class Progress(val offset: Long) : OtaEvent
     data class Resync(val offset: Long) : OtaEvent
     data class Failed(val status: OtaStatus, val offset: Long) : OtaEvent
+}
+
+data class CardReadEvent(
+    val uidHex: String,
+    val uidLen: Int,
+    val atype: Int,
+    val bootMs: Long,
+)
+
+sealed interface DiagEvent {
+    data class ButtonPress(val count: Int) : DiagEvent
+    data class Ack(val cmd: Int, val arg: Int) : DiagEvent
+    data class Unknown(val raw: ByteArray) : DiagEvent
 }
 
 /** A firmware file that passed the checks the phone can do before sending anything. */

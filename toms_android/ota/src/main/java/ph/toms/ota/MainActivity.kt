@@ -16,23 +16,30 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -45,6 +52,30 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) { Screen() }
             }
+        }
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** adb driven runs:
+     *  am start -n ph.toms.ota/.MainActivity --es firmware <path> --ez auto true */
+    private fun handleIntent(intent: android.content.Intent?) {
+        val raw = intent?.getStringExtra("firmware") ?: return
+        val uri = if (raw.startsWith("http")) {
+            android.net.Uri.parse(raw)
+        } else {
+            val f = java.io.File(raw)
+            android.net.Uri.fromFile(java.io.File(f.absolutePath))
+        }
+        val name = uri.lastPathSegment ?: "firmware.bin"
+        if (intent.getBooleanExtra("auto", false)) {
+            vm.loadAndAutoRun(uri, name)
+        } else {
+            vm.loadImage(uri, name)
         }
     }
 
@@ -71,53 +102,185 @@ class MainActivity : ComponentActivity() {
         val logState = rememberLazyListState()
         LaunchedEffect(s.log.size) { if (s.log.isNotEmpty()) logState.animateScrollToItem(s.log.size - 1) }
 
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("TOMS machine updater", style = MaterialTheme.typography.headlineSmall)
-            Text(s.headline, style = MaterialTheme.typography.bodyLarge)
+        Column(Modifier.fillMaxSize()) {
+            TabRow(selectedTabIndex = s.selectedTab) {
+                Tab(
+                    selected = s.selectedTab == 0,
+                    onClick = { vm.selectTab(0) },
+                    text = { Text("OTA Update") }
+                )
+                Tab(
+                    selected = s.selectedTab == 1,
+                    onClick = { vm.selectTab(1) },
+                    text = { Text("Diagnostic Tools") }
+                )
+            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { pickFile.launch(arrayOf("*/*")) }, enabled = s.phase != Phase.UPLOADING) {
-                    Text("1. Choose file")
+            Column(
+                Modifier.padding(16.dp).weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (s.selectedTab == 0) {
+                    OtaSection(s, vm, askPermissions, pickFile, permissions)
+                } else {
+                    DiagnosticsSection(s, vm, askPermissions, permissions)
                 }
-                OutlinedButton(onClick = { askPermissions.launch(permissions) }, enabled = s.phase != Phase.UPLOADING && s.phase != Phase.SCANNING) {
-                    Text("2. Find machine")
+
+                Text("Log", style = MaterialTheme.typography.titleSmall)
+                LazyColumn(
+                    Modifier.fillMaxWidth().height(140.dp),
+                    state = logState
+                ) {
+                    items(s.log) { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
                 }
             }
-            s.imageName?.let { Text("File: $it" + (s.image?.let { i -> "  (version ${i.version}, ${i.size} bytes)" } ?: "")) }
-            s.imageProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        }
+    }
 
-            if (s.machines.isNotEmpty()) {
-                Card(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(8.dp)) {
-                        s.machines.forEach { m ->
-                            val chosen = m.address == s.selected?.address
-                            Text(
-                                (if (chosen) "● " else "○ ") + "${m.name}   ${m.address}   ${m.rssi} dBm",
-                                Modifier.fillMaxWidth().clickable { vm.select(m) }.padding(vertical = 8.dp),
-                            )
+    @Composable
+    private fun OtaSection(
+        s: OtaUiState,
+        vm: OtaViewModel,
+        askPermissions: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+        pickFile: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+        permissions: Array<String>
+    ) {
+        Text("TOMS machine updater", style = MaterialTheme.typography.headlineSmall)
+        Text(s.headline, style = MaterialTheme.typography.bodyLarge)
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { pickFile.launch(arrayOf("*/*")) }, enabled = s.phase != Phase.UPLOADING) {
+                Text("1. Choose file")
+            }
+            OutlinedButton(onClick = { askPermissions.launch(permissions) }, enabled = s.phase != Phase.UPLOADING && s.phase != Phase.SCANNING) {
+                Text("2. Find machine")
+            }
+        }
+        s.imageName?.let { Text("File: $it" + (s.image?.let { i -> "  (version ${i.version}, ${i.size} bytes)" } ?: "")) }
+        s.imageProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+        if (s.machines.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(8.dp)) {
+                    s.machines.forEach { m ->
+                        val chosen = m.address == s.selected?.address
+                        Text(
+                            (if (chosen) "● " else "○ ") + "${m.name}   ${m.address}   ${m.rssi} dBm",
+                            Modifier.fillMaxWidth().clickable { vm.select(m) }.padding(vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        if (s.phase == Phase.UPLOADING || s.phase == Phase.DONE) {
+            LinearProgressIndicator(
+                progress = { if (s.total == 0L) 0f else s.sent.toFloat() / s.total },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("${s.sent} / ${s.total} bytes")
+        }
+
+        if (s.phase == Phase.UPLOADING) {
+            Button(onClick = { vm.cancel() }) { Text("Cancel") }
+        } else {
+            Button(onClick = { vm.start() }, enabled = s.canStart) { Text("3. Update machine") }
+        }
+    }
+
+    @Composable
+    private fun DiagnosticsSection(
+        s: OtaUiState,
+        vm: OtaViewModel,
+        askPermissions: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+        permissions: Array<String>
+    ) {
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val machine = s.selected
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (machine != null) "${machine.name} (${machine.address})" else "No machine selected",
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (s.isDiagConnected) {
+                        Button(
+                            onClick = { vm.disconnectDiagnostics() },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Text("Disconnect")
                         }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (machine == null) askPermissions.launch(permissions)
+                                else vm.connectDiagnostics()
+                            },
+                            enabled = machine != null && s.phase != Phase.UPLOADING
+                        ) {
+                            Text(if (machine != null) "Connect" else "Find Machine")
+                        }
+                    }
+                }
+                Text(s.diagStatus, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        if (s.isDiagConnected) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("NFC Card Reader (PN532)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    if (s.lastCardUid != null) {
+                        Text("Card: ${s.lastCardUid}", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text("Type: ${s.lastCardType ?: "ISO 14443-A"}  |  Time: ${s.lastCardTime ?: "--"}", style = MaterialTheme.typography.bodySmall)
+                        Text("Taps: ${s.cardTapCount}", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("Ready. Tap NFC card on the PN532 reader antenna...", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    OutlinedButton(onClick = { vm.simulateCardTap("04 08 04 62") }) {
+                        Text("Simulate Tap (04 08 04 62)")
                     }
                 }
             }
 
-            if (s.phase == Phase.UPLOADING || s.phase == Phase.DONE) {
-                LinearProgressIndicator(
-                    progress = { if (s.total == 0L) 0f else s.sent.toFloat() / s.total },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Text("${s.sent} / ${s.total} bytes")
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Buzzer Test (GPIO6)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = { vm.testBuzzer(1) }, modifier = Modifier.weight(1f)) { Text("OK", fontSize = 11.sp) }
+                        Button(onClick = { vm.testBuzzer(2) }, modifier = Modifier.weight(1f)) { Text("Warn", fontSize = 11.sp) }
+                        Button(onClick = { vm.testBuzzer(0) }, modifier = Modifier.weight(1f)) { Text("Boot", fontSize = 11.sp) }
+                        Button(onClick = { vm.testBuzzer(5) }, modifier = Modifier.weight(1f)) { Text("Dup", fontSize = 11.sp) }
+                    }
+                }
             }
 
-            if (s.phase == Phase.UPLOADING) {
-                Button(onClick = { vm.cancel() }) { Text("Cancel") }
-            } else {
-                Button(onClick = { vm.start() }, enabled = s.canStart) { Text("3. Update machine") }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Button (GPIO4) & Screen (ST7735)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                    Text("Hardware Button Presses: ${s.buttonPressCount}" + (if (s.buttonLastTime != null) " (at ${s.buttonLastTime})" else ""), style = MaterialTheme.typography.bodyMedium)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.testScreenNext() }, modifier = Modifier.weight(1f)) {
+                            Text("Next Page")
+                        }
+                        OutlinedButton(onClick = { vm.testToggleBacklight() }, modifier = Modifier.weight(1f)) {
+                            Text("Backlight: ${if (s.screenBacklight) "ON" else "OFF"}")
+                        }
+                    }
+                }
             }
-
-            Text("Log", style = MaterialTheme.typography.titleSmall)
-            LazyColumn(Modifier.fillMaxWidth().weight(1f), state = logState) {
-                items(s.log) { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
-            }
+        } else {
+            Text(
+                "Select a machine and tap 'Connect' above to test hardware: NFC, Buzzer, Button, and Screen.",
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }

@@ -44,6 +44,9 @@ class OtaUploader(
     private val reconnectDelayMs: Long = 3000,
     /** START makes the machine erase the update slot, which takes a while. */
     private val startTimeoutMs: Long = 120_000,
+    /** Delay between data writes: flooding write-without-response chokes the
+     *  phone's radio queue and kills the link near the end of the upload. */
+    private val paceMs: Long = 8,
     private val finishTimeoutMs: Long = 60_000,
 ) {
     /** Offset the machine asked to go back to, picked up from a resync event. */
@@ -124,6 +127,7 @@ class OtaUploader(
             t.writeData(Ota.chunkFrame(offset.toInt(), image.bytes.copyOfRange(offset.toInt(), end)))
             offset = end.toLong()
             onProgress(offset, total)
+            if (paceMs > 0) delay(paceMs)
         }
         return offset
     }

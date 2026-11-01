@@ -52,6 +52,9 @@ class BleTransport private constructor(
     private val eventChannel = Channel<OtaEvent>(Channel.UNLIMITED)
     override val events: ReceiveChannel<OtaEvent> get() = eventChannel
 
+    val cardReadEvents = Channel<CardReadEvent>(Channel.UNLIMITED)
+    val diagEvents = Channel<DiagEvent>(Channel.UNLIMITED)
+
     @Volatile
     override var mtu: Int = 23
         private set
@@ -66,6 +69,9 @@ class BleTransport private constructor(
     private var bondDone = CompletableDeferred<Boolean>()
     private var control: BluetoothGattCharacteristic? = null
     private var data: BluetoothGattCharacteristic? = null
+    private var diagChar: BluetoothGattCharacteristic? = null
+    private var simCardChar: BluetoothGattCharacteristic? = null
+    private var cardReadChar: BluetoothGattCharacteristic? = null
 
     @Volatile
     private var closed = false
@@ -130,8 +136,19 @@ class BleTransport private constructor(
     }
 
     private fun deliver(uuid: UUID, value: ByteArray) {
-        if (uuid != Ota.CONTROL) return
-        Ota.parseEvent(value)?.let { eventChannel.trySend(it) } ?: log("ignored a ${value.size}-byte notification")
+        when (uuid) {
+            Ota.CONTROL -> Ota.parseEvent(value)?.let { eventChannel.trySend(it) } ?: log("ignored a ${value.size}-byte notification")
+            Ota.CARD_READ -> Ota.parseCardRead(value)?.let { cardReadEvents.trySend(it) }
+            Ota.DIAG -> diagEvents.trySend(Ota.parseDiagEvent(value))
+        }
+    }
+
+    private suspend fun subscribe(c: BluetoothGattCharacteristic) {
+        gatt?.setCharacteristicNotification(c, true)
+        val cccd = c.getDescriptor(CCCD) ?: return
+        descDone = CompletableDeferred()
+        write(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+        withTimeout(5000) { descDone.await() }
     }
 
     private suspend fun open(timeoutMs: Long) {
@@ -157,16 +174,18 @@ class BleTransport private constructor(
         val svc = gatt!!.getService(Ota.SERVICE) ?: throw LinkLost("this device has no TOMS service")
         control = svc.getCharacteristic(Ota.CONTROL) ?: throw LinkLost("firmware has no update service (too old?)")
         data = svc.getCharacteristic(Ota.DATA) ?: throw LinkLost("firmware has no update data characteristic")
+        diagChar = svc.getCharacteristic(Ota.DIAG)
+        simCardChar = svc.getCharacteristic(Ota.SIM_CARD)
+        cardReadChar = svc.getCharacteristic(Ota.CARD_READ)
 
         log("requesting MTU 65 (the machine's maximum)")
         gatt!!.requestMtu(65)
         withTimeout(timeoutMs) { mtuDone.await() }
 
-        gatt!!.setCharacteristicNotification(control, true)
-        val cccd = control!!.getDescriptor(CCCD) ?: throw LinkLost("ota_control has no notification descriptor")
-        write(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-        withTimeout(timeoutMs) { descDone.await() }
-        log("subscribed to the update channel")
+        subscribe(control!!)
+        diagChar?.let { runCatching { subscribe(it) } }
+        cardReadChar?.let { runCatching { subscribe(it) } }
+        log("subscribed to channels")
     }
 
     @Suppress("DEPRECATION")
@@ -206,6 +225,16 @@ class BleTransport private constructor(
         }
     }
 
+    suspend fun writeDiag(cmd: Int, arg: Int = 0): Boolean = ops.withLock {
+        val c = diagChar ?: return@withLock false
+        writeChar(c, Ota.diagCmdFrame(cmd, arg), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+    }
+
+    suspend fun writeSimCard(uid: ByteArray): Boolean = ops.withLock {
+        val c = simCardChar ?: return@withLock false
+        writeChar(c, Ota.simCardFrame(uid), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -213,6 +242,8 @@ class BleTransport private constructor(
         gatt?.disconnect()
         gatt?.close()
         eventChannel.close()
+        cardReadEvents.close()
+        diagEvents.close()
     }
 
     companion object {

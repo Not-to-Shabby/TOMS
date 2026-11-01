@@ -23,8 +23,13 @@
         android:name="android.hardware.bluetooth_le"
         android:required="true" />
 
+    <!-- adb driven runs: the firmware file is fetched from the PC over
+         adb reverse (plain http on localhost). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="false"
+        android:usesCleartextTraffic="true"
         android:label="TOMS Updater"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
