@@ -3,6 +3,7 @@ package ph.toms.conductor.ui
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -33,6 +34,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.awaitCancellation
+import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.domain.CalcMode
 import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.nfc.NfcAvailability
@@ -73,6 +75,26 @@ fun ConductorApp(
             val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             if (granted) vm.startLocation() else permission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
             try { awaitCancellation() } finally { vm.stopLocation() }
+        }
+    }
+
+    val btLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.all { it }) vm.startBleScanning()
+    }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val hasScan = ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+                val hasConnect = ContextCompat.checkSelfPermission(activity, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                if (hasScan && hasConnect) {
+                    vm.startBleScanning()
+                } else {
+                    btLauncher.launch(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT))
+                }
+            } else {
+                vm.startBleScanning()
+            }
+            try { awaitCancellation() } finally { vm.stopBleScanning() }
         }
     }
 
@@ -167,9 +189,17 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
         NfcAvailability.Disabled -> "NFC is off" to Status.Bad
         NfcAvailability.Unsupported -> "No NFC" to Status.Bad
     }
+    val rm: Pair<String, Status> = when (val c = state.rmConnection) {
+        is RmConnectionState.Connected -> {
+            val batt = state.rmHeartbeat?.takeIf { !it.isOnUsb }?.let { " ${it.batteryPct}%" } ?: ""
+            "RM ok$batt" to Status.Good
+        }
+        is RmConnectionState.Connecting, RmConnectionState.Scanning -> "RM searching" to Status.Neutral
+        RmConnectionState.Disconnected -> "RM offline" to Status.Warn
+    }
     Column(Modifier.fillMaxWidth().background(TomsColors.Surface).padding(horizontal = 16.dp, vertical = 6.dp)) {
         Text(header, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-        // Three chips do not fit one line on a 720 px wide phone, so they wrap to a second line instead of being cut off.
+        // Four chips wrap across lines if needed on narrower screens
         FlowRow(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -177,6 +207,7 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
         ) {
             StatusChip(reader.first, reader.second)
             StatusChip(gps.first, gps.second)
+            StatusChip(rm.first, rm.second)
             if (sync.pendingCount > 0) StatusChip("${sync.pendingCount} unsent", Status.Neutral)
         }
     }

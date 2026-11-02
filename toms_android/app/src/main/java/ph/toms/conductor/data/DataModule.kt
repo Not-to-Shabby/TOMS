@@ -25,6 +25,8 @@ import ph.toms.conductor.settings.PrefsDeviceConfig
 import ph.toms.conductor.settings.PrefsSettings
 import ph.toms.conductor.settings.SettingsStore
 import ph.toms.conductor.BuildConfig
+import ph.toms.conductor.ble.AndroidBleReturnMachineLink
+import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.domain.TomsConfig
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigSync
@@ -59,6 +61,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun configSync(impl: RetrofitEventUploader): ConfigSync
+
+    @Binds
+    abstract fun returnMachineLink(impl: AndroidBleReturnMachineLink): ReturnMachineLink
 }
 
 @Module

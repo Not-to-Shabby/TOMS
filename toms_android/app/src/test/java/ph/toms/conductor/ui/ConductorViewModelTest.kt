@@ -24,6 +24,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import ph.toms.conductor.ble.FakeReturnMachineLink
+import ph.toms.conductor.ble.RmProtocol
 import ph.toms.conductor.data.FakeConfigSync
 import ph.toms.conductor.data.InitialConfig
 import ph.toms.conductor.data.TestConfig
@@ -99,6 +101,7 @@ class ConductorViewModelTest {
     private val uploader = FakeUploader()
     private val fakeCardSync = FakeCardSync()
     private val configSync = FakeConfigSync()
+    private val fakeRmLink = FakeReturnMachineLink()
 
     @Before
     fun setUp() {
@@ -113,7 +116,7 @@ class ConductorViewModelTest {
         flusher = OutboxFlusher(db.outbox(), uploader)
         vm = ConductorViewModel(
             repo, location, feedback, settings, deviceConfig, fakeCardSync,
-            ConfigRefresher(repo, configSync), InitialConfig(TestConfig.config),
+            ConfigRefresher(repo, configSync), fakeRmLink, InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, deviceConfig, flusher)
         // Every trip belongs to a shift, so the tests run inside one.
@@ -610,5 +613,114 @@ class ConductorViewModelTest {
     fun `nothing is saved yet means no list, not an empty one`() = runTest {
         assertEquals(null, repo.loadApprovedCardList())
         assertEquals(null, repo.loadApprovedCards())
+    }
+
+    // ---- Return Machine BLE integration tests
+
+    @Test
+    fun `paid_check with paid card resolves trip, releases card, and replies OK`() = runTest {
+        advanceUntilIdle()
+        // 1. Conductor starts trip on board
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        val tripId = (vm.state.value.result as BoardResult.Started).trip.id
+        // 2. Conductor marks trip paid
+        vm.markPaid(tripId)
+        advanceUntilIdle()
+        assertEquals(CardState.ASSIGNED_PAID, vm.state.value.openTrips.single().state)
+
+        // 3. Passenger taps card at exit Return Machine -> RM queries paid_check
+        fakeRmLink.emitPaidCheck(checkSeq = 101L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+
+        // 4. Phone answers VERDICT_OK (0)
+        assertEquals(1, fakeRmLink.sentPaidReplies.size)
+        assertEquals(101L, fakeRmLink.sentPaidReplies.last().checkSeq)
+        assertEquals(RmProtocol.VERDICT_OK, fakeRmLink.sentPaidReplies.last().verdict)
+
+        // 5. Trip is completed and card released to AVAILABLE
+        assertTrue(vm.state.value.openTrips.isEmpty())
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.AVAILABLE }
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["6FF1AD39"])
+    }
+
+    @Test
+    fun `paid_check with unpaid card triggers RETURNED_UNPAID alarm and replies UNPAID`() = runTest {
+        advanceUntilIdle()
+        // 1. Conductor starts trip (unpaid by default)
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        assertEquals(CardState.ASSIGNED_UNPAID, vm.state.value.openTrips.single().state)
+
+        // 2. Passenger attempts to exit without paying
+        fakeRmLink.emitPaidCheck(checkSeq = 102L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+
+        // 3. Phone answers VERDICT_UNPAID (1)
+        assertEquals(1, fakeRmLink.sentPaidReplies.size)
+        assertEquals(102L, fakeRmLink.sentPaidReplies.last().checkSeq)
+        assertEquals(RmProtocol.VERDICT_UNPAID, fakeRmLink.sentPaidReplies.last().verdict)
+
+        // 4. Card transitions to RETURNED_UNPAID and appears as alarm in Collect list
+        assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.RETURNED_UNPAID }
+        assertEquals(CardState.RETURNED_UNPAID, repo.loadCardStates()["6FF1AD39"])
+    }
+
+    @Test
+    fun `paid_check with unknown card replies UNKNOWN`() = runTest {
+        advanceUntilIdle()
+        fakeRmLink.emitPaidCheck(checkSeq = 103L, uidHex = "99:88:77:66")
+        advanceUntilIdle()
+
+        assertEquals(1, fakeRmLink.sentPaidReplies.size)
+        assertEquals(103L, fakeRmLink.sentPaidReplies.last().checkSeq)
+        assertEquals(RmProtocol.VERDICT_UNKNOWN, fakeRmLink.sentPaidReplies.last().verdict)
+    }
+
+    @Test
+    fun `paid_check with card already returned replies ALREADY_RETURNED`() = runTest {
+        advanceUntilIdle()
+        // Card is available / not currently in trip
+        fakeRmLink.emitPaidCheck(checkSeq = 104L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+
+        assertEquals(1, fakeRmLink.sentPaidReplies.size)
+        assertEquals(104L, fakeRmLink.sentPaidReplies.last().checkSeq)
+        assertEquals(RmProtocol.VERDICT_ALREADY_RETURNED, fakeRmLink.sentPaidReplies.last().verdict)
+    }
+
+    @Test
+    fun `RM connection automatically syncs full card state table snapshot`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+
+        fakeRmLink.simulateConnected("TOMS-RM-3C48")
+        advanceUntilIdle()
+
+        assertTrue(fakeRmLink.sentStateUpdates.isNotEmpty())
+        val update = fakeRmLink.sentStateUpdates.last()
+        assertTrue(update.snapshot)
+        assertTrue(update.entries.any { it.uidHex == "6FF1AD39" && it.status == RmProtocol.STATUS_ASSIGNED_UNPAID })
+    }
+
+    @Test
+    fun `heartbeat telemetry updates rmHeartbeat in state`() = runTest {
+        advanceUntilIdle()
+        val hb = RmProtocol.Heartbeat(
+            uptimeS = 120L,
+            batteryPct = 92,
+            batteryMv = 4150,
+            nfcStatus = 0,
+            stateVersion = 1L,
+            bufferedReads = 0,
+            resetReason = 0,
+        )
+        fakeRmLink.emitHeartbeat(hb)
+        advanceUntilIdle()
+
+        assertEquals(hb, vm.state.value.rmHeartbeat)
+        assertEquals(92, vm.state.value.rmHeartbeat?.batteryPct)
     }
 }

@@ -45,6 +45,10 @@ import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.SettingsStore
 import ph.toms.conductor.domain.ConfigInfo
 import ph.toms.conductor.domain.ServerConfig
+import ph.toms.conductor.ble.ReturnMachineLink
+import ph.toms.conductor.ble.RmConnectionState
+import ph.toms.conductor.ble.RmEvent
+import ph.toms.conductor.ble.RmProtocol
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigRefresh
 import ph.toms.conductor.sync.ConfigRefresher
@@ -106,6 +110,10 @@ data class ConductorState(
     val focusTripId: String? = null,
     /** A short message for tabs other than Board, such as "Open Board to start a trip". */
     val notice: String? = null,
+    /** Connection status to the exit Return Machine (RM) via BLE. */
+    val rmConnection: RmConnectionState = RmConnectionState.Disconnected,
+    /** Latest telemetry heartbeat received from the Return Machine. */
+    val rmHeartbeat: RmProtocol.Heartbeat? = null,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 
@@ -135,6 +143,7 @@ class ConductorViewModel @Inject constructor(
     private val deviceConfig: DeviceConfigStore,
     private val cardSync: CardRegistrySync,
     private val configRefresher: ConfigRefresher,
+    private val rmLink: ReturnMachineLink,
     initial: InitialConfig,
 ) : ViewModel() {
 
@@ -190,6 +199,32 @@ class ConductorViewModel @Inject constructor(
                 }
             }
         }
+        // Monitor Return Machine connection state, telemetry heartbeat, and incoming exit-tap requests
+        viewModelScope.launch {
+            rmLink.connectionState.collect { conn ->
+                _state.update { it.copy(rmConnection = conn) }
+                if (conn is RmConnectionState.Connected) {
+                    syncFullCardSnapshotToRm()
+                }
+            }
+        }
+        viewModelScope.launch {
+            rmLink.lastHeartbeat.collect { hb ->
+                _state.update { it.copy(rmHeartbeat = hb) }
+            }
+        }
+        viewModelScope.launch {
+            rmLink.events.collect { event ->
+                when (event) {
+                    is RmEvent.PaidCheckReceived -> handleTerminalPaidCheck(event.checkSeq, event.uidHex)
+                    is RmEvent.CardReadReceived -> {
+                        val read = CardRead(event.read.uidHex, listOf("PN532"), event.read.timestamp * 1000L)
+                        _state.update { it.copy(recentReads = (listOf(read) + it.recentReads).take(30)) }
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     /**
@@ -214,6 +249,54 @@ class ConductorViewModel @Inject constructor(
             }
             _state.update { it.copy(configMessage = message) }
         }
+    }
+
+    // ---- Return Machine BLE integration
+
+    fun startBleScanning() = rmLink.startScanning()
+    fun stopBleScanning() = rmLink.stopScanning()
+
+    /**
+     * Resolves an instant exit tap query (`paid_check`) received from the Return Machine over BLE.
+     * Checks the local CardStateMachine and writes the payment verdict to `paid_reply`.
+     */
+    private fun handleTerminalPaidCheck(checkSeq: Long, uidHex: String) {
+        val key = ApprovedCards.normalizeUid(uidHex)
+        val isApproved = _state.value.config.approvedCards.cardUuidFor(key) != null
+        val trip = tripByCard[key]
+        val current = cardStates[key] ?: CardState.AVAILABLE
+
+        val verdict = when {
+            !isApproved -> RmProtocol.VERDICT_UNKNOWN
+            current == CardState.ASSIGNED_PAID -> {
+                trip?.let { apply(it.id, CardEvent.RETURNED_AT_TERMINAL) }
+                RmProtocol.VERDICT_OK
+            }
+            current == CardState.ASSIGNED_UNPAID -> {
+                trip?.let { apply(it.id, CardEvent.RETURNED_AT_TERMINAL) }
+                RmProtocol.VERDICT_UNPAID
+            }
+            current == CardState.RETURNED_UNPAID -> {
+                feedback.play(Cue.Refused)
+                RmProtocol.VERDICT_UNPAID
+            }
+            current == CardState.RETURNED || current == CardState.AVAILABLE -> {
+                RmProtocol.VERDICT_ALREADY_RETURNED
+            }
+            else -> RmProtocol.VERDICT_UNPAID
+        }
+        rmLink.sendPaidReply(checkSeq, verdict)
+    }
+
+    private fun syncFullCardSnapshotToRm() {
+        val entries = cardStates.map { (uid, state) ->
+            RmProtocol.StateEntry(uid, RmProtocol.cardStateToStatus(state))
+        }
+        rmLink.sendStateUpdate(
+            tableVersion = System.currentTimeMillis(),
+            snapshot = true,
+            entries = entries,
+        )
     }
 
     /** Reads card states and each card's newest trip back from the database. */
@@ -246,8 +329,14 @@ class ConductorViewModel @Inject constructor(
 
     private suspend fun applyStart(result: StartShiftResult) {
         when (result) {
-            is StartShiftResult.Started -> _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
-            is StartShiftResult.Resumed -> _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+            is StartShiftResult.Started -> {
+                rmLink.startScanning()
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+            }
+            is StartShiftResult.Resumed -> {
+                rmLink.startScanning()
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+            }
             is StartShiftResult.NeedsEnding -> {
                 val prompt = promptFor(result.open)
                 _state.update { it.copy(shift = null, blockedBy = result.open, endPrompt = prompt) }
@@ -310,7 +399,12 @@ class ConductorViewModel @Inject constructor(
                     endedContinues = wasBlocked,
                 )
             }
-            if (wasBlocked) pendingStart?.let { (c, v, r) -> applyStart(trips.startShift(c, v, r)) }
+            if (wasBlocked) {
+                pendingStart?.let { (c, v, r) -> applyStart(trips.startShift(c, v, r)) }
+            } else {
+                rmLink.stopScanning()
+                rmLink.disconnect()
+            }
         }
     }
 
@@ -391,6 +485,11 @@ class ConductorViewModel @Inject constructor(
                 // common case). The destination stays: the next passengers usually go to the same place.
                 _state.update { it.copy(result = BoardResult.Started(result.trip), tally = PassengerTally.starting()) }
                 refreshOpen()
+                rmLink.sendStateUpdate(
+                    tableVersion = System.currentTimeMillis(),
+                    snapshot = false,
+                    entries = listOf(RmProtocol.StateEntry(key, RmProtocol.cardStateToStatus(result.cardState))),
+                )
                 viewModelScope.launch { trips.recordTrip(result.trip, result.cardState, read.readAtMillis, shiftId) }
             }
             is TapResult.Existing -> {
@@ -441,6 +540,11 @@ class ConductorViewModel @Inject constructor(
                 cardStates[key] = finalState
                 if (finalState == CardState.AVAILABLE) tripByCard.remove(key)
                 feedback.play(Cue.Done)
+                rmLink.sendStateUpdate(
+                    tableVersion = System.currentTimeMillis(),
+                    snapshot = false,
+                    entries = listOf(RmProtocol.StateEntry(key, RmProtocol.cardStateToStatus(finalState))),
+                )
                 // If the result on screen is this trip, show what just happened to it. Both a trip just started
                 // and one opened by tapping its card are shown, so Paid and Return always show on the Board.
                 _state.update {
