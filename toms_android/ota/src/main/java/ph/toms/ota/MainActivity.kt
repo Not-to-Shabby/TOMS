@@ -205,8 +205,8 @@ class MainActivity : ComponentActivity() {
         }
 
         Column(Modifier.fillMaxSize()) {
-            // Header & Device Connection Bar at Top
-            DeviceHeaderBar(s, vm, askPermissions, permissions)
+            // Header Title & Connection Status at Top
+            TopHeaderBar(s)
 
             // Content Area between Header and Bottom Navigation
             Box(
@@ -221,39 +221,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Bottom Navigation & Log Dock Bar
-            BottomControlBar(s, vm)
+            // Bottom Navigation, Find Machine & Log Dock Bar
+            BottomControlBar(s, vm, askPermissions, permissions)
         }
     }
 
+    // ── Persistent Header: Title & Live Connection Status at the Top ─────────
     @Composable
-    private fun BottomControlBar(s: OtaUiState, vm: OtaViewModel) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(DarkBg)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Collapsible Log Pill directly above tabs
-            LogDockAndSheet(s, vm)
-
-            // Cupertino Segmented Control Tab Row at the bottom
-            CupertinoSegmentedTabs(
-                selectedTab = s.selectedTab,
-                onSelect = { vm.selectTab(it) }
-            )
-        }
-    }
-
-    // ── Persistent Header & Connection Status ────────────────────────────────
-    @Composable
-    private fun DeviceHeaderBar(
-        s: OtaUiState,
-        vm: OtaViewModel,
-        askPermissions: androidx.activity.result.ActivityResultLauncher<Array<String>>,
-        permissions: Array<String>
-    ) {
+    private fun TopHeaderBar(s: OtaUiState) {
         val machine = s.selected
         val isConnected = s.isDiagConnected
 
@@ -268,7 +243,7 @@ class MainActivity : ComponentActivity() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -276,7 +251,6 @@ class MainActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Pulsing status dot
                     val pulse = rememberInfiniteTransition(label = "pulse")
                     val pulseAlpha by pulse.animateFloat(
                         initialValue = 0.4f,
@@ -302,65 +276,175 @@ class MainActivity : ComponentActivity() {
                     Column {
                         Text(
                             text = machine?.name ?: "TOMS Return Machine",
-                            fontWeight = FontWeight.SemiBold,
-                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
                             color = Color.White
                         )
                         Text(
                             text = when {
                                 isConnected -> "Connected (${machine?.rssi ?: 0} dBm)"
                                 s.phase == Phase.SCANNING -> "Scanning for devices..."
-                                machine != null -> "Ready to connect • ${machine.address}"
-                                else -> "No machine selected"
+                                machine != null -> "Selected • ${machine.address}"
+                                else -> "No machine connected"
                             },
                             fontSize = 11.sp,
-                            color = CupertinoSlate
+                            color = when {
+                                isConnected -> CupertinoGreen
+                                s.phase == Phase.SCANNING -> CupertinoOrange
+                                else -> CupertinoSlate
+                            }
                         )
                     }
                 }
 
-                // Action pill button
-                Button(
-                    onClick = {
-                        if (isConnected) {
-                            vm.disconnectDiagnostics()
-                        } else if (machine != null) {
-                            vm.connectDiagnostics()
-                        } else {
-                            askPermissions.launch(permissions)
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isConnected) CupertinoRed.copy(alpha = 0.2f) else CardSubtle,
-                        contentColor = if (isConnected) CupertinoRed else CupertinoBlue
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.height(34.dp),
-                    border = BorderStroke(1.dp, if (isConnected) CupertinoRed.copy(alpha = 0.4f) else CardBorder)
-                ) {
-                    Icon(
-                        imageVector = when {
-                            isConnected -> Icons.Rounded.BluetoothConnected
-                            s.phase == Phase.SCANNING -> Icons.AutoMirrored.Rounded.BluetoothSearching
-                            else -> Icons.Rounded.Bluetooth
-                        },
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = when {
-                            isConnected -> "Disconnect"
-                            s.phase == Phase.SCANNING -> "Scanning"
-                            machine != null -> "Connect"
-                            else -> "Scan"
-                        },
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
+                if (machine != null) {
+                    MetadataBadge(
+                        label = "${machine.rssi} dBm",
+                        color = if (isConnected) CupertinoGreen else CupertinoBlue
                     )
                 }
             }
+        }
+    }
+
+    // ── Bottom Controls: Find Machine, Log Dock & Navigation Tabs ────────────
+    @Composable
+    private fun BottomControlBar(
+        s: OtaUiState,
+        vm: OtaViewModel,
+        askPermissions: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+        permissions: Array<String>
+    ) {
+        val machine = s.selected
+        val isConnected = s.isDiagConnected
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DarkBg)
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Find Machine / Connection Action Button in the Bottom Zone
+            if (isConnected) {
+                Button(
+                    onClick = { vm.disconnectDiagnostics() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CupertinoRed.copy(alpha = 0.15f),
+                        contentColor = CupertinoRed
+                    ),
+                    border = BorderStroke(1.dp, CupertinoRed.copy(alpha = 0.4f)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "Disconnect from ${machine?.name ?: "Machine"}",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
+            } else if (machine != null && s.selectedTab == 1) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { askPermissions.launch(permissions) },
+                        enabled = s.phase != Phase.UPLOADING && s.phase != Phase.SCANNING,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CupertinoBlue),
+                        border = BorderStroke(1.dp, CardBorder),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (s.phase == Phase.SCANNING) Icons.AutoMirrored.Rounded.BluetoothSearching else Icons.Rounded.Bluetooth,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (s.phase == Phase.SCANNING) "Scanning..." else "Find Machine",
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    }
+
+                    Button(
+                        onClick = { vm.connectDiagnostics() },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CupertinoBlue,
+                            contentColor = Color.White
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.BluetoothConnected,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Connect",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    }
+                }
+            } else {
+                Button(
+                    onClick = { askPermissions.launch(permissions) },
+                    enabled = s.phase != Phase.UPLOADING && s.phase != Phase.SCANNING,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CardSubtle,
+                        contentColor = CupertinoBlue
+                    ),
+                    border = BorderStroke(1.dp, CardBorder),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = if (s.phase == Phase.SCANNING) Icons.AutoMirrored.Rounded.BluetoothSearching else Icons.Rounded.Bluetooth,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = if (s.phase == Phase.SCANNING) "Scanning for Machines..." else "Find Machine",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+
+            // Collapsible Log Pill directly above tabs
+            LogDockAndSheet(s, vm)
+
+            // Cupertino Segmented Control Tab Row at the bottom
+            CupertinoSegmentedTabs(
+                selectedTab = s.selectedTab,
+                onSelect = { vm.selectTab(it) }
+            )
         }
     }
 
@@ -905,6 +989,69 @@ class MainActivity : ComponentActivity() {
                         )
                         Spacer(Modifier.width(4.dp))
                         Text("Next Page", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+
+        // Discovered Machines List in Diagnostics tab (if scanned while disconnected)
+        if (!s.isDiagConnected && s.machines.isNotEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = CardBg),
+                border = BorderStroke(1.dp, CardBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "DISCOVERED MACHINES",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        letterSpacing = 1.sp,
+                        color = CupertinoSlate
+                    )
+                    s.machines.forEach { m ->
+                        val isSelected = m.address == s.selected?.address
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) CupertinoBlue.copy(alpha = 0.12f) else CardSubtle)
+                                .clickable { vm.select(m) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isSelected) Icons.Rounded.CheckCircle else Icons.Rounded.Bluetooth,
+                                    contentDescription = null,
+                                    tint = if (isSelected) CupertinoBlue else CupertinoSlate,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column {
+                                    Text(
+                                        text = m.name,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                        fontSize = 14.sp,
+                                        color = Color.White
+                                    )
+                                    Text(text = m.address, fontSize = 11.sp, color = CupertinoSlate)
+                                }
+                            }
+                            Text(
+                                text = "${m.rssi} dBm",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = if (m.rssi > -70) CupertinoGreen else CupertinoOrange
+                            )
+                        }
                     }
                 }
             }
