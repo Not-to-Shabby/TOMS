@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.After
@@ -67,6 +68,51 @@ class ServerConfigTest {
         assertEquals(100, config.fare.roundingStepCentavos)
         assertEquals(listOf("pwd" to 20, "student" to 15), config.discountCategories.map { it.id to it.percent })
         assertEquals(55L, config.fetchedAtMillis)
+    }
+
+    @Test fun `assigned vehicle parses from the response`() {
+        val body = """
+            {"version":4242,"vehicle":{"id":"DONSAL ILIGAN","plate":"1234"},"route":{"id":7,"name":"Route 1"},
+             "stops":[{"id":"11","name":"A","lat":8.2,"lon":124.2},{"id":"12","name":"B","lat":8.3,"lon":124.2}],
+             "fare":{"matrix_id":9,"base_fare_centavos":1500,"base_distance_km":4,"per_km_fare_centavos":1500,
+                     "rounding_step_cents":100,"discounts":[]}}
+        """.trimIndent()
+        val config = Json { ignoreUnknownKeys = true }.decodeFromString<DeviceConfigResponse>(body).toServerConfig(55L)
+
+        assertEquals("DONSAL ILIGAN", config.vehicleId)
+        assertEquals("1234", config.vehiclePlate)
+        assertEquals("7", config.routeId)
+        assertEquals("Route 1", config.routeName)
+    }
+
+    @Test fun `each stop keeps the radius the server gave it`() {
+        val config = serverConfigResponse(
+            stops = listOf(StopDto("1", "A", 8.0, 124.0, 250), StopDto("2", "B", 8.1, 124.0, 40), StopDto("3", "C", 8.2, 124.0)),
+        ).toServerConfig(0)
+        assertEquals(listOf(250.0, 40.0, 100.0), config.stops.map { it.radiusMeters })
+    }
+
+    @Test fun `a response with no radius_m uses the default of 100 m`() {
+        val body = """{"version":1,"route":{"id":1,"name":"R"},
+            "stops":[{"id":"1","name":"A","lat":8.0,"lon":124.0},{"id":"2","name":"B","lat":8.1,"lon":124.0}],
+            "fare":{"matrix_id":1,"base_fare_centavos":1500,"base_distance_km":4,"per_km_fare_centavos":250,"rounding_step_cents":100,"discounts":[]}}"""
+        val config = Json { ignoreUnknownKeys = true }.decodeFromString<DeviceConfigResponse>(body).toServerConfig(0)
+        assertEquals(listOf(100.0, 100.0), config.stops.map { it.radiusMeters })
+    }
+
+    @Test fun `a radius that is not positive is refused`() {
+        for (radius in listOf(0, -5)) {
+            try {
+                serverConfigResponse(stops = listOf(StopDto("1", "A", 8.0, 124.0, radius), StopDto("2", "B", 8.1, 124.0))).toServerConfig(0)
+                fail("radius $radius should have been refused")
+            } catch (_: InvalidServerConfig) {
+            }
+        }
+    }
+
+    @Test fun `the radius survives being saved and loaded`() = runBlocking {
+        repo.saveServerConfig(serverConfigResponse(stops = listOf(StopDto("1", "A", 8.0, 124.0, 250), StopDto("2", "B", 8.1, 124.0, 40))))
+        assertEquals(listOf(250.0, 40.0), repo.loadServerConfig()!!.stops.map { it.radiusMeters })
     }
 
     @Test fun `the fare version is the server's, on the config and on the fare`() {
@@ -225,6 +271,52 @@ class ServerConfigTest {
 
         assertTrue(result.reason, result.reason.contains("cannot use"))
         assertEquals(10, repo.loadServerConfig()!!.version)
+    }
+
+    // ---- cancellation is not a failure
+
+    @Test fun `refreshSafely turns an ordinary failure into a message instead of throwing`() = runBlocking {
+        sync.throwing = java.io.IOException("connection reset")
+        val result = refresher.refreshSafely() as ConfigRefresh.Kept
+        assertEquals("connection reset", result.reason)
+
+        sync.throwing = IllegalStateException()
+        assertEquals("Could not save the fares.", (refresher.refreshSafely() as ConfigRefresh.Kept).reason)
+    }
+
+    @Test fun `refreshSafely rethrows cancellation instead of swallowing it`() {
+        sync.throwing = kotlinx.coroutines.CancellationException("screen closed")
+        try {
+            runBlocking { refresher.refreshSafely() }
+            fail("cancellation must not be turned into a result")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            assertEquals("screen closed", e.message)
+        }
+    }
+
+    @Test fun `refreshSafely rethrows a TimeoutCancellation too, which is a cancellation`() {
+        try {
+            runBlocking { kotlinx.coroutines.withTimeout(20) { sync.throwing = null; kotlinx.coroutines.delay(5_000); refresher.refreshSafely() } }
+            fail("the timeout should have fired")
+        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+            // it is a CancellationException and was not absorbed
+        }
+    }
+
+    @Test fun `cancelling a refresh in flight stops it and saves nothing`() = runBlocking {
+        val slow = object : ph.toms.conductor.sync.ConfigSync {
+            override suspend fun fetchConfig(): ConfigFetch {
+                kotlinx.coroutines.delay(60_000)
+                return ConfigFetch.Loaded(serverConfigResponse(version = 5))
+            }
+        }
+        val job = launch(kotlinx.coroutines.Dispatchers.Default) { ConfigRefresher(repo, slow).refreshSafely() }
+        kotlinx.coroutines.delay(50)
+        job.cancel()
+        job.join()
+
+        assertTrue("the refresh stopped instead of carrying on", job.isCancelled)
+        assertNull(repo.loadServerConfig())
     }
 
     @Test fun `with no saved config, a failed fetch leaves none`() = runBlocking {

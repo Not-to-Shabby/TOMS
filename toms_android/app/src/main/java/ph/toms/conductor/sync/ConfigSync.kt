@@ -2,6 +2,7 @@ package ph.toms.conductor.sync
 
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 import ph.toms.conductor.data.DeviceConfigResponse
 import ph.toms.conductor.data.InvalidServerConfig
 import ph.toms.conductor.data.TripRepository
@@ -49,5 +50,19 @@ class ConfigRefresher @Inject constructor(
             }
         is ConfigFetch.Unavailable -> ConfigRefresh.Kept(fetched.reason)
         is ConfigFetch.Failed -> ConfigRefresh.Kept(fetched.reason)
+    }
+
+    /**
+     * [refresh], but any failure becomes "kept" with its message, so a caller that must not crash on one (the
+     * background worker, a button press) never sees an exception. Cancellation is the exception to that: it is not a
+     * failure, it is the caller being told to stop (the screen closed, the work was cancelled), so it is rethrown.
+     * `runCatching` would swallow it and let cancelled work carry on as if nothing had happened.
+     */
+    suspend fun refreshSafely(): ConfigRefresh = try {
+        refresh()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        ConfigRefresh.Kept(e.message ?: "Could not save the fares.")
     }
 }

@@ -23,6 +23,9 @@ import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 
+/** What the app says when no server address has been set yet (a release build starts with none). */
+const val NO_SERVER_MESSAGE = "Set the server address on More"
+
 @Serializable
 data class EventUploadItem(
     @SerialName("event_id") val eventId: String,
@@ -78,6 +81,35 @@ interface TomsApiService {
     suspend fun fetchConfig(
         @Header("Authorization") authHeader: String?,
     ): DeviceConfigResponse
+
+    @POST("api/conductors/login")
+    suspend fun loginConductor(
+        @Body request: ConductorLoginRequest,
+    ): ConductorLoginResponse
+}
+
+@Serializable
+data class ConductorLoginRequest(
+    val username: String,
+    val password: String,
+)
+
+@Serializable
+data class ConductorUserDto(
+    val id: Int,
+    val username: String,
+    val name: String? = null,
+    val role: String? = null,
+)
+
+@Serializable
+data class ConductorLoginResponse(
+    val token: String,
+    val user: ConductorUserDto,
+)
+
+interface ConductorAuthService {
+    suspend fun login(username: String, password: String): Result<String>
 }
 
 interface CardRegistrySync {
@@ -88,7 +120,7 @@ interface CardRegistrySync {
 class RetrofitEventUploader @Inject constructor(
     private val config: DeviceConfigStore,
     private val okHttpClient: OkHttpClient,
-) : EventUploader, CardRegistrySync, ConfigSync {
+) : EventUploader, CardRegistrySync, ConfigSync, ConductorAuthService {
 
     override val channel: String = "data_a"
 
@@ -100,6 +132,8 @@ class RetrofitEventUploader @Inject constructor(
 
     @Synchronized
     private fun createApi(): TomsApiService? {
+        // No address set: nothing is built, so nothing can try the network.
+        if (config.serverUrl.value.isBlank()) return null
         val baseUrl = config.serverUrl.value.trimEnd('/') + "/"
         cachedApi?.let { (url, api) -> if (url == baseUrl) return api }
         return try {
@@ -122,7 +156,7 @@ class RetrofitEventUploader @Inject constructor(
             return UploadResult.Failed("device not enrolled (no token configured)")
         }
 
-        val api = createApi() ?: return UploadResult.Failed("invalid server URL")
+        val api = createApi() ?: return UploadResult.Failed(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL")
 
         val items = batch.map { p ->
             val payloadElement = runCatching { json.parseToJsonElement(p.payload) }
@@ -156,7 +190,7 @@ class RetrofitEventUploader @Inject constructor(
     override suspend fun fetchConfig(): ConfigFetch {
         val token = config.deviceToken.value
         if (token.isNullOrBlank()) return ConfigFetch.Failed("Not enrolled. Set the device token on More.")
-        val api = createApi() ?: return ConfigFetch.Failed("The server URL is not valid.")
+        val api = createApi() ?: return ConfigFetch.Failed(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "The server URL is not valid.")
         return try {
             ConfigFetch.Loaded(api.fetchConfig("Bearer $token"))
         } catch (e: HttpException) {
@@ -181,12 +215,34 @@ class RetrofitEventUploader @Inject constructor(
         if (token.isNullOrBlank()) {
             return Result.failure(IllegalStateException("device not enrolled (no token configured)"))
         }
-        val api = createApi() ?: return Result.failure(IllegalStateException("invalid server URL"))
+        val api = createApi() ?: return Result.failure(
+            IllegalStateException(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL"),
+        )
         return try {
             val res = api.fetchApprovedCards("Bearer $token")
             Result.success(ApprovedCardList(res.cards, res.statuses))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    override suspend fun login(username: String, password: String): Result<String> {
+        val api = createApi() ?: return Result.failure(
+            IllegalStateException(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL"),
+        )
+        return try {
+            val res = api.loginConductor(ConductorLoginRequest(username, password))
+            val displayName = res.user.name?.takeIf { it.isNotBlank() } ?: res.user.username
+            Result.success(displayName)
+        } catch (e: HttpException) {
+            val errorMsg = serverReason(e) ?: when (e.code()) {
+                401 -> "Invalid username or password"
+                429 -> "Too many failed attempts. Try again later."
+                else -> "Server error (${e.code()})"
+            }
+            Result.failure(Exception(errorMsg))
+        } catch (e: Exception) {
+            Result.failure(Exception(e.message ?: "Network error connecting to server"))
         }
     }
 }

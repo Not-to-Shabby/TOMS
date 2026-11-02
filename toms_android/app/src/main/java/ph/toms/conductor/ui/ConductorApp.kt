@@ -141,6 +141,7 @@ fun ConductorApp(
                             vm.refreshConfig()
                         })
                     },
+                    onRetryRefused = { syncVm.retryRefused(onFlushed = vm::syncApprovedCards) },
                     onShiftSummary = vm::openSummary,
                 )
             }

@@ -23,10 +23,15 @@ android {
         debug {
             // `./gradlew assembleDebug -PtestFares=true` starts with placeholder fares, for trying the app with no server.
             buildConfigField("boolean", "TEST_FARES", (findProperty("testFares") == "true").toString())
+            // Debug builds start pointing at the local backend (adb reverse tcp:3000 tcp:3000), which they may reach over plain HTTP.
+            buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://127.0.0.1:3000\"")
         }
         release {
             // Never: a release build charges only fares the server published.
             buildConfigField("boolean", "TEST_FARES", "false")
+            // Release has no server address until the owner sets one on More. It is a setting, not built in, and a
+            // release build only talks HTTPS, so there is no local default that could work.
+            buildConfigField("String", "DEFAULT_SERVER_URL", "\"\"")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

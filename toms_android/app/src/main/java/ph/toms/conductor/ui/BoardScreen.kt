@@ -72,7 +72,7 @@ fun BoardScreen(
 
     // No fares were ever downloaded, so there is nothing to charge from. Say so instead of showing an empty board.
     if (!state.faresLoaded) {
-        NoFares(state.configMessage, onRetry)
+        NoFares(state.noFaresMessage, state.configMessage.takeUnless { state.needsServer }, onRetry, canRetry = !state.needsServer)
         return
     }
 
@@ -127,13 +127,13 @@ fun BoardScreen(
 }
 
 @Composable
-private fun NoFares(reason: String?, onRetry: () -> Unit) {
+private fun NoFares(headline: String, reason: String?, onRetry: () -> Unit, canRetry: Boolean) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(Gap, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(NO_FARES_MESSAGE, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+        Text(headline, style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Text(
             "A trip is not started until the fares for this route have been downloaded.",
             style = MaterialTheme.typography.bodyLarge,
@@ -141,7 +141,8 @@ private fun NoFares(reason: String?, onRetry: () -> Unit) {
             textAlign = TextAlign.Center,
         )
         reason?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad, textAlign = TextAlign.Center) }
-        BigButton("Sync now", onRetry)
+        // With no server address there is nothing to sync from: the way forward is More, not this button.
+        if (canRetry) BigButton("Sync now", onRetry)
     }
 }
 

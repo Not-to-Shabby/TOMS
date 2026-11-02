@@ -88,6 +88,18 @@ interface OutboxDao {
     @Query("SELECT parkedReason FROM outbox WHERE eventId = :eventId")
     suspend fun parkedReason(eventId: String): String?
 
+    /** The refused events, newest first, with their reasons. Follows the table, so the list shrinks when they are retried. */
+    @Query(
+        """
+        SELECT e.eventId AS eventId, e.type AS type, e.createdAtMillis AS createdAtMillis, o.parkedReason AS reason
+        FROM outbox o JOIN events e ON e.eventId = o.eventId
+        WHERE o.parkedAtMillis IS NOT NULL AND o.deliveredAtMillis IS NULL
+        ORDER BY e.seq DESC
+        LIMIT :limit
+        """,
+    )
+    fun parked(limit: Int): Flow<List<ParkedEvent>>
+
     @Query(
         """
         SELECT e.seq AS seq, e.eventId AS eventId, e.deviceId AS deviceId, e.type AS type,

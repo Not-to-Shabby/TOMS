@@ -12,6 +12,7 @@ import ph.toms.conductor.data.db.CardEntity
 import ph.toms.conductor.data.db.ConfigCacheEntity
 import ph.toms.conductor.data.db.EventEntity
 import ph.toms.conductor.data.db.OutboxEntity
+import ph.toms.conductor.data.db.ParkedEvent
 import ph.toms.conductor.data.db.ServerConfigEntity
 import ph.toms.conductor.data.db.ShiftEntity
 import ph.toms.conductor.data.db.TomsDatabase
@@ -122,6 +123,12 @@ class TripRepository(
 
     /** Events the server refused. They are kept, not retried, and are not counted in [pendingCount]. */
     fun parkedCount(): Flow<Int> = db.outbox().parkedCount()
+
+    /** The refused events and why, newest first, for the list on More. */
+    fun parkedEvents(limit: Int = 20): Flow<List<ParkedEvent>> = db.outbox().parked(limit)
+
+    /** Puts every refused event back in the queue to be sent again. Returns how many. */
+    suspend fun retryParked(): Int = db.outbox().unparkAll()
 
     // ---- shifts
 

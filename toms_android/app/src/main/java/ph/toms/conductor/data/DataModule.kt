@@ -28,6 +28,7 @@ import ph.toms.conductor.BuildConfig
 import ph.toms.conductor.domain.TomsConfig
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigSync
+import ph.toms.conductor.sync.ConductorAuthService
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
@@ -36,7 +37,10 @@ import ph.toms.conductor.sync.RetrofitEventUploader
 @InstallIn(SingletonComponent::class)
 abstract class DataModule {
     @Binds
-    abstract fun sessionRepository(impl: StubSessionRepository): SessionRepository
+    abstract fun sessionRepository(impl: ServerSessionRepository): SessionRepository
+
+    @Binds
+    abstract fun conductorAuthService(impl: RetrofitEventUploader): ConductorAuthService
 
     @Binds
     abstract fun feedback(impl: DeviceFeedback): Feedback

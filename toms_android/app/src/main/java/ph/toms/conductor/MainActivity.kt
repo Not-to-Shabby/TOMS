@@ -74,14 +74,21 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    else -> ConductorApp(
-                        vm = conductor,
-                        syncVm = sync,
-                        nfcReader = nfcReader,
-                        header = "${assignment.vehicle.plate}  ·  ${assignment.route.name}",
-                        state = c,
-                        sync = sy,
-                    )
+                    else -> {
+                        val vehicleDisplay = if (assignment.vehicle.id.isNotBlank() && assignment.vehicle.plate.isNotBlank() && assignment.vehicle.id != assignment.vehicle.plate) {
+                            "${assignment.vehicle.id} (${assignment.vehicle.plate})"
+                        } else {
+                            assignment.vehicle.plate.ifBlank { assignment.vehicle.id }
+                        }
+                        ConductorApp(
+                            vm = conductor,
+                            syncVm = sync,
+                            nfcReader = nfcReader,
+                            header = "$vehicleDisplay  ·  ${assignment.route.name}",
+                            state = c,
+                            sync = sy,
+                        )
+                    }
                 }
             }
         }

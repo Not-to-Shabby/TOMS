@@ -110,6 +110,14 @@ data class ConfigCacheEntity(
     val fetchedAtMillis: Long,
 )
 
+/** An event the server refused, with why. Shown on More so whoever fixes the cause knows what to look for. */
+data class ParkedEvent(
+    val eventId: String,
+    val type: String,
+    val createdAtMillis: Long,
+    val reason: String?,
+)
+
 data class PendingEvent(
     val seq: Long,
     val eventId: String,

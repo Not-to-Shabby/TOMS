@@ -108,3 +108,9 @@ jobs:
       - name: Assemble Debug APK
         working-directory: toms_android
         run: ./gradlew :app:assembleDebug
+
+      # Unsigned is fine: R8 still shrinks and renames, which is what this step is for. It catches a keep rule that is
+      # missing (Room, serialization, Retrofit, SQLCipher) at build time instead of on a phone.
+      - name: Assemble Release APK (R8)
+        working-directory: toms_android
+        run: ./gradlew :app:assembleRelease

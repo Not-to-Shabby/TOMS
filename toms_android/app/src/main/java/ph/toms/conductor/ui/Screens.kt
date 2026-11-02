@@ -65,12 +65,13 @@ fun AssignmentScreen(
     routes: List<RouteInfo>,
     onConfirm: (Vehicle, RouteInfo) -> Unit,
 ) {
-    var vehicle by remember { mutableStateOf<Vehicle?>(null) }
-    var route by remember { mutableStateOf<RouteInfo?>(null) }
+    var vehicle by remember(vehicles) { mutableStateOf(vehicles.singleOrNull()) }
+    var route by remember(routes) { mutableStateOf(routes.singleOrNull()) }
     Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Vehicle", style = MaterialTheme.typography.titleMedium)
         vehicles.forEach { v ->
-            Row { RadioButton(vehicle == v, { vehicle = v }); Text(v.plate, Modifier.padding(top = 12.dp)) }
+            val label = if (v.id.isNotBlank() && v.plate.isNotBlank() && v.id != v.plate) "${v.id} (${v.plate})" else v.plate.ifBlank { v.id }
+            Row { RadioButton(vehicle == v, { vehicle = v }); Text(label, Modifier.padding(top = 12.dp)) }
         }
         Text("Route", style = MaterialTheme.typography.titleMedium)
         routes.forEach { r ->

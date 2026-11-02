@@ -5,7 +5,17 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-data class Stop(val id: String, val name: String, val lat: Double, val lon: Double)
+/** How close a fix has to be to count as "at" a stop when the server did not say. The same as the server's default (`radius_m`). */
+const val DEFAULT_STOP_RADIUS_METERS = 100.0
+
+/** [radiusMeters] is how near a position fix must be to count as being at this stop. The server sets it per stop. */
+data class Stop(
+    val id: String,
+    val name: String,
+    val lat: Double,
+    val lon: Double,
+    val radiusMeters: Double = DEFAULT_STOP_RADIUS_METERS,
+)
 
 data class DiscountCategory(
     val id: String,
@@ -96,7 +106,10 @@ const val MAX_FARE_VERSION = 1_000_000
  */
 data class ServerConfig(
     val version: Int,
-    val routeName: String,
+    val vehicleId: String = "",
+    val vehiclePlate: String = "",
+    val routeId: String = "",
+    val routeName: String = "",
     val stops: List<Stop>,
     val fare: FareConfig,
     val discountCategories: List<DiscountCategory>,

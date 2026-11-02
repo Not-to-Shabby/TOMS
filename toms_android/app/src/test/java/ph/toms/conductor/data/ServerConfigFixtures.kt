@@ -6,6 +6,7 @@ import ph.toms.conductor.sync.ConfigSync
 /** A response in the shape `GET /api/device/config` sends. Override a piece to build the case under test. */
 fun serverConfigResponse(
     version: Int = 4242,
+    vehicle: VehicleDto? = VehicleDto("v1", "TOMS-001"),
     routeName: String = "Tibanga - Pala-o",
     stops: List<StopDto> = listOf(
         StopDto("11", "Tibanga", 8.2280, 124.2450, 120),
@@ -19,6 +20,7 @@ fun serverConfigResponse(
     discounts: List<DiscountDto> = listOf(DiscountDto("pwd", "PWD", 20), DiscountDto("student", "Student", 20)),
 ) = DeviceConfigResponse(
     version = version,
+    vehicle = vehicle,
     route = RouteDto(7, routeName),
     stops = stops,
     fare = FareDto(9, baseFareCentavos, baseDistanceKm, perKmFareCentavos, roundingStepCents, discounts),
@@ -27,8 +29,12 @@ fun serverConfigResponse(
 /** Answers what a test tells it to. Starts as if the phone had no connection. */
 class FakeConfigSync(var next: ConfigFetch = ConfigFetch.Failed("offline")) : ConfigSync {
     var calls = 0
+
+    /** When set, the fetch throws this instead of answering, as a broken connection or a cancelled coroutine would. */
+    var throwing: Throwable? = null
     override suspend fun fetchConfig(): ConfigFetch {
         calls++
+        throwing?.let { throw it }
         return next
     }
 }

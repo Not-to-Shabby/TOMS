@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import java.util.Date
 import ph.toms.conductor.settings.Handedness
+import ph.toms.conductor.sync.NO_SERVER_MESSAGE
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
 import ph.toms.conductor.ui.theme.QuietButton
@@ -47,6 +48,7 @@ fun MoreScreen(
     onServerUrl: (String) -> Unit = {},
     onDeviceToken: (String?) -> Unit = {},
     onUploadNow: () -> Unit = {},
+    onRetryRefused: () -> Unit = {},
     onShiftSummary: () -> Unit = {},
 ) {
     var editUrl by remember { mutableStateOf<String?>(null) }
@@ -121,6 +123,14 @@ fun MoreScreen(
         )
 
         Text("Server Sync", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
+        if (sync.needsServer) {
+            Text(NO_SERVER_MESSAGE, style = MaterialTheme.typography.titleMedium, color = TomsColors.Bad)
+            Text(
+                "Nothing is uploaded or downloaded until the server address is set. Use Change below, then Set Token.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TomsColors.InkSoft,
+            )
+        }
         Fact("Device ID", sync.deviceId.ifEmpty { "loading..." })
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -136,21 +146,43 @@ fun MoreScreen(
             }
             QuietButton("Set Token", { editToken = "" })
         }
+        sync.tokenWarning?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad) }
 
         BigButton(
             text = if (sync.isUploading) "Uploading..." else "Upload now (${sync.pendingCount} pending)",
             onClick = onUploadNow,
-            enabled = !sync.isUploading && sync.isEnrolled,
+            enabled = !sync.isUploading && sync.isEnrolled && !sync.needsServer,
         )
         sync.uploadMessage?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = if (it.startsWith("Uploaded") && "refused" !in it) TomsColors.Good else TomsColors.Bad)
+        }
+        // Only when the server has refused something: one press puts those events back and tries them once.
+        if (sync.parkedCount > 0) {
+            QuietButton(
+                text = "Retry refused events (${sync.parkedCount})",
+                onClick = onRetryRefused,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !sync.isUploading && sync.isEnrolled && !sync.needsServer,
+            )
         }
 
         Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Text("For whoever is fixing the app, not for the conductor.", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
 
         Fact("Waiting to upload", "${sync.pendingCount} events")
-        if (sync.parkedCount > 0) Fact("Refused by the server", "${sync.parkedCount} events, not retried")
+        if (sync.parkedCount > 0) {
+            Fact("Refused by the server", "${sync.parkedCount} events, not retried")
+            sync.parked.forEach { e ->
+                Text(
+                    "${DateFormat.format("d MMM HH:mm", Date(e.createdAtMillis))}  ${e.type}: ${e.reason ?: "no reason given"}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TomsColors.Bad,
+                )
+            }
+            if (sync.parkedCount > sync.parked.size) {
+                Text("and ${sync.parkedCount - sync.parked.size} more", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
+            }
+        }
         val info = state.configInfo
         if (info == null) {
             Fact("Fares", "none loaded")
@@ -180,12 +212,15 @@ fun MoreScreen(
                 )
             }
         }
-        Text(
-            "The fares, stops and card list are placeholders until the real ones are loaded from the server.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = TomsColors.Warn,
-            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
-        )
+        // Only a debug build made with -PtestFares=true runs on placeholder fares and says so; a release build never does.
+        if (state.configInfo?.fetchedAtMillis == null && state.faresLoaded) {
+            Text(
+                "These fares, stops and cards are test placeholders, not published fares.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TomsColors.Warn,
+                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp),
+            )
+        }
     }
 }
 
