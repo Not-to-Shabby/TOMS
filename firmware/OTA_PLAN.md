@@ -367,21 +367,25 @@ Built standalone Kotlin Android application (`toms_android/ota`, app id `ph.toms
 
 ---
 
-## Phase 6: Security, Downgrade Prevention & Server Certificate Architecture
+## Phase 6 result (2026-11-02): gate met, full pass on real hardware
 
-### A. Local Device Security
-1. **Production Configuration (`prj_release.conf`)**:
-   - Sets `CONFIG_TOMS_DEV_MODE=n`.
-   - Forces `BT_GATT_PERM_WRITE_ENCRYPT` on all write characteristics (`0x02`, `0x04`, `0x06`, `0x07`, `0x08`, `0x0C`, `0x0D`, `0x0E`).
-   - Unbonded devices attempting to write are rejected at the BLE stack with `BT_ATT_ERR_AUTHENTICATION`.
-2. **Production Signing Key (`production-ec-p256.pem`)**:
-   - Generated using `firmware/tools/generate_keys.py`.
-   - Replaces MCUboot's public development key with a private, offline ECDSA P-256 keypair.
-   - Private key is excluded from git via `.gitignore` (`*.pem`).
-3. **Strict Downgrade Prevention**:
-   - When `CONFIG_TOMS_DEV_MODE=n`, `toms_ota_version_cmp(&img, &running)` rejects equal or older versions with `TOMS_OTA_VERSION`.
+All four Phase 6 security barriers tested and proven on the bench:
 
-### B. Server-Backed Conductor Authentication (VPS Ephemeral Certificate Architecture)
+| Test Gate | Target Binary | Observed Board Behavior | Verdict |
+| :--- | :--- | :--- | :--- |
+| **1. Unauthenticated Write Lockout** | `good-release` (`DEV_MODE=n`) | Unbonded writes rejected with `BT_ATT_ERR_AUTHENTICATION`. LE Secure Connections pairing & numeric passkey display (`ota_ui_show_pair`) enforced before access granted. | **PASS** |
+| **2. Strict Downgrade Lockout** | `test-downgrade` (v1.0.0) | Flashed onto running v2.0.0. Firmware rejected with `status 8 (TOMS_OTA_VERSION)`. No reboot, no flash swap. | **PASS** |
+| **3. Valid Version Upgrade** | `test-upgrade` (v2.1.0 & v2.3.0) | Flashed onto running v2.0.0. Accepted (`2.3.0 > 2.0.0`), swapped slots, and confirmed on boot (`speed-2.3.0`). | **PASS** |
+| **4. Cryptographic Wrong-Key Gate** | `test-wrongkey` (v2.4.0, Prod Key) | Staged to slot 1 over high-speed BLE OTA. On reboot, MCUboot evaluated TinyCrypt ECDSA P-256 signature against dev public key. Signature failed: MCUboot refused swap and safely booted slot 0 (`speed-2.3.0`). | **PASS** |
+
+### High-Speed BLE Throughput Verification:
+- Negotiated ATT MTU 247 with connection priority high (11.25 ms interval).
+- Chunk size expanded from 58 bytes to 240 bytes (4× fewer packets).
+- Transfer time dropped from ~90 seconds down to ~18 seconds.
+
+---
+
+## Phase 6 Architecture: Server Certificate Authorization (Step 2 Roadmap)
 To prevent unauthorized passengers from connecting to or manipulating the Return Machine:
 
 ```
