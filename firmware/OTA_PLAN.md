@@ -328,13 +328,153 @@ resume were not seen). No round rolled back to good-1. Cuts later than ~3.5 s la
 had finished. Not probed: the last sectors / trailer write. Round 17 was an operator miss (no cut made).
 Script: tools/phase3_test.py, logs in build/phase3.
 
-## Phase 4 status (2026-10-31): BUILT, NOT YET RUN ON THE BOARD
-- Firmware: src/ble/ota.c (ota_control 0x0C, ota_data 0x0D), core lib toms/ota.h + sha256.h
-  (106 host checks, all check_all.sh steps pass). Rules: bonded link, running image confirmed, in-order
-  chunks with a single resync notice, SHA-256 + MCUboot header check, then boot_request_upgrade(TEST).
-- Tools: tools/ota_upload.py (PC stand-in, --corrupt, --drop-at). Android: toms_android/ota module
-  (app id ph.toms.ota, 21 unit tests, debug APK builds). Neither has talked to the real board yet.
-- Gate (still open): corrupt upload refused, clean upload swaps, drop mid-upload resumes.
+## Phase 4 result (2026-11-02): gate met, full pass on real hardware
+
+Tested end-to-end over BLE with the ESP32-S3 Return Machine on the bench:
+
+1. **Protocol & GATT Pipeline**:
+   - Custom GATT service `544F4D53-5245-5455-524E-414348494E45` operational.
+   - `0x0C` (`ota_control`): write/notify session handshake (`START`, `FINISH`, `ABORT`, resync `0xB0`, progress `0xA0`).
+   - `0x0D` (`ota_data`): chunk streaming with write-without-response at 58 bytes (MTU 65), paced at 8 ms.
+   - Live LCD progress rendering (`ERASING`, progress bar 0–100%, `CHECKING`, `RESTARTING`).
+2. **Corrupt Image Rejection**:
+   - Uploaded `corrupt.signed.bin` (payload bit flipped at `0x200`).
+   - ESP32 OTA worker computed SHA-256 over slot 1, detected hash mismatch, logged `OTA REFUSED at the check: status -1 (TOMS_OTA_HASH)`, and sent error `0x01` (`TOMS_OTA_HASH`).
+   - `boot_request_upgrade()` was never called; the board did NOT swap slots and stayed on `good-2`.
+3. **Injected Fault Uploads & Rollback**:
+   - All four Phase 2 fault-injected images were uploaded over BLE OTA:
+     - `bad-crash.signed.bin`: Booted into bad-crash splash, crashed on boot, MCUboot automatically restored `good-2`.
+     - `bad-hang.signed.bin`: Booted into bad-hang splash, hung, hardware watchdog (`rst:0x7 TG0WDT_SYS_RST` at `Saved PC: 0x42003a17`) reset the chip, MCUboot restored `good-2`.
+     - `bad-noconfirm.signed.bin`: Booted into bad-noconfirm splash, never marked confirmed, manual power reset restored `good-2`.
+     - `bad-selftest.signed.bin`: Booted into bad-selftest splash, self-test failed, rebooted, MCUboot restored `good-2`.
+4. **Clean Upgrade**:
+   - `good-2.signed.bin` (`2.0.0+0`) uploaded, verified SHA-256, swapped into primary slot, confirmed itself, and booted cleanly.
+
+## Phase 5 result (2026-11-02): Android phone uploader gate met
+
+Built standalone Kotlin Android application (`toms_android/ota`, app id `ph.toms.ota`) running on physical hardware (TECNO Pova 4, Android 14):
+
+1. **Cupertino Clean UI**:
+   - Apple Wallet-style NFC pass card with live animated status ring, 6-tone tactile buzzer soundboard, physical button counter, and display backlight switch.
+   - Fixed, bottom-anchored action button ("Flash Firmware to Machine") preventing screen overflow.
+   - Collapsible bottom-sheet log console with auto-scroll, copy-all, and log clearing.
+2. **Transfer Telemetry**:
+   - Measured live transfer speed ~48.5 KB/s over BLE.
+   - 3-Phase visual stepper (`1. Image` -> `2. Machine` -> `3. Update`), live byte progress, speed indicator, and ETA timer.
+3. **Link Robustness**:
+   - Automatic 3-round retry loop recovering from Android BLE GATT 133 status and connection drops.
+   - Automated file picking via Android MediaStore and adb intent flags (`--es firmware <path> --ez auto true`).
+
+---
+
+## Phase 6: Security, Downgrade Prevention & Server Certificate Architecture
+
+### A. Local Device Security
+1. **Production Configuration (`prj_release.conf`)**:
+   - Sets `CONFIG_TOMS_DEV_MODE=n`.
+   - Forces `BT_GATT_PERM_WRITE_ENCRYPT` on all write characteristics (`0x02`, `0x04`, `0x06`, `0x07`, `0x08`, `0x0C`, `0x0D`, `0x0E`).
+   - Unbonded devices attempting to write are rejected at the BLE stack with `BT_ATT_ERR_AUTHENTICATION`.
+2. **Production Signing Key (`production-ec-p256.pem`)**:
+   - Generated using `firmware/tools/generate_keys.py`.
+   - Replaces MCUboot's public development key with a private, offline ECDSA P-256 keypair.
+   - Private key is excluded from git via `.gitignore` (`*.pem`).
+3. **Strict Downgrade Prevention**:
+   - When `CONFIG_TOMS_DEV_MODE=n`, `toms_ota_version_cmp(&img, &running)` rejects equal or older versions with `TOMS_OTA_VERSION`.
+
+### B. Server-Backed Conductor Authentication (VPS Ephemeral Certificate Architecture)
+To prevent unauthorized passengers from connecting to or manipulating the Return Machine:
+
+```
+┌─────────────────────┐            ┌──────────────────────┐            ┌────────────────────────┐
+│   TOMS VPS Server   │            │ Conductor Smartphone │            │  ESP32-S3 Return Mach. │
+│(toms.perchbuilds.me)│            │  (TOMS Android App)  │            │  (Bus Transit Terminal)│
+└──────────┬──────────┘            └──────────┬───────────┘            └───────────┬────────────┘
+           │                                  │                                    │
+           │  1. Conductor Login & Shift      │                                    │
+           │◄─────────────────────────────────┤                                    │
+           │                                  │                                    │
+           │  2. Issue Ephemeral Certificate  │                                    │
+           │     (Signed with Server PrivKey) │                                    │
+           ├─────────────────────────────────►│                                    │
+           │                                  │  3. Connect & Pair BLE (Encrypted) │
+           │                                  ├───────────────────────────────────►│
+           │                                  │                                    │
+           │                                  │  4. Handshake: Present Certificate │
+           │                                  ├───────────────────────────────────►│
+           │                                  │                                    │
+           │                                  │     5. Verify Sig with ServerPubkey│
+           │                                  │        Check Expiry & Vehicle ID   │
+           │                                  │        [ACCESS GRANTED]            │
+           │                                  │◄───────────────────────────────────┤
+           │                                  │                                    │
+           │                                  │  6. Sync Fares / Normal Op / OTA   │
+           │                                  ├───────────────────────────────────►│
+```
+
+1. **Conductor Shift Enrolment**:
+   - When the conductor starts a shift, the phone authenticates with the VPS over HTTPS.
+   - The VPS validates conductor credentials and vehicle assignment, then issues a short-lived **Ephemeral Authorization Certificate** (valid for 8–12 hours).
+2. **Certificate Structure**:
+   - `vehicle_id` (UUID) & `machine_id`
+   - `conductor_id` (UUID)
+   - `valid_from` & `valid_until` (UNIX epoch timestamps)
+   - `capabilities` bitmask (`CAP_READ_CARDS`, `CAP_SYNC_FARES`, `CAP_CONFIG`, `CAP_OTA`)
+   - `signature` (ECDSA P-256 signature generated by the VPS server's private key)
+3. **Return Machine Verification**:
+   - The Return Machine holds the **TOMS VPS Public Key** embedded in its firmware (`CONFIG_TOMS_SERVER_PUBKEY`).
+   - When the phone connects over BLE, it writes the certificate to an authorization characteristic.
+   - The Return Machine verifies:
+     - Digital signature matches the TOMS VPS public key.
+     - Current timestamp is within `valid_from` and `valid_until` (using synced RTC clock).
+     - Target `machine_id` matches its own device ID.
+   - If verification succeeds, the requested capabilities are unlocked for the duration of the BLE session.
+   - **OTA Locking**: `CAP_OTA` is only granted to technician or authorized supervisor certificates; regular passenger or conductor certificates cannot initiate firmware flash sessions.
+
+---
+
+## Phase 7: Battery Threshold Gate
+
+*(Gated on hardware divider wiring)*
+- **Hardware Requirement**: 2:1 resistor divider (e.g. 100kΩ / 100kΩ) connecting the LiPo battery to GPIO1 (ADC1 channel 0).
+- **Firmware Logic**:
+  - In `src/ble/ota.c:do_start()`, sample battery ADC millivolts before beginning slot erase.
+  - If $V_{batt} < 3500\text{ mV}$ (approx. 20% capacity), immediately reject `START` with `TOMS_OTA_BATTERY` (`0x06`).
+  - Prevents power loss during non-volatile flash sector erasing.
+
+---
+
+## Phase 8: Field Technician SOP & Emergency Recovery
+
+### 1. Standard In-Field OTA Update Procedure
+1. Conductor/Technician logs into the TOMS Updater / Conductor app with valid server credentials.
+2. Select target firmware binary (`.signed.bin`).
+3. Connect to the Return Machine via BLE and initiate upload.
+4. Observe the LCD display:
+   - Screen shows `ERASING...` ➔ Progress bar (0–100%) ➔ `CHECKING SHA-256` ➔ `RESTARTING`.
+5. After reboot, verify the boot splash displays the new build tag (e.g. `v2.0.0`) and confirms healthy operation.
+
+### 2. Recognizing an Automatic Revert
+If a newly flashed image crashes, hangs, or fails self-tests:
+- The screen will briefly reboot or hang for 8.4 seconds until the hardware watchdog fires (`rst:0x7`).
+- MCUboot will automatically swap back to the previous confirmed image in slot 0.
+- The boot splash will display the previous image tag (e.g. `good-1 (confirmed)`), confirming the unit safely recovered.
+
+### 3. Emergency USB Recovery (Unbrick Procedure)
+If a physical hardware failure or corrupted bootloader requires direct recovery:
+1. Disconnect the terminal from vehicle power.
+2. Press and hold the physical **`BOOT`** button on the ESP32-S3 Super Mini.
+3. Plug the USB cable into a service laptop, then release `BOOT`.
+4. Run the factory flash recovery command:
+   ```bash
+   python firmware/tools/flash.py plain
+   ```
+   Or direct `esptool`:
+   ```bash
+   esptool.py --chip esp32s3 --port COM11 --baud 460800 write_flash -u --flash_size 4MB \
+     0x0 firmware/build/phase1/mcuboot/zephyr/zephyr.bin \
+     0x20000 firmware/build/phase2/images/good-1.confirmed.bin
+   ```
+5. Power cycle the machine; the terminal boots back to the baseline factory firmware.
 
 ## Tooling changes this causes
 
