@@ -524,11 +524,8 @@ static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 
 static void auth_passkey_confirm(struct bt_conn *conn, unsigned int passkey)
 {
-	LOG_INF("pairing passkey %06u: wait for the button, then confirm", passkey);
-	/* The user compares the LCD number with the phone's and presses the
-	 * button; without a press we confirm anyway after 10 s so unattended
-	 * pairing still works. */
-	ota_ui_pair_wait_confirm(10 * 1000u);
+	LOG_INF("pairing passkey %06u: displaying on LCD and confirming", passkey);
+	ota_ui_show_pair(passkey);
 	bt_conn_auth_passkey_confirm(conn);
 }
 
