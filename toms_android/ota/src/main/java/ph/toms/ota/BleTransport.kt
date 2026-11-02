@@ -187,8 +187,9 @@ class BleTransport private constructor(
         }
         log("chars found: $charHexList (diag: ${if (diagChar != null) "YES" else "MISSING"})")
 
-        log("requesting MTU 65 (the machine's maximum)")
-        gatt!!.requestMtu(65)
+        gatt!!.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        log("requesting high-speed MTU 247")
+        gatt!!.requestMtu(247)
         withTimeout(timeoutMs) { mtuDone.await() }
 
         subscribe(control!!)

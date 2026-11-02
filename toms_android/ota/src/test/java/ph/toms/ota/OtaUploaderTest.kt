@@ -153,7 +153,7 @@ class OtaUploaderTest {
     }
 
     @Test fun usesTheNegotiatedMtuAndNeverMore() = runTest {
-        for ((mtu, expect) in listOf(65 to 58, 247 to 58, 23 to 16)) {
+        for ((mtu, expect) in listOf(65 to 58, 247 to 240, 23 to 16)) {
             val m = FakeMachine(); val t = FakeTransport(m, mtu = mtu)
             uploader({ t }).upload(makeImage(2000)) { _, _ -> }
             assertEquals("mtu $mtu", expect, t.maxPayload)

@@ -19,7 +19,7 @@ LOG_MODULE_REGISTER(ota, LOG_LEVEL_INF);
 #define SLOT1_ID FIXED_PARTITION_ID(slot1_partition)
 #define SECTOR 4096u
 #define PROGRESS_EVERY_CHUNKS 32u
-#define QUEUE_DEPTH 40
+#define QUEUE_DEPTH 24u
 
 enum item_type { ITEM_START, ITEM_CHUNK, ITEM_FINISH };
 
@@ -237,6 +237,8 @@ static void do_finish(void)
 		k_mutex_unlock(&lock);
 		LOG_ERR("OTA REFUSED at the check: status %d", st);
 		send(TOMS_OTA_OP_FINISH | TOMS_OTA_REPLY_FLAG, (uint8_t)st, 0);
+		k_msleep(2000);
+		ota_ui_clear_update();
 		return;
 	}
 

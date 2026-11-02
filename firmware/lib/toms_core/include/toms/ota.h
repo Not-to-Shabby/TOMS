@@ -38,8 +38,8 @@
 #define TOMS_OTA_START_LEN 37
 #define TOMS_OTA_REPLY_LEN 12
 #define TOMS_OTA_CHUNK_HDR 4
-/* One write holds at most 62 bytes (MTU 65 - 3 byte ATT header), 4 of them are the offset. */
-#define TOMS_OTA_CHUNK_MAX 58
+/* Standard BLE MTU 247 yields 244 bytes ATT payload, minus 4-byte offset header = 240 bytes max chunk. */
+#define TOMS_OTA_CHUNK_MAX 240
 /* The MCUboot trailer lives at the end of the slot, so the image may not reach it. */
 #define TOMS_OTA_TRAILER_RESERVE (16u * 1024u)
 

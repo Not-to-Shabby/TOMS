@@ -24,7 +24,7 @@ object Ota {
     const val EVENT_RESYNC = 0xB0
     const val EVENT_FAILED = 0xF0
 
-    const val CHUNK_MAX = 58
+    const val CHUNK_MAX = 240
     const val CHUNK_HEADER = 4
     const val ATT_HEADER = 3
     const val REPLY_LEN = 12

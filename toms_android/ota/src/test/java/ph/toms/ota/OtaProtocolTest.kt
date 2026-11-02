@@ -36,14 +36,14 @@ class OtaProtocolTest {
     @Test fun chunkFrameMatchesFirmwareLayout() {
         val f = Ota.chunkFrame(10000, byteArrayOf(0xAA.toByte()))
         assertArrayEquals(byteArrayOf(0x10, 0x27, 0, 0, 0xAA.toByte()), f)
-        try { Ota.chunkFrame(0, ByteArray(59)); fail() } catch (_: IllegalArgumentException) {}
+        try { Ota.chunkFrame(0, ByteArray(241)); fail() } catch (_: IllegalArgumentException) {}
         try { Ota.chunkFrame(0, ByteArray(0)); fail() } catch (_: IllegalArgumentException) {}
-        assertEquals(62, Ota.chunkFrame(0, ByteArray(58)).size)
+        assertEquals(244, Ota.chunkFrame(0, ByteArray(240)).size)
     }
 
     @Test fun chunkSizeFollowsMtuButNeverExceedsTheMachineLimit() {
         assertEquals(58, Ota.chunkSizeFor(65))
-        assertEquals(58, Ota.chunkSizeFor(517))
+        assertEquals(240, Ota.chunkSizeFor(517))
         assertEquals(16, Ota.chunkSizeFor(23))
         assertEquals(1, Ota.chunkSizeFor(5))
     }
