@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../lib/api';
-import CardDesigner from './CardDesigner';
+import CardDesigner, { isValidBaseUrl } from './CardDesigner';
 
 vi.mock('../lib/cardRender', async (orig) => {
   const real = await orig<typeof import('../lib/cardRender')>();
@@ -236,5 +236,30 @@ describe('CardDesigner snapping while dragging', () => {
     drag(box, { x: 314, y: 100 }, { x: 264, y: 100 }); // 50 px to the left, away from every line
     expect(screen.queryAllByTestId('snap-guide')).toHaveLength(0);
     expect(parseFloat(box.style.left)).toBeGreaterThan(0);
+  });
+
+  it('validates QR link base URL override: accepts https and rejects insecure or invalid protocols', async () => {
+    expect(isValidBaseUrl('')).toBe(true);
+    expect(isValidBaseUrl('   ')).toBe(true);
+    expect(isValidBaseUrl('https://toms.perchbuilds.me')).toBe(true);
+    expect(isValidBaseUrl('https://toms.example.com:8443')).toBe(true);
+    expect(isValidBaseUrl('http://insecure.example.com')).toBe(false);
+    expect(isValidBaseUrl('javascript:alert(1)')).toBe(false);
+    expect(isValidBaseUrl('ftp://server.example')).toBe(false);
+    expect(isValidBaseUrl('not-a-url')).toBe(false);
+  });
+
+  it('shows an alert and disables download buttons when an invalid QR address is entered', async () => {
+    renderPage();
+    const input = screen.getByLabelText('QR link address');
+    fireEvent.change(input, { target: { value: 'http://insecure.example.com' } });
+
+    expect(await screen.findByText(/The QR link address must start with https:\/\/ and be a valid web address/)).toBeInTheDocument();
+    const downloadZip = screen.getByRole('button', { name: /Download ZIP/ });
+    expect(downloadZip).toBeDisabled();
+
+    // Fixing to valid https clears the alert and enables the action
+    fireEvent.change(input, { target: { value: 'https://secure.example.com' } });
+    expect(screen.queryByText(/The QR link address must start with https:\/\//)).not.toBeInTheDocument();
   });
 });

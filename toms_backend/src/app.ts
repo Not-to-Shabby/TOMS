@@ -364,41 +364,6 @@ export function createApp({
     res.json({ status: 'success' });
   });
 
-  // Legacy per-route stop list, kept because the route builder still calls it.
-  app.get('/api/routes/:id/stops', admin, async (req, res) => {
-    const routeId = parse(id, req.params.id, res);
-    if (!routeId) return;
-    const { rows } = await pool.query(
-      'SELECT id, name, lat, lon, radius_m FROM route_stops WHERE route_id = $1 ORDER BY stop_order',
-      [routeId],
-    );
-    res.json(rows);
-  });
-
-  app.post('/api/routes/:id/stops', admin, async (req, res) => {
-    const routeId = parse(id, req.params.id, res);
-    const stops = parse(z.array(stopBody).max(500), req.body, res);
-    if (!routeId || !stops) return;
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM route_stops WHERE route_id = $1', [routeId]);
-      for (const [index, s] of stops.entries()) {
-        await client.query(
-          'INSERT INTO route_stops (route_id, name, lat, lon, stop_order, radius_m) VALUES ($1,$2,$3,$4,$5,$6)',
-          [routeId, s.name, s.lat, s.lon, index, s.radius_m ?? 100],
-        );
-      }
-      await client.query('COMMIT');
-      res.json({ status: 'success', message: 'Route stops updated successfully' });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
-  });
-
   // --- Schedules ----------------------------------------------------------------------------
 
   app.get('/api/routes/:id/schedules', admin, async (req, res) => {

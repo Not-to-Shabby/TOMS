@@ -1,6 +1,7 @@
 server {
   ${SERVER_LISTEN}
   server_name _;
+  server_tokens off;
 
   root /usr/share/nginx/html;
   index index.html;
