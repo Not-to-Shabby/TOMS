@@ -45,6 +45,9 @@ data class OtaUiState(
     // Diagnostic Tools state
     val isDiagConnected: Boolean = false,
     val diagStatus: String = "Not connected",
+    val isNfcOnline: Boolean = false,
+    val nfcHealthStatus: String = "CHECKING...",
+    val machineUptimeS: Long = 0,
     val lastCardUid: String? = null,
     val lastCardLen: Int = 0,
     val lastCardType: String? = null,
@@ -360,6 +363,22 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                 }
+
+                // Heartbeat & NFC Sensor Health Listener
+                launch {
+                    for (hb in transport.heartbeatEvents) {
+                        val nfcOk = hb.nfcStatus == 0
+                        val statusText = if (nfcOk) "READY" else "ERROR (code ${hb.nfcStatus})"
+                        say("HEARTBEAT: NFC $statusText, uptime ${hb.uptimeS}s, batt ${hb.batteryMv}mV")
+                        _state.update {
+                            it.copy(
+                                isNfcOnline = nfcOk,
+                                nfcHealthStatus = statusText,
+                                machineUptimeS = hb.uptimeS
+                            )
+                        }
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -373,7 +392,7 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
         diagJob?.cancel()
         diagTransport?.close()
         diagTransport = null
-        _state.update { it.copy(isDiagConnected = false, diagStatus = "Disconnected") }
+        _state.update { it.copy(isDiagConnected = false, diagStatus = "Disconnected", isNfcOnline = false, nfcHealthStatus = "CHECKING...") }
         say("diag: disconnected")
     }
 

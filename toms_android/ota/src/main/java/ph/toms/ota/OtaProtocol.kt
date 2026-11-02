@@ -38,6 +38,7 @@ object Ota {
     fun uuid(suffix: Int): UUID = UUID.fromString(BASE_HI + "%02x".format(suffix))
     val SERVICE: UUID = uuid(0x45)
     val CARD_READ: UUID = uuid(0x01)
+    val HEARTBEAT: UUID = uuid(0x05)
     val SIM_CARD: UUID = uuid(0x0B)
     val CONTROL: UUID = uuid(0x0C)
     val DATA: UUID = uuid(0x0D)
@@ -65,6 +66,19 @@ object Ota {
         val atype = if (bb.hasRemaining()) bb.get().toInt() and 0xFF else 0
         val hex = uidBytes.joinToString(" ") { "%02X".format(it) }
         return CardReadEvent(hex, uidLen, atype, bootMs)
+    }
+
+    fun parseHeartbeat(b: ByteArray): HeartbeatEvent? {
+        if (b.size < 15) return null
+        val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+        val uptimeS = bb.int.toLong() and 0xFFFFFFFFL
+        val batteryPct = bb.get().toInt() and 0xFF
+        val batteryMv = bb.short.toInt() and 0xFFFF
+        val nfcStatus = bb.get().toInt() and 0xFF
+        val stateVersion = bb.int.toLong() and 0xFFFFFFFFL
+        val bufferedReads = bb.short.toInt() and 0xFFFF
+        val resetReason = bb.get().toInt() and 0xFF
+        return HeartbeatEvent(uptimeS, batteryPct, batteryMv, nfcStatus, stateVersion, bufferedReads, resetReason)
     }
 
     fun parseDiagEvent(b: ByteArray): DiagEvent {
@@ -171,6 +185,16 @@ sealed interface DiagEvent {
     data class Ack(val cmd: Int, val arg: Int) : DiagEvent
     data class Unknown(val raw: ByteArray) : DiagEvent
 }
+
+data class HeartbeatEvent(
+    val uptimeS: Long,
+    val batteryPct: Int,
+    val batteryMv: Int,
+    val nfcStatus: Int, // 0 = OK, 3 = Init failed
+    val stateVersion: Long,
+    val bufferedReads: Int,
+    val resetReason: Int
+)
 
 /** A firmware file that passed the checks the phone can do before sending anything. */
 class OtaImage(val bytes: ByteArray, val version: Version) {

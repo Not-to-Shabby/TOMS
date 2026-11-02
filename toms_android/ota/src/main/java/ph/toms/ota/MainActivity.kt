@@ -565,13 +565,23 @@ class MainActivity : ComponentActivity() {
                                 tint = if (cardDetected) CupertinoGreen else CupertinoSlate,
                                 modifier = Modifier.size(24.dp)
                             )
-                            Text(
-                                text = "NFC PASS READER",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 12.sp,
-                                letterSpacing = 1.sp,
-                                color = if (cardDetected) CupertinoGreen else CupertinoSlate
-                            )
+                            Column {
+                                Text(
+                                    text = "NFC PASS READER",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 12.sp,
+                                    letterSpacing = 1.sp,
+                                    color = if (cardDetected) CupertinoGreen else CupertinoSlate
+                                )
+                                if (s.isDiagConnected) {
+                                    Text(
+                                        text = if (s.isNfcOnline) "PN532 READY" else "PN532 ${s.nfcHealthStatus}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (s.isNfcOnline) CupertinoGreen else CupertinoOrange
+                                    )
+                                }
+                            }
                         }
 
                         // Tap Counter Pill

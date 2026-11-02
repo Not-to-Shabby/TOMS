@@ -51,8 +51,8 @@ sign() {
 # 1. Base release image (2.0.0, DEV_MODE=n)
 build good-release 2.0.0 release-2.0.0 n
 
-# 2. Upgrade image (2.1.0, DEV_MODE=n)
-build test-upgrade 2.1.0 upgrade-2.1.0 n
+# 2. Upgrade image with MTU 247 high-speed BLE and LCD refusal fix (2.3.0, DEV_MODE=n)
+build test-upgrade 2.3.0 speed-2.3.0 n
 
 # Sign images
 echo "=== Signing Phase 6 test images ==="
@@ -63,11 +63,11 @@ cp "$ROOT/good-release/mcuboot/zephyr/zephyr.bin" "$IMG/mcuboot.bin"
 sign good-release 2.0.0 "$KEY_DEV" good-release.signed.bin
 sign good-release 2.0.0 "$KEY_DEV" good-release.confirmed.bin --confirm
 
-# test-upgrade.signed.bin (version 2.1.0, valid upgrade)
-sign test-upgrade 2.1.0 "$KEY_DEV" test-upgrade.signed.bin
+# test-upgrade.signed.bin (version 2.3.0, valid high-speed upgrade)
+sign test-upgrade 2.3.0 "$KEY_DEV" test-upgrade.signed.bin
 
-# test-wrongkey.signed.bin (version 2.2.0 > 2.1.0 so version check passes; signed with production key so dev bootloader rejects)
-sign test-upgrade 2.2.0 "$KEY_PROD" test-wrongkey.signed.bin
+# test-wrongkey.signed.bin (version 2.4.0 > 2.3.0; signed with production key so dev bootloader rejects)
+sign test-upgrade 2.4.0 "$KEY_PROD" test-wrongkey.signed.bin
 
 # test-downgrade.signed.bin (version 1.0.0, to test downgrade rejection on good-release)
 # We can use the good-1 raw binary or build a downgrade 1.0.0 binary

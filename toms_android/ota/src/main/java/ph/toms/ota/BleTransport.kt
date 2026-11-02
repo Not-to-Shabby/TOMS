@@ -54,6 +54,7 @@ class BleTransport private constructor(
 
     val cardReadEvents = Channel<CardReadEvent>(Channel.UNLIMITED)
     val diagEvents = Channel<DiagEvent>(Channel.UNLIMITED)
+    val heartbeatEvents = Channel<HeartbeatEvent>(Channel.UNLIMITED)
 
     @Volatile
     override var mtu: Int = 23
@@ -140,6 +141,7 @@ class BleTransport private constructor(
             Ota.CONTROL -> Ota.parseEvent(value)?.let { eventChannel.trySend(it) } ?: log("ignored a ${value.size}-byte notification")
             Ota.CARD_READ -> Ota.parseCardRead(value)?.let { cardReadEvents.trySend(it) }
             Ota.DIAG -> diagEvents.trySend(Ota.parseDiagEvent(value))
+            Ota.HEARTBEAT -> Ota.parseHeartbeat(value)?.let { heartbeatEvents.trySend(it) }
         }
     }
 
@@ -195,6 +197,7 @@ class BleTransport private constructor(
         subscribe(control!!)
         diagChar?.let { runCatching { subscribe(it) } }
         cardReadChar?.let { runCatching { subscribe(it) } }
+        svc.getCharacteristic(Ota.HEARTBEAT)?.let { runCatching { subscribe(it) } }
         log("subscribed to channels")
     }
 
@@ -263,6 +266,7 @@ class BleTransport private constructor(
         eventChannel.close()
         cardReadEvents.close()
         diagEvents.close()
+        heartbeatEvents.close()
     }
 
     companion object {
