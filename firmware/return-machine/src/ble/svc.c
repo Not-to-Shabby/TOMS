@@ -3,6 +3,7 @@
 #include "ota_ui.h"
 #include "buzzer.h"
 #include "display_test.h"
+#include "pn532.h"
 
 #include <errno.h>
 #include <string.h>
@@ -368,12 +369,19 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	case 0x02: /* Screen test: next page */
 		display_test_next();
 		break;
-	case 0x03: /* Screen test: toggle backlight */
-		display_test_backlight_toggle();
-		break;
-	default:
-		break;
-	}
+		case 0x03: /* Screen test: toggle backlight */
+			display_test_backlight_toggle();
+			break;
+		case 0x04: { /* NFC health test */
+			uint8_t ver[4] = {0};
+			int nfc_rc = pn532_get_firmware_version(ver);
+			uint8_t ack[6] = { 0x84, (uint8_t)(nfc_rc == 0 ? 0 : 3), ver[0], ver[1], ver[2], ver[3] };
+			(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+			return 0;
+		}
+		default:
+			break;
+		}
 
 	uint8_t ack[4] = { 0x80 | cmd, arg, 0x00, 0x00 };
 	(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));

@@ -47,7 +47,10 @@ data class OtaUiState(
     val diagStatus: String = "Not connected",
     val isNfcOnline: Boolean = false,
     val nfcHealthStatus: String = "CHECKING...",
+    val nfcDetails: String = "",
     val machineUptimeS: Long = 0,
+    val batteryPct: Int = 0xFF,
+    val batteryMv: Int = 0,
     val lastCardUid: String? = null,
     val lastCardLen: Int = 0,
     val lastCardType: String? = null,
@@ -358,6 +361,16 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                                     )
                                 }
                             }
+                            is DiagEvent.NfcHealth -> {
+                                say("NFC HEALTH: online=${ev.isOnline} (${ev.versionStr})")
+                                _state.update {
+                                    it.copy(
+                                        isNfcOnline = ev.isOnline,
+                                        nfcHealthStatus = if (ev.isOnline) "READY" else "ERROR",
+                                        nfcDetails = if (ev.isOnline) "PN532 ${ev.versionStr} Online" else "PN532 Communication Error"
+                                    )
+                                }
+                            }
                             is DiagEvent.Ack -> say("diag ack: cmd=0x%02X arg=0x%02X".format(ev.cmd, ev.arg))
                             is DiagEvent.Unknown -> Unit
                         }
@@ -374,7 +387,9 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                             it.copy(
                                 isNfcOnline = nfcOk,
                                 nfcHealthStatus = statusText,
-                                machineUptimeS = hb.uptimeS
+                                machineUptimeS = hb.uptimeS,
+                                batteryPct = hb.batteryPct,
+                                batteryMv = hb.batteryMv
                             )
                         }
                     }
@@ -423,6 +438,14 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 say("diag: backlight command failed (not connected?)")
             }
+        }
+    }
+
+    fun testNfcHardware() {
+        viewModelScope.launch {
+            say("diag: testing PN532 NFC hardware...")
+            val ok = diagTransport?.writeDiag(0x04) ?: false
+            if (!ok) say("diag: NFC command failed (not connected?)")
         }
     }
 

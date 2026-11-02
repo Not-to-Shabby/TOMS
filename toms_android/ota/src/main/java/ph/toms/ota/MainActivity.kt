@@ -297,11 +297,28 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (machine != null) {
-                    MetadataBadge(
-                        label = "${machine.rssi} dBm",
-                        color = if (isConnected) CupertinoGreen else CupertinoBlue
-                    )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (machine != null && isConnected) {
+                        val battText = if (s.batteryPct in 0..100 && s.batteryMv > 0) {
+                            "🔋 ${s.batteryPct}%"
+                        } else {
+                            "⚡ USB 5V"
+                        }
+                        MetadataBadge(
+                            label = battText,
+                            color = CupertinoGreen
+                        )
+                    }
+
+                    if (machine != null) {
+                        MetadataBadge(
+                            label = "${machine.rssi} dBm",
+                            color = if (isConnected) CupertinoGreen else CupertinoBlue
+                        )
+                    }
                 }
             }
         }
@@ -688,43 +705,68 @@ class MainActivity : ComponentActivity() {
                             }
 
                             Column {
+                                val nfcTitle = when {
+                                    !s.isDiagConnected -> "Connect to inspect NFC"
+                                    s.isNfcOnline -> "NFC Antenna Ready (Online)"
+                                    else -> "PN532 Reader Offline"
+                                }
+                                val nfcSubtitle = when {
+                                    !s.isDiagConnected -> "Hold transit card near PN532 coil"
+                                    s.isNfcOnline -> "PN532 active on I2C 0x24 • Ready for card taps"
+                                    else -> "I2C error: Check jumper wires (SDA=4, SCL=5)"
+                                }
                                 Text(
-                                    text = "Ready to Read Card",
+                                    text = nfcTitle,
                                     fontWeight = FontWeight.SemiBold,
-                                    fontSize = 15.sp,
-                                    color = Color.White
+                                    fontSize = 14.sp,
+                                    color = if (s.isDiagConnected && !s.isNfcOnline) CupertinoOrange else Color.White
                                 )
                                 Text(
-                                    text = "Hold transit card near PN532 coil",
-                                    fontSize = 12.sp,
+                                    text = nfcSubtitle,
+                                    fontSize = 11.sp,
                                     color = CupertinoSlate
                                 )
                             }
                         }
                     }
 
-                    // Simulation Action Pills
+                    // Simulation & Test Action Pills
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        Button(
+                            onClick = { vm.testNfcHardware() },
+                            modifier = Modifier.weight(1.2f).height(34.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = CardSubtle,
+                                contentColor = CupertinoCyan
+                            ),
+                            border = BorderStroke(1.dp, CardBorder),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                        ) {
+                            Icon(Icons.Rounded.Sensors, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Ping PN532", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
                         OutlinedButton(
                             onClick = { vm.simulateCardTap("04 08 04 62") },
                             modifier = Modifier.weight(1f).height(34.dp),
                             shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                             border = BorderStroke(1.dp, CardBorder)
                         ) {
-                            Text("Simulate Type 2", fontSize = 11.sp, color = Color.White)
+                            Text("Sim Type 2", fontSize = 11.sp, color = Color.White)
                         }
                         OutlinedButton(
                             onClick = { vm.simulateCardTap("04 62 BB B6 9E 5D 80") },
                             modifier = Modifier.weight(1f).height(34.dp),
                             shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                             border = BorderStroke(1.dp, CardBorder)
                         ) {
-                            Text("Simulate 7-byte", fontSize = 11.sp, color = Color.White)
+                            Text("Sim 7-byte", fontSize = 11.sp, color = Color.White)
                         }
                     }
 

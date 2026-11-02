@@ -89,6 +89,13 @@ object Ota {
                 val count = if (b.size >= 3) (b[1].toInt() and 0xFF) or ((b[2].toInt() and 0xFF) shl 8) else 0
                 DiagEvent.ButtonPress(count)
             }
+            0x84 -> {
+                val status = if (b.size >= 2) b[1].toInt() and 0xFF else 3
+                val ic = if (b.size >= 3) b[2].toInt() and 0xFF else 0
+                val verMajor = if (b.size >= 4) b[3].toInt() and 0xFF else 0
+                val verMinor = if (b.size >= 5) b[4].toInt() and 0xFF else 0
+                DiagEvent.NfcHealth(isOnline = (status == 0), versionStr = "IC 0x%02X v%d.%d".format(ic, verMajor, verMinor))
+            }
             else -> {
                 val arg = if (b.size >= 2) b[1].toInt() and 0xFF else 0
                 DiagEvent.Ack(op and 0x7F, arg)
@@ -182,6 +189,7 @@ data class CardReadEvent(
 
 sealed interface DiagEvent {
     data class ButtonPress(val count: Int) : DiagEvent
+    data class NfcHealth(val isOnline: Boolean, val versionStr: String) : DiagEvent
     data class Ack(val cmd: Int, val arg: Int) : DiagEvent
     data class Unknown(val raw: ByteArray) : DiagEvent
 }
