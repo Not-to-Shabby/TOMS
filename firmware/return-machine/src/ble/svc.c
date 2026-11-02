@@ -349,6 +349,9 @@ static int handle_sim_card(const uint8_t *data, uint16_t len)
 	return 0;
 }
 
+static const uint8_t TOMS_DIAG_MAGIC[5] = { 'T', 'O', 'M', 'S', '!' };
+static bool diag_authenticated;
+
 static int handle_diag(const uint8_t *data, uint16_t len)
 {
 	if (len < 1) {
@@ -356,6 +359,31 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	}
 	uint8_t cmd = data[0];
 	uint8_t arg = (len >= 2) ? data[1] : 0;
+
+	/* Command 0x00: Diagnostic Unlock with special security code ("TOMS!") */
+	if (cmd == 0x00) {
+		if (len >= 6 && memcmp(&data[1], TOMS_DIAG_MAGIC, sizeof(TOMS_DIAG_MAGIC)) == 0) {
+			diag_authenticated = true;
+			display_set_diag_mode(true);
+			LOG_INF("diag: session UNLOCKED with special diagnostic code");
+			uint8_t ack[4] = { 0x80, 0x00, 0x01, 0x00 };
+			(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+			return 0;
+		}
+		LOG_WRN("diag: invalid unlock key rejected");
+		uint8_t nack[4] = { 0x80, 0x00, 0x00, 0xFF };
+		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
+		return -EACCES;
+	}
+
+	/* Protected commands 0x01..0x04 require diagnostic session to be unlocked */
+	if (!diag_authenticated && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
+		LOG_WRN("diag: cmd 0x%02X rejected (diagnostic session locked)", cmd);
+		uint8_t nack[4] = { (uint8_t)(0x80 | cmd), 0x00, 0x00, 0xFF };
+		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
+		return -EACCES;
+	}
+
 	LOG_INF("diag cmd 0x%02X arg 0x%02X", cmd, arg);
 
 	if (diag_cb != NULL) {
@@ -369,19 +397,19 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	case 0x02: /* Screen test: next page */
 		display_test_next();
 		break;
-		case 0x03: /* Screen test: toggle backlight */
-			display_test_backlight_toggle();
-			break;
-		case 0x04: { /* NFC health test */
-			uint8_t ver[4] = {0};
-			int nfc_rc = pn532_get_firmware_version(ver);
-			uint8_t ack[6] = { 0x84, (uint8_t)(nfc_rc == 0 ? 0 : 3), ver[0], ver[1], ver[2], ver[3] };
-			(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
-			return 0;
-		}
-		default:
-			break;
-		}
+	case 0x03: /* Screen test: toggle backlight */
+		display_test_backlight_toggle();
+		break;
+	case 0x04: { /* NFC health test */
+		uint8_t ver[4] = {0};
+		int nfc_rc = pn532_get_firmware_version(ver);
+		uint8_t ack[6] = { 0x84, (uint8_t)(nfc_rc == 0 ? 0 : 3), ver[0], ver[1], ver[2], ver[3] };
+		(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+		return 0;
+	}
+	default:
+		break;
+	}
 
 	uint8_t ack[4] = { 0x80 | cmd, arg, 0x00, 0x00 };
 	(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
@@ -492,10 +520,12 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	card_notify = false;
 	check_notify = false;
 	hb_notify = false;
-		ack_notify = false;
-		ota_notify = false;
-		diag_notify = false;
-	}
+	ack_notify = false;
+	ota_notify = false;
+	diag_notify = false;
+	diag_authenticated = false;
+	display_set_diag_mode(false);
+}
 
 /* The connection object is free again: advertise for the next connection. */
 static void recycled(void)

@@ -72,8 +72,9 @@ sign test-upgrade 2.3.0 "$KEY_DEV" test-upgrade.signed.bin
 # test-wrongkey.signed.bin (version 2.4.0 > 2.3.0; signed with production key so dev bootloader rejects)
 sign test-upgrade 2.4.0 "$KEY_PROD" test-wrongkey.signed.bin
 
-# firmware-v2.5.0.signed.bin (version 2.5.0, high-speed + PN532 ping + battery)
+# firmware-v2.5.0.signed.bin (version 2.5.0, high-speed + PN532 ping + battery + Passenger UI)
 sign release-v2.5.0 2.5.0 "$KEY_DEV" firmware-v2.5.0.signed.bin
+sign release-v2.5.0 2.5.0 "$KEY_DEV" firmware-v2.5.0.confirmed.bin --confirm
 
 # test-downgrade.signed.bin (version 1.0.0, to test downgrade rejection on good-release)
 # We can use the good-1 raw binary or build a downgrade 1.0.0 binary

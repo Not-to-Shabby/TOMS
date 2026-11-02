@@ -55,6 +55,8 @@ enum page {
 #define REQ_NEXT BIT(0)
 #define REQ_BACKLIGHT BIT(1)
 #define REQ_CARD BIT(2)
+#define REQ_DIAG_ON BIT(3)
+#define REQ_DIAG_OFF BIT(4)
 
 #define DISPLAY_STACK 4096
 #define DISPLAY_PRIO 8
@@ -77,6 +79,7 @@ static uint8_t card_uid_atype;
 static uint8_t card_verdict = 0xFF;
 static bool diag_nfc_ready = true;
 static uint16_t diag_btn_count;
+static bool diag_mode_active;
 
 static int backlight_level = IS_ENABLED(CONFIG_TOMS_BACKLIGHT_ACTIVE_HIGH) ? 1 : 0;
 /* Boots on the live Bluetooth page; the button walks the other pages. */
@@ -618,7 +621,7 @@ static void display_loop(void *a, void *b, void *c)
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
-	enum page page = IS_ENABLED(CONFIG_TOMS_UI_PASSENGER) ? PAGE_PASSENGER_IDLE : PAGE_BLE;
+	enum page page = PAGE_PASSENGER_IDLE;
 	enum page shown = PAGE_COUNT;
 	bool redraw = true;
 	uint32_t frames = 0;
@@ -664,63 +667,88 @@ static void display_loop(void *a, void *b, void *c)
 			}
 		}
 
-		/* Never wait longer than 500 ms: the watchdog treats a silent display thread as hung.
-		 * The Bluetooth page redraws every second, the others advance on their own timer. */
-			int rc = k_sem_take(&wake, K_MSEC(500));
-			if (rc == -EAGAIN) {
-				idle_ms += 500;
-				if (IS_ENABLED(CONFIG_TOMS_UI_PASSENGER)) {
-					if (page == PAGE_PASSENGER_IDLE) {
-						if (idle_ms >= 1000) {
-							idle_ms = 0;
-							redraw = true; /* update clock / connection status */
-						}
-					} else if (page == PAGE_PASSENGER_VERDICT) {
-						if (idle_ms >= 2500) {
-							idle_ms = 0;
-							page = PAGE_PASSENGER_IDLE;
-							redraw = true;
-						}
-					}
-				} else {
-					if (page == PAGE_BLE || page == PAGE_DIAG) {
-						if (idle_ms >= 1000) {
-							idle_ms = 0;
-							redraw = true;
-						}
-					} else if (page == PAGE_CARD) {
-						if (idle_ms >= 4000) {
-							idle_ms = 0;
-							auto_advance = true;
-							page = PAGE_BLE;
-							redraw = true;
-						}
-					} else if (auto_advance && idle_ms >= AUTO_ADVANCE_S * 1000) {
+		/* Never wait longer than 500 ms: the watchdog treats a silent display thread as hung. */
+		int rc = k_sem_take(&wake, K_MSEC(500));
+		if (rc == -EAGAIN) {
+			idle_ms += 500;
+			if (!diag_mode_active) {
+				if (page == PAGE_PASSENGER_IDLE) {
+					if (idle_ms >= 1000) {
 						idle_ms = 0;
-						page = (page + 1) % PAGE_COUNT;
+						redraw = true; /* update clock / connection status */
+					}
+				} else if (page == PAGE_PASSENGER_VERDICT) {
+					if (idle_ms >= 2500) {
+						idle_ms = 0;
+						page = PAGE_PASSENGER_IDLE;
 						redraw = true;
 					}
 				}
-				continue;
+			} else {
+				/* In diagnostic mode: auto-revert to passenger idle after 20s of inactivity */
+				if (idle_ms >= 20000) {
+					LOG_INF("display: diag mode timeout -> reverting to passenger idle");
+					diag_mode_active = false;
+					idle_ms = 0;
+					page = PAGE_PASSENGER_IDLE;
+					redraw = true;
+				} else if (page == PAGE_BLE || page == PAGE_DIAG) {
+					if (idle_ms % 1000 == 0) {
+						redraw = true;
+					}
+				} else if (page == PAGE_CARD) {
+					if (idle_ms >= 4000) {
+						idle_ms = 0;
+						page = PAGE_DIAG;
+						redraw = true;
+					}
+				} else if (page == PAGE_PASSENGER_VERDICT) {
+					if (idle_ms >= 2500) {
+						idle_ms = 0;
+						page = PAGE_DIAG;
+						redraw = true;
+					}
+				}
 			}
-			idle_ms = 0;
+			continue;
+		}
+		idle_ms = 0;
 
-			uint32_t req = (uint32_t)atomic_set(&requests, 0);
-			if (req & REQ_BACKLIGHT) {
-				backlight_level = !backlight_level;
-				apply_backlight();
-				redraw = true;
-			}
-			if (req & REQ_NEXT) {
+		uint32_t req = (uint32_t)atomic_set(&requests, 0);
+		if (req & REQ_DIAG_ON) {
+			diag_mode_active = true;
+			idle_ms = 0;
+			page = PAGE_DIAG;
+			redraw = true;
+		}
+		if (req & REQ_DIAG_OFF) {
+			diag_mode_active = false;
+			idle_ms = 0;
+			page = PAGE_PASSENGER_IDLE;
+			redraw = true;
+		}
+		if (req & REQ_BACKLIGHT) {
+			backlight_level = !backlight_level;
+			apply_backlight();
+			redraw = true;
+		}
+		if (req & REQ_NEXT) {
+			idle_ms = 0;
+			if (diag_mode_active) {
 				auto_advance = false;
-				page = (page + 1) % PAGE_COUNT;
+				if (page < PAGE_BLE || page >= PAGE_COUNT - 1) {
+					page = PAGE_BLE;
+				} else {
+					page++;
+				}
 				redraw = true;
 			}
-			if (req & REQ_CARD) {
-				auto_advance = false;
-				page = IS_ENABLED(CONFIG_TOMS_UI_PASSENGER) ? PAGE_PASSENGER_VERDICT : PAGE_CARD;
-				redraw = true;
-			}
+		}
+		if (req & REQ_CARD) {
+			idle_ms = 0;
+			page = diag_mode_active ? PAGE_CARD : PAGE_PASSENGER_VERDICT;
+			redraw = true;
+		}
 	}
 }
 
@@ -816,14 +844,38 @@ void display_test_button(void)
 	}
 	k_sleep(K_MSEC(LONG_PRESS_MS));
 	if (gpio_pin_get_dt(&button) == 1) {
-		display_test_backlight_toggle();
+		/* Holding for > 3.0 seconds toggles diagnostic mode locally! */
+		int hold_count = 0;
+		while (gpio_pin_get_dt(&button) == 1 && hold_count < 22) {
+			k_sleep(K_MSEC(100));
+			hold_count++;
+		}
+		if (hold_count >= 22) {
+			/* Held for 0.8s + 2.2s = 3.0s: toggle diagnostic mode */
+			display_set_diag_mode(!diag_mode_active);
+		} else {
+			/* Standard long press (0.8s - 3s): toggle backlight */
+			display_test_backlight_toggle();
+		}
 		/* Wait for release so one long hold toggles only once. */
 		while (gpio_pin_get_dt(&button) == 1) {
 			k_sleep(K_MSEC(20));
 		}
-	} else if (!IS_ENABLED(CONFIG_TOMS_UI_PASSENGER)) {
+	} else if (diag_mode_active) {
 		display_test_next();
 	}
+}
+
+void display_set_diag_mode(bool active)
+{
+	diag_mode_active = active;
+	atomic_or(&requests, active ? REQ_DIAG_ON : REQ_DIAG_OFF);
+	k_sem_give(&wake);
+}
+
+bool display_is_diag_mode(void)
+{
+	return diag_mode_active;
 }
 
 void display_test_set_nfc_status(bool ready)

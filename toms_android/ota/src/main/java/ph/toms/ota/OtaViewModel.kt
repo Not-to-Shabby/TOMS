@@ -314,7 +314,15 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 val transport = BleTransport.connect(getApplication(), machine.device, ::say)
                 diagTransport = transport
                 _state.update { it.copy(isDiagConnected = true, diagStatus = "Connected to ${machine.name}") }
-                say("diag: connected, listening for NFC & Button events")
+                say("diag: connected, unlocking diagnostic session")
+
+                // Send special diagnostic security unlock code to Return Machine
+                val unlockOk = transport.writeDiagUnlock()
+                if (unlockOk) {
+                    say("diag: special security unlock key sent (TOMS!)")
+                } else {
+                    say("diag: warning: could not send unlock key")
+                }
 
                 // NFC Card Read Listener
                 launch {
@@ -351,6 +359,9 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 launch {
                     for (ev in transport.diagEvents) {
                         when (ev) {
+                            is DiagEvent.SessionUnlocked -> {
+                                say(if (ev.success) "DIAGNOSTIC SESSION: UNLOCKED & AUTHORIZED" else "DIAGNOSTIC SESSION: KEY REFUSED")
+                            }
                             is DiagEvent.ButtonPress -> {
                                 val now = clock.format(Date())
                                 say("BUTTON PRESSED: count=${ev.count}")

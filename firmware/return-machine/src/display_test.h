@@ -35,6 +35,12 @@ void display_test_set_uid(const uint8_t *uid, uint8_t len, uint8_t atype);
  * TOMS_VERDICT_ALREADY_RETURNED, or 0xFF (offline unverified). */
 void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8_t atype);
 
+/* Switches between normal passenger transit UI (false) and hardware diagnostic test mode (true). */
+void display_set_diag_mode(bool active);
+
+/* Checks if diagnostic test mode is currently active. */
+bool display_is_diag_mode(void);
+
 /* Diagnostics tools status updates. */
 void display_test_set_nfc_status(bool ready);
 void display_test_record_button_press(uint16_t count);

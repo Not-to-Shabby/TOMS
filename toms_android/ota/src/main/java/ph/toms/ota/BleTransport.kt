@@ -252,6 +252,11 @@ class BleTransport private constructor(
         writeChar(c, Ota.diagCmdFrame(cmd, arg), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
     }
 
+    suspend fun writeDiagUnlock(): Boolean = ops.withLock {
+        val c = diagChar ?: return@withLock false
+        writeChar(c, Ota.diagUnlockFrame(), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+    }
+
     suspend fun writeSimCard(uid: ByteArray): Boolean = ops.withLock {
         val c = simCardChar ?: return@withLock false
         writeChar(c, Ota.simCardFrame(uid), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)

@@ -81,10 +81,18 @@ object Ota {
         return HeartbeatEvent(uptimeS, batteryPct, batteryMv, nfcStatus, stateVersion, bufferedReads, resetReason)
     }
 
+    val DIAG_UNLOCK_MAGIC: ByteArray = byteArrayOf(0x00, 'T'.code.toByte(), 'O'.code.toByte(), 'M'.code.toByte(), 'S'.code.toByte(), '!'.code.toByte())
+
+    fun diagUnlockFrame(): ByteArray = DIAG_UNLOCK_MAGIC
+
     fun parseDiagEvent(b: ByteArray): DiagEvent {
         if (b.isEmpty()) return DiagEvent.Unknown(b)
         val op = b[0].toInt() and 0xFF
         return when (op) {
+            0x80 -> {
+                val success = if (b.size >= 3) b[2].toInt() == 1 else false
+                DiagEvent.SessionUnlocked(success)
+            }
             0x81 -> {
                 val count = if (b.size >= 3) (b[1].toInt() and 0xFF) or ((b[2].toInt() and 0xFF) shl 8) else 0
                 DiagEvent.ButtonPress(count)
@@ -188,6 +196,7 @@ data class CardReadEvent(
 )
 
 sealed interface DiagEvent {
+    data class SessionUnlocked(val success: Boolean) : DiagEvent
     data class ButtonPress(val count: Int) : DiagEvent
     data class NfcHealth(val isOnline: Boolean, val versionStr: String) : DiagEvent
     data class Ack(val cmd: Int, val arg: Int) : DiagEvent
