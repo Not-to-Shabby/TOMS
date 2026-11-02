@@ -4,6 +4,24 @@ mainmenu "TOMS Return Machine"
 
 menu "TOMS Return Machine"
 
+choice
+	prompt "Return Machine LCD Interface Mode"
+	default TOMS_UI_PASSENGER
+
+config TOMS_UI_PASSENGER
+	bool "Passenger In-Service UI (Deployment)"
+	help
+	  In-service transit screen for passengers: "TAP CARD TO EXIT"
+	  idle prompt with live clock, big green "FARE PAID - THANK YOU",
+	  red "UNPAID FARE - SEE CONDUCTOR", and amber "ALREADY SCANNED".
+
+config TOMS_UI_DIAGNOSTIC
+	bool "Hardware Diagnostic Test Bench UI (Bench/QC)"
+	help
+	  Technician bench test: auto-cycling color pages, hardware telemetry,
+	  and diagnostic tools dashboard.
+endchoice
+
 config TOMS_BACKLIGHT_ACTIVE_HIGH
 	bool "Backlight is on when GPIO13 is high"
 	default n

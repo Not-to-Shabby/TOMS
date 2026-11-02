@@ -105,6 +105,7 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	if (last_uid_len == uid_len && memcmp(last_uid, uid, uid_len) == 0 &&
 	    now - last_read_ms < 2000) {
 		play(TOMS_TONE_DUPLICATE);
+		display_set_verdict(TOMS_VERDICT_ALREADY_RETURNED, uid, uid_len, atype);
 		k_mutex_unlock(&card_lock);
 		return;
 	}
@@ -152,9 +153,13 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	if (rc == 0) {
 		LOG_INF("paid_reply: verdict %u", verdict);
 		play(tone_for_verdict(verdict));
+		display_set_verdict(verdict, uid, uid_len, atype);
 	} else {
 		LOG_INF("no paid_reply (%d); using cached state", rc);
-		play(tone_for_cached(status));
+		uint8_t tone = tone_for_cached(status);
+		play(tone);
+		uint8_t v = (tone == TOMS_TONE_OK) ? TOMS_VERDICT_OK : 0xFF;
+		display_set_verdict(v, uid, uid_len, atype);
 	}
 	k_mutex_unlock(&card_lock);
 }

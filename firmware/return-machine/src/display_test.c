@@ -35,6 +35,8 @@ LOG_MODULE_REGISTER(display_test, LOG_LEVEL_INF);
 #define C_GRAY 0x8410
 
 enum page {
+	PAGE_PASSENGER_IDLE,
+	PAGE_PASSENGER_VERDICT,
 	PAGE_BLE,
 	PAGE_DIAG,
 	PAGE_CARD,
@@ -72,6 +74,7 @@ static K_MUTEX_DEFINE(uid_lock);
 static uint8_t card_uid[UID_MAX];
 static uint8_t card_uid_len;
 static uint8_t card_uid_atype;
+static uint8_t card_verdict = 0xFF;
 static bool diag_nfc_ready = true;
 static uint16_t diag_btn_count;
 
@@ -86,7 +89,8 @@ struct glyph {
 };
 
 static const struct glyph font[] = {
-	{' ', {0x00, 0x00, 0x00, 0x00, 0x00}}, {'-', {0x08, 0x08, 0x08, 0x08, 0x08}},
+	{' ', {0x00, 0x00, 0x00, 0x00, 0x00}}, {'!', {0x00, 0x00, 0x5F, 0x00, 0x00}},
+	{'-', {0x08, 0x08, 0x08, 0x08, 0x08}},
 	{':', {0x00, 0x36, 0x36, 0x00, 0x00}}, {'.', {0x00, 0x60, 0x60, 0x00, 0x00}},
 	{'/', {0x20, 0x10, 0x08, 0x04, 0x02}}, {'0', {0x3E, 0x51, 0x49, 0x45, 0x3E}},
 	{'1', {0x00, 0x42, 0x7F, 0x40, 0x00}}, {'2', {0x42, 0x61, 0x51, 0x49, 0x46}},
@@ -406,9 +410,143 @@ static void ble_page(void)
 	draw_centered(112, 1, C_WHITE, line);
 }
 
+static void passenger_idle_page(void)
+{
+	struct rm_ble_status st;
+	char time_str[16];
+	uint32_t epoch = rm_ble_epoch();
+
+	rm_ble_get_status(&st);
+	fill_all(C_BLACK);
+
+	/* Top Header Bar */
+	fill_rect(0, 0, W, 20, 0x18E3); /* Dark Slate / Charcoal */
+	draw_text(6, 6, 1, C_CYAN, "TOMS TRANSIT");
+
+	if (epoch > 0) {
+		uint32_t sec = epoch % 86400;
+		uint32_t hr = (sec / 3600 + 8) % 24; /* UTC+8 (Philippine Standard Time) */
+		uint32_t min = (sec % 3600) / 60;
+		const char *ampm = hr >= 12 ? "PM" : "AM";
+		uint32_t hr12 = hr % 12;
+		if (hr12 == 0) {
+			hr12 = 12;
+		}
+		snprintk(time_str, sizeof(time_str), "%u:%02u %s", (unsigned int)hr12, (unsigned int)min, ampm);
+		int tw = text_width(time_str, 1);
+		draw_text(W - tw - 6, 6, 1, C_WHITE, time_str);
+	} else {
+		const char *ready_txt = st.connected ? "ONLINE" : "READY";
+		int tw = text_width(ready_txt, 1);
+		draw_text(W - tw - 6, 6, 1, st.connected ? C_GREEN : C_YELLOW, ready_txt);
+	}
+
+	/* Contactless Card / Wave graphic in center */
+	int cx = W / 2;
+	int cy = 46;
+	fill_rect(cx - 24, cy - 14, 48, 28, 0x2126);
+	fill_rect(cx - 24, cy - 6, 48, 4, 0x3188);
+	fill_rect(cx - 18, cy + 2, 8, 8, C_YELLOW);
+
+	/* Big clear instructions */
+	draw_centered(68, 2, C_WHITE, "TAP CARD");
+	draw_centered(88, 2, C_CYAN, "TO EXIT");
+
+	/* Bottom Status Bar */
+	fill_rect(0, 114, W, 14, 0x10A2);
+	if (st.connected) {
+		fill_rect(8, 119, 4, 4, C_GREEN);
+		draw_text(16, 117, 1, C_GREEN, "CONNECTED");
+	} else {
+		fill_rect(8, 119, 4, 4, C_YELLOW);
+		draw_text(16, 117, 1, C_YELLOW, "OFFLINE READY");
+	}
+
+	/* NFC health on right of bottom bar */
+	if (diag_nfc_ready) {
+		draw_text(W - 48, 117, 1, C_GRAY, "NFC OK");
+	} else {
+		draw_text(W - 54, 117, 1, C_RED, "NFC ERR");
+	}
+}
+
+static void passenger_verdict_page(void)
+{
+	char hex[3 * UID_MAX + 1];
+	uint8_t uid[UID_MAX];
+	uint8_t len;
+	uint8_t verdict;
+
+	k_mutex_lock(&uid_lock, K_FOREVER);
+	len = card_uid_len;
+	verdict = card_verdict;
+	memcpy(uid, card_uid, sizeof(uid));
+	k_mutex_unlock(&uid_lock);
+
+	hex[0] = '\0';
+	for (uint8_t i = 0; i < len && i < 6; i++) {
+		snprintk(&hex[i * 3], 4, "%02X ", uid[i]);
+	}
+	if (len > 0) {
+		hex[len * 3 - 1] = '\0';
+	}
+
+	switch (verdict) {
+	case 0: /* TOMS_VERDICT_OK: Rich Green */
+		fill_all(0x04E0);
+		draw_centered(16, 3, C_WHITE, "PAID");
+		draw_centered(48, 2, C_WHITE, "THANK YOU!");
+		draw_centered(78, 1, C_YELLOW, "FARE CONFIRMED");
+		draw_centered(94, 1, C_WHITE, hex);
+		draw_centered(110, 1, C_WHITE, "HAVE A SAFE TRIP");
+		break;
+
+	case 1: /* TOMS_VERDICT_UNPAID: Alert Red */
+		fill_all(C_RED);
+		draw_centered(12, 3, C_WHITE, "UNPAID");
+		draw_centered(44, 2, C_YELLOW, "PLEASE PAY");
+		draw_centered(64, 2, C_YELLOW, "CONDUCTOR");
+		draw_centered(90, 1, C_WHITE, hex);
+		draw_centered(108, 1, C_YELLOW, "ALARM TRIGGERED");
+		break;
+
+	case 3: /* TOMS_VERDICT_ALREADY_RETURNED: Amber Gold */
+		fill_all(0xFD20);
+		draw_centered(16, 2, C_BLACK, "ALREADY");
+		draw_centered(38, 2, C_BLACK, "SCANNED");
+		draw_centered(70, 1, C_BLACK, "CARD ALREADY RETURNED");
+		draw_centered(90, 1, C_BLACK, hex);
+		draw_centered(108, 1, C_BLACK, "DUPLICATE TAP");
+		break;
+
+	case 2: /* TOMS_VERDICT_UNKNOWN: Purple / Magenta */
+		fill_all(0x881F);
+		draw_centered(16, 2, C_WHITE, "UNKNOWN");
+		draw_centered(38, 2, C_WHITE, "CARD");
+		draw_centered(70, 1, C_YELLOW, "NOT IN SYSTEM");
+		draw_centered(88, 1, C_WHITE, "PLEASE SEE CONDUCTOR");
+		draw_centered(106, 1, C_CYAN, hex);
+		break;
+
+	default: /* 0xFF or Fallback: Dark Navy */
+		fill_all(0x0014);
+		draw_centered(16, 2, C_CYAN, "CARD LOGGED");
+		draw_centered(44, 2, C_WHITE, "THANK YOU");
+		draw_centered(76, 1, C_GREEN, "OFFLINE VERIFIED");
+		draw_centered(96, 1, C_YELLOW, hex);
+		break;
+	}
+}
+
 static void render_page(enum page p)
 {
 	switch (p) {
+	case PAGE_PASSENGER_IDLE:
+		passenger_idle_page();
+		break;
+	case PAGE_PASSENGER_VERDICT:
+		passenger_verdict_page();
+		break;
 	case PAGE_BLE:
 		ble_page();
 		break;
@@ -480,7 +618,7 @@ static void display_loop(void *a, void *b, void *c)
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
-	enum page page = PAGE_BLE;
+	enum page page = IS_ENABLED(CONFIG_TOMS_UI_PASSENGER) ? PAGE_PASSENGER_IDLE : PAGE_BLE;
 	enum page shown = PAGE_COUNT;
 	bool redraw = true;
 	uint32_t frames = 0;
@@ -528,46 +666,61 @@ static void display_loop(void *a, void *b, void *c)
 
 		/* Never wait longer than 500 ms: the watchdog treats a silent display thread as hung.
 		 * The Bluetooth page redraws every second, the others advance on their own timer. */
-		int rc = k_sem_take(&wake, K_MSEC(500));
-		if (rc == -EAGAIN) {
+			int rc = k_sem_take(&wake, K_MSEC(500));
+			if (rc == -EAGAIN) {
 				idle_ms += 500;
-				if (page == PAGE_BLE || page == PAGE_DIAG) {
-					if (idle_ms >= 1000) {
+				if (IS_ENABLED(CONFIG_TOMS_UI_PASSENGER)) {
+					if (page == PAGE_PASSENGER_IDLE) {
+						if (idle_ms >= 1000) {
+							idle_ms = 0;
+							redraw = true; /* update clock / connection status */
+						}
+					} else if (page == PAGE_PASSENGER_VERDICT) {
+						if (idle_ms >= 2500) {
+							idle_ms = 0;
+							page = PAGE_PASSENGER_IDLE;
+							redraw = true;
+						}
+					}
+				} else {
+					if (page == PAGE_BLE || page == PAGE_DIAG) {
+						if (idle_ms >= 1000) {
+							idle_ms = 0;
+							redraw = true;
+						}
+					} else if (page == PAGE_CARD) {
+						if (idle_ms >= 4000) {
+							idle_ms = 0;
+							auto_advance = true;
+							page = PAGE_BLE;
+							redraw = true;
+						}
+					} else if (auto_advance && idle_ms >= AUTO_ADVANCE_S * 1000) {
 						idle_ms = 0;
+						page = (page + 1) % PAGE_COUNT;
 						redraw = true;
 					}
-				} else if (page == PAGE_CARD) {
-					if (idle_ms >= 4000) {
-						idle_ms = 0;
-						auto_advance = true;
-						page = PAGE_BLE;
-						redraw = true;
-					}
-				} else if (auto_advance && idle_ms >= AUTO_ADVANCE_S * 1000) {
-				idle_ms = 0;
+				}
+				continue;
+			}
+			idle_ms = 0;
+
+			uint32_t req = (uint32_t)atomic_set(&requests, 0);
+			if (req & REQ_BACKLIGHT) {
+				backlight_level = !backlight_level;
+				apply_backlight();
+				redraw = true;
+			}
+			if (req & REQ_NEXT) {
+				auto_advance = false;
 				page = (page + 1) % PAGE_COUNT;
 				redraw = true;
 			}
-			continue;
-		}
-		idle_ms = 0;
-
-		uint32_t req = (uint32_t)atomic_set(&requests, 0);
-		if (req & REQ_BACKLIGHT) {
-			backlight_level = !backlight_level;
-			apply_backlight();
-			redraw = true;
-		}
-		if (req & REQ_NEXT) {
-			auto_advance = false;
-			page = (page + 1) % PAGE_COUNT;
-			redraw = true;
-		}
-		if (req & REQ_CARD) {
-			auto_advance = false;
-			page = PAGE_CARD;
-			redraw = true;
-		}
+			if (req & REQ_CARD) {
+				auto_advance = false;
+				page = IS_ENABLED(CONFIG_TOMS_UI_PASSENGER) ? PAGE_PASSENGER_VERDICT : PAGE_CARD;
+				redraw = true;
+			}
 	}
 }
 
@@ -632,6 +785,23 @@ void display_test_set_uid(const uint8_t *uid, uint8_t len, uint8_t atype)
 	memcpy(card_uid, uid, len);
 	card_uid_len = len;
 	card_uid_atype = atype;
+	card_verdict = 0xFF;
+	k_mutex_unlock(&uid_lock);
+
+	atomic_or(&requests, REQ_CARD);
+	k_sem_give(&wake);
+}
+
+void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8_t atype)
+{
+	if (len > UID_MAX) {
+		len = UID_MAX;
+	}
+	k_mutex_lock(&uid_lock, K_FOREVER);
+	memcpy(card_uid, uid, len);
+	card_uid_len = len;
+	card_uid_atype = atype;
+	card_verdict = verdict;
 	k_mutex_unlock(&uid_lock);
 
 	atomic_or(&requests, REQ_CARD);
@@ -651,7 +821,7 @@ void display_test_button(void)
 		while (gpio_pin_get_dt(&button) == 1) {
 			k_sleep(K_MSEC(20));
 		}
-	} else {
+	} else if (!IS_ENABLED(CONFIG_TOMS_UI_PASSENGER)) {
 		display_test_next();
 	}
 }

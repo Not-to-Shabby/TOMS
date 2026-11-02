@@ -30,6 +30,11 @@ void display_test_backlight_toggle(void);
 /* Stores the UID and card type, jumps to card page. Safe to call from any thread. */
 void display_test_set_uid(const uint8_t *uid, uint8_t len, uint8_t atype);
 
+/* Passenger deployment UI: displays the paid check verdict on the LCD:
+ * TOMS_VERDICT_OK, TOMS_VERDICT_UNPAID, TOMS_VERDICT_UNKNOWN,
+ * TOMS_VERDICT_ALREADY_RETURNED, or 0xFF (offline unverified). */
+void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8_t atype);
+
 /* Diagnostics tools status updates. */
 void display_test_set_nfc_status(bool ready);
 void display_test_record_button_press(uint16_t count);
