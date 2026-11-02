@@ -208,32 +208,16 @@ class MainActivity : ComponentActivity() {
             // Header & Device Connection Bar at Top
             DeviceHeaderBar(s, vm, askPermissions, permissions)
 
-            // Scrollable Content Area: Bottom-anchored in the thumb zone
-            BoxWithConstraints(
+            // Content Area between Header and Bottom Navigation
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                val minHeight = maxHeight
-                val scrollState = rememberScrollState()
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = minHeight),
-                        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom)
-                    ) {
-                        if (s.selectedTab == 0) {
-                            OtaSection(s, vm, askPermissions, pickFile, permissions)
-                        } else {
-                            DiagnosticsSection(s, vm, askPermissions, permissions)
-                        }
-                    }
+                if (s.selectedTab == 0) {
+                    OtaSection(s, vm, askPermissions, pickFile, permissions)
+                } else {
+                    DiagnosticsSection(s, vm, askPermissions, permissions)
                 }
             }
 
@@ -441,8 +425,15 @@ class MainActivity : ComponentActivity() {
         val clipboard = LocalClipboardManager.current
         val cardDetected = s.lastCardUid != null
 
-        // 1. Apple Wallet-Style NFC Pass Card
-        val cardGradient = if (cardDetected) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 1. Apple Wallet-Style NFC Pass Card
+            val cardGradient = if (cardDetected) {
             Brush.verticalGradient(listOf(Color(0xFF143823), Color(0xFF0D1E15)))
         } else {
             Brush.verticalGradient(listOf(Color(0xFF1C222B), Color(0xFF161B22)))
@@ -904,6 +895,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        }
     }
 
     // ── OTA Update Tab (Cupertino Clean) ─────────────────────────────────────
@@ -918,7 +910,19 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val clipboard = LocalClipboardManager.current
 
-        // 1. 3-Phase Stepper Tracker
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // 1. 3-Phase Stepper Tracker
         val currentStep = when {
             s.image == null -> 1
             s.selected == null -> 2
@@ -1232,37 +1236,45 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-
-        // 5. Main Action Button
-        if (s.phase == Phase.UPLOADING) {
-            Button(
-                onClick = { vm.cancel() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = CupertinoRed)
-            ) {
-                Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Cancel Update", fontWeight = FontWeight.SemiBold)
             }
-        } else {
-            Button(
-                onClick = { vm.start() },
-                enabled = s.canStart,
+
+            // 5. Main Action Button (Pinned at the bottom of the OTA tab)
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(48.dp),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = CupertinoBlue,
-                    disabledContainerColor = CardSubtle
-                )
+                    .padding(top = 8.dp, bottom = 4.dp)
             ) {
-                Icon(imageVector = Icons.Rounded.SystemUpdate, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Flash Firmware to Machine", fontWeight = FontWeight.SemiBold)
+                if (s.phase == Phase.UPLOADING) {
+                    Button(
+                        onClick = { vm.cancel() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CupertinoRed)
+                    ) {
+                        Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Cancel Update", fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
+                    Button(
+                        onClick = { vm.start() },
+                        enabled = s.canStart,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CupertinoBlue,
+                            disabledContainerColor = CardSubtle
+                        )
+                    ) {
+                        Icon(imageVector = Icons.Rounded.SystemUpdate, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Flash Firmware to Machine", fontWeight = FontWeight.SemiBold)
+                    }
+                }
             }
         }
     }
@@ -1479,13 +1491,30 @@ class MainActivity : ComponentActivity() {
                 contentColor = color
             ),
             shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp),
             border = BorderStroke(1.dp, color.copy(alpha = 0.35f)),
-            modifier = modifier.height(44.dp)
+            modifier = modifier.height(52.dp)
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(text = label, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                Text(text = sub, fontSize = 9.sp, color = color.copy(alpha = 0.8f))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    softWrap = false
+                )
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    text = sub,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = color.copy(alpha = 0.85f),
+                    maxLines = 1,
+                    softWrap = false
+                )
             }
         }
     }
