@@ -25,6 +25,7 @@ interface Props {
   baseUrl: string;
   front: SheetSideInput | undefined;
   back: SheetSideInput | undefined;
+  disabled?: boolean;
 }
 
 const input = { padding: '8px 10px', background: 'var(--bg-dark)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-primary)', width: '100%' } as const;
@@ -43,7 +44,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  * Lays the cards out on paper sheets (A4, Letter or a custom size) with room between them for cutting,
  * shows the result, and downloads it as a PDF.
  */
-export default function SheetExport({ cards, baseUrl, front, back }: Props) {
+export default function SheetExport({ cards, baseUrl, front, back, disabled = false }: Props) {
   const [paperId, setPaperId] = useState('a4');
   const [customW, setCustomW] = useState('210');
   const [customH, setCustomH] = useState('297');
@@ -89,7 +90,7 @@ export default function SheetExport({ cards, baseUrl, front, back }: Props) {
   };
 
   async function download() {
-    if (!ok || !front) return;
+    if (!ok || !front || disabled) return;
     setError(null);
     setBusy('Preparing…');
     try {
@@ -113,7 +114,15 @@ export default function SheetExport({ cards, baseUrl, front, back }: Props) {
     }
   }
 
-  const disabledReason = !front ? 'Upload the front design first.' : total === 0 ? 'Create the cards first.' : !ok ? (layout as { error: string }).error : null;
+  const disabledReason = disabled
+    ? 'Fix the QR link address first.'
+    : !front
+      ? 'Upload the front design first.'
+      : total === 0
+        ? 'Create the cards first.'
+        : !ok
+          ? (layout as { error: string }).error
+          : null;
 
   return (
     <section className="glass-panel" style={{ padding: 24, display: 'grid', gap: 14 }} aria-label="Print on paper sheets">

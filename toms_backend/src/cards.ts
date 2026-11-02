@@ -795,6 +795,7 @@ export function registerCardRoutes(
   app.get('/api/cards/approved', async (req: Request, res: Response) => {
     const authHeader = req.headers.authorization;
     let authorized = false;
+    let isDevice = false;
     let boundVehicleId: string | null = null;
 
     if (authHeader?.startsWith('Bearer ')) {
@@ -814,13 +815,17 @@ export function registerCardRoutes(
           const expected = Buffer.from(stored, 'hex');
           if (given.length === expected.length && crypto.timingSafeEqual(given, expected)) {
             authorized = true;
+            isDevice = true;
             boundVehicleId = rows[0].vehicle_id ?? null;
           }
         }
       }
       if (!authorized) {
         const user = await auth.authenticate(token).catch(() => null);
-        if (user) authorized = true;
+        if (user) {
+          authorized = true;
+          isDevice = false;
+        }
       }
     }
 
@@ -828,7 +833,10 @@ export function registerCardRoutes(
       return void res.status(401).json({ error: 'Authentication required' });
     }
 
-    const queryVehicleId = (req.query.vehicle_id as string)?.trim() || boundVehicleId;
+    // Devices are strictly constrained to their bound vehicle (and unassigned spares).
+    // An enrolled device cannot override vehicle_id via query parameters to enumerate other vehicles.
+    // Admin callers may specify ?vehicle_id= to filter, or omit it to query the whole fleet.
+    const queryVehicleId = isDevice ? boundVehicleId : ((req.query.vehicle_id as string)?.trim() || null);
 
     let query: string;
     let params: unknown[];
@@ -837,6 +845,10 @@ export function registerCardRoutes(
       // Return cards assigned to this vehicle OR in the spare unassigned pool (vehicle_id IS NULL)
       query = `SELECT nfc_uid, card_uuid FROM cards WHERE status = 'active' AND nfc_uid IS NOT NULL AND (vehicle_id = $1 OR vehicle_id IS NULL)`;
       params = [queryVehicleId];
+    } else if (isDevice) {
+      // Device with no assigned vehicle only gets spare unassigned cards
+      query = `SELECT nfc_uid, card_uuid FROM cards WHERE status = 'active' AND nfc_uid IS NOT NULL AND vehicle_id IS NULL`;
+      params = [];
     } else {
       query = `SELECT nfc_uid, card_uuid FROM cards WHERE status = 'active' AND nfc_uid IS NOT NULL`;
       params = [];
@@ -851,12 +863,13 @@ export function registerCardRoutes(
 
     // Cards that exist but must not be used, with the reason, so the phone can say "lost" instead of "unknown".
     // This is an extra field: phones that do not know about it keep working on `cards` as before.
-    const blocked = await pool.query<{ nfc_uid: string; status: string }>(
-      queryVehicleId
-        ? `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL AND (vehicle_id = $1 OR vehicle_id IS NULL)`
-        : `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL`,
-      queryVehicleId ? [queryVehicleId] : [],
-    );
+    const statusQuery = queryVehicleId
+      ? `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL AND (vehicle_id = $1 OR vehicle_id IS NULL)`
+      : isDevice
+        ? `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL AND vehicle_id IS NULL`
+        : `SELECT nfc_uid, status FROM cards WHERE status IN ('suspended', 'lost', 'retired') AND nfc_uid IS NOT NULL`;
+    const statusParams = queryVehicleId ? [queryVehicleId] : [];
+    const blocked = await pool.query<{ nfc_uid: string; status: string }>(statusQuery, statusParams);
     const statuses: Record<string, string> = {};
     for (const r of blocked.rows) statuses[r.nfc_uid] = r.status;
 

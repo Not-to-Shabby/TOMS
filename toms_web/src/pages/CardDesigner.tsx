@@ -34,6 +34,19 @@ interface SideState {
 
 const inputStyle = { padding: '10px', background: 'var(--bg-dark)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-primary)' } as const;
 
+/** Validates that an operator-provided base URL override uses https:// and has a valid hostname. */
+export function isValidBaseUrl(override: string): boolean {
+  const trimmed = override.trim();
+  if (!trimmed) return true;
+  if (!trimmed.startsWith('https://')) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export default function CardDesigner() {
   const [prefix, setPrefix] = useState('TOMS-');
   const [start, setStart] = useState(1);
@@ -89,12 +102,16 @@ export default function CardDesigner() {
   }, []);
 
   const baseUrl = (baseOverride.trim() || base?.url || window.location.origin).replace(/\/+$/, '');
+  const isBaseValid = isValidBaseUrl(baseOverride);
   const rule = { prefix, start, digits };
   const range = serialRange(rule, count);
   const sampleUuid = cards[0]?.card_uuid ?? '00000000-0000-4000-8000-000000000000';
   const sampleSerial = cards[0]?.serial ?? formatSerial(rule, 0);
 
   async function generate() {
+    if (!isBaseValid) {
+      return void setError('The QR link address must be a valid https:// address.');
+    }
     const problem = validateBatch(rule, count);
     if (problem) return void setError(problem);
     setError(null);
@@ -198,6 +215,7 @@ export default function CardDesigner() {
   }
 
   async function exportZip() {
+    if (!isBaseValid) return void setError('The QR link address must be a valid https:// address.');
     const front = sides.front;
     if (!front) return void setError('Upload the front design first.');
     if (cards.length === 0) return void setError('Create the cards first.');
@@ -265,6 +283,11 @@ export default function CardDesigner() {
             onChange={(e) => setBaseOverride(e.target.value)}
           />
         </label>
+        {!isBaseValid && (
+          <div role="alert" style={{ color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <AlertTriangle size={14} /> The QR link address must start with https:// and be a valid web address.
+          </div>
+        )}
         <div style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-secondary)' }}>
           Each QR opens {cardUrl(baseUrl, '<card id>')}
         </div>
@@ -408,7 +431,7 @@ export default function CardDesigner() {
           type="button"
           className="btn-primary"
           onClick={exportZip}
-          disabled={busy !== null}
+          disabled={busy !== null || !isBaseValid}
           style={{ padding: '12px 20px', borderRadius: 8, justifySelf: 'start', display: 'inline-flex', gap: 8 }}
         >
           <Download size={16} /> Download ZIP
@@ -419,6 +442,7 @@ export default function CardDesigner() {
       <SheetExport
         cards={cards}
         baseUrl={baseUrl}
+        disabled={!isBaseValid}
         front={sides.front ? { file: sides.front.file, image: sides.front.design.image, width: sides.front.design.width, height: sides.front.design.height, src: sides.front.src, placement: sides.front.placement } : undefined}
         back={sides.back ? { file: sides.back.file, image: sides.back.design.image, width: sides.back.design.width, height: sides.back.design.height, src: sides.back.src, placement: sides.back.placement } : undefined}
       />

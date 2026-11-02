@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Map as MapIcon, BarChart3, History, Settings, Users, Bus, LogOut, CreditCard, FileText, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, BarChart3, History, Users, Bus, LogOut, CreditCard, FileText, Menu, X } from 'lucide-react';
 import RouteBuilder from './pages/RouteBuilder';
 import DashboardHome from './pages/DashboardHome';
 import AnalyticsHome from './pages/AnalyticsHome';
@@ -80,10 +80,6 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
       </nav>
 
       <div style={{ marginTop: 'auto', paddingTop: '24px', borderTop: '1px solid var(--border)' }}>
-        <Link to="/settings" style={getLinkStyle('/settings')}>
-          <Settings size={20} />
-          <span>Settings</span>
-        </Link>
         <button onClick={signOut} style={{ ...getLinkStyle('/signout'), background: 'transparent', border: 'none', cursor: 'pointer', width: '100%' }}>
           <LogOut size={20} />
           <span>Sign out</span>
@@ -125,7 +121,6 @@ function AdminShell() {
           <Route path="/fares" element={<FareSettings />} />
           <Route path="/analytics" element={<AnalyticsHome />} />
           <Route path="/audit" element={<AuditLogs />} />
-          <Route path="/settings" element={<FareSettings />} />
         </Routes>
       </div>
     </div>

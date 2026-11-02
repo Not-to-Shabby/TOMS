@@ -82,21 +82,31 @@ The API log should show "Applied migrations" and "listening on port 3000".
   step 1 not having propagated yet.
 
 ## 9. Create the admin account and the conductor device
+Prompt for the admin password without echoing it, avoiding saving plaintext secrets to `~/.bash_history`:
 ```bash
 cd ~/toms/src/deploy
-docker compose -f docker-compose.prod.yml exec -e ADMIN_PASSWORD='use-a-long-password-here' api \
+read -s -p "Admin password (at least 12 characters): " ADMIN_PASS && echo
+docker compose -f docker-compose.prod.yml exec -e ADMIN_PASSWORD="$ADMIN_PASS" api \
   node dist/cli/createAdmin.js <your-admin-username>
+unset ADMIN_PASS
 ```
 Sign in at https://toms.perchbuilds.me with that account. Then, in the dashboard:
 - **Fleet Manager**: add the vehicle.
 - **Conductors Directory**: add the conductor and assign the vehicle.
 - **Fare & LTFRB**: publish a fare matrix for the route. Until you do, passenger receipts show no rate.
 
-**Enrol the phone** (the dashboard has no button for this yet). Use the phone's Device ID, which the app shows under
-More > Server Sync. Replace `PHONE-ID` with it and `VEHICLE-ID` with the vehicle id:
+**Enrol the phone** (use the phone's Device ID from More > Server Sync).
+You can enrol via the interactive pilot script (which hides password entry):
 ```bash
+cd ~/toms/src
+node scripts/setup-pilot.mjs --server https://toms.perchbuilds.me enrol-device <PHONE-ID> <VEHICLE-ID>
+```
+Or via curl:
+```bash
+read -s -p "Admin password: " ADMIN_PASS && echo
 TOKEN=$(curl -s -X POST https://toms.perchbuilds.me/api/admin/login -H 'Content-Type: application/json' \
-  -d '{"username":"<your-admin-username>","password":"<your-password>"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+  -d "{\"username\":\"<your-admin-username>\",\"password\":\"$ADMIN_PASS\"}" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+unset ADMIN_PASS
 curl -s -X POST https://toms.perchbuilds.me/api/devices -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{"device_id":"PHONE-ID","vehicle_id":"VEHICLE-ID"}'
 ```

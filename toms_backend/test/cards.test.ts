@@ -194,6 +194,39 @@ describe('Card Registry APIs', () => {
     });
   });
 
+  it('GET /api/cards/approved prevents an enrolled device from enumerating other vehicles using ?vehicle_id=', async () => {
+    await pool.query("INSERT INTO vehicles (id, plate_number) VALUES ('BUS-1', 'AAA-111'), ('BUS-2', 'BBB-222')");
+    await pool.query("UPDATE devices SET vehicle_id = 'BUS-1' WHERE device_id = 'dev-1'");
+
+    const cBus1 = await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({ nfc_uid: 'AAAA1111', vehicle_id: 'BUS-1' });
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({ nfc_uid: 'BBBB2222', vehicle_id: 'BUS-2' });
+    const cSpare = await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({ nfc_uid: 'CCCC3333' });
+
+    // Enrolled conductor device for BUS-1 tries to query BUS-2 cards via query parameter
+    const res = await request(app)
+      .get('/api/cards/approved?vehicle_id=BUS-2')
+      .set('Authorization', `Bearer ${deviceToken}`);
+
+    expect(res.status).toBe(200);
+    // Must strictly be bound to BUS-1; ?vehicle_id=BUS-2 parameter is ignored for devices
+    expect(res.body.vehicle_id).toBe('BUS-1');
+    expect(res.body.count).toBe(2);
+    expect(res.body.cards).toEqual({
+      AAAA1111: cBus1.body.card_uuid,
+      CCCC3333: cSpare.body.card_uuid,
+    });
+
+    // Admin JWT caller can query BUS-2
+    const adminRes = await request(app)
+      .get('/api/cards/approved?vehicle_id=BUS-2')
+      .set('Authorization', `Bearer ${admin}`);
+    expect(adminRes.status).toBe(200);
+    expect(adminRes.body.vehicle_id).toBe('BUS-2');
+    expect(adminRes.body.cards).toHaveProperty('BBBB2222');
+    expect(adminRes.body.cards).toHaveProperty('CCCC3333');
+    expect(adminRes.body.cards).not.toHaveProperty('AAAA1111');
+  });
+
   it('GET /api/cards/approved rejects unauthenticated requests', async () => {
     const res = await request(app).get('/api/cards/approved');
     expect(res.status).toBe(401);
