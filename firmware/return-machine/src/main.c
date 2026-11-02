@@ -159,6 +159,7 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	k_mutex_unlock(&card_lock);
 }
 
+#if IS_ENABLED(CONFIG_TOMS_DEV_MODE)
 /* sim_card arrives on the Bluetooth RX thread, which must not wait for a
  * paid_reply that itself arrives on that thread. Hand the UID to a worker. */
 struct sim_item {
@@ -194,6 +195,7 @@ static void sim_loop(void *a, void *b, void *c)
 		on_read(it.uid, it.uid_len, TOMS_ATYPE_TYPE2);
 	}
 }
+#endif
 
 static void nfc_loop(void *a, void *b, void *c)
 {
@@ -316,9 +318,11 @@ int main(void)
 	k_thread_create(&nfc_thread, nfc_stack, NFC_STACK, nfc_loop, NULL, NULL, NULL, NFC_PRIO, 0,
 			K_NO_WAIT);
 
+#if IS_ENABLED(CONFIG_TOMS_DEV_MODE)
 	rm_ble_set_sim_card_cb(on_sim_card);
 	k_thread_create(&sim_thread, sim_stack, K_THREAD_STACK_SIZEOF(sim_stack), sim_loop, NULL,
 			NULL, NULL, NFC_PRIO, 0, K_NO_WAIT);
+#endif
 
 	int trial_rc = trial_start();
 
