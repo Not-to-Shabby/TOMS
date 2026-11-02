@@ -425,14 +425,28 @@ class MainActivity : ComponentActivity() {
         val clipboard = LocalClipboardManager.current
         val cardDetected = s.lastCardUid != null
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 16.dp)
         ) {
-            // 1. Apple Wallet-Style NFC Pass Card
+            val minHeight = maxHeight
+            val scrollState = rememberScrollState()
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = minHeight),
+                    verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom)
+                ) {
+                    Spacer(Modifier.height(6.dp))
+
+                    // 1. Apple Wallet-Style NFC Pass Card
             val cardGradient = if (cardDetected) {
             Brush.verticalGradient(listOf(Color(0xFF143823), Color(0xFF0D1E15)))
         } else {
@@ -895,6 +909,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
+                    Spacer(Modifier.height(6.dp))
+                }
+            }
         }
     }
 
@@ -910,19 +928,28 @@ class MainActivity : ComponentActivity() {
         val context = LocalContext.current
         val clipboard = LocalClipboardManager.current
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 16.dp)
         ) {
+            val minHeight = maxHeight
+            val scrollState = rememberScrollState()
+
             Column(
                 modifier = Modifier
-                    .weight(1f, fill = false)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
             ) {
-                // 1. 3-Phase Stepper Tracker
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = minHeight),
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.Bottom)
+                ) {
+                    Spacer(Modifier.height(6.dp))
+
+                    // 1. 3-Phase Stepper Tracker
         val currentStep = when {
             s.image == null -> 1
             s.selected == null -> 2
@@ -1236,44 +1263,47 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-            }
 
-            // 5. Main Action Button (Pinned at the bottom of the OTA tab)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp, bottom = 4.dp)
-            ) {
-                if (s.phase == Phase.UPLOADING) {
-                    Button(
-                        onClick = { vm.cancel() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = CupertinoRed)
-                    ) {
-                        Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Cancel Update", fontWeight = FontWeight.SemiBold)
-                    }
-                } else {
-                    Button(
-                        onClick = { vm.start() },
-                        enabled = s.canStart,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = CupertinoBlue,
-                            disabledContainerColor = CardSubtle
-                        )
-                    ) {
-                        Icon(imageVector = Icons.Rounded.SystemUpdate, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Flash Firmware to Machine", fontWeight = FontWeight.SemiBold)
-                    }
+        // 5. Main Action Button
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp)
+        ) {
+            if (s.phase == Phase.UPLOADING) {
+                Button(
+                    onClick = { vm.cancel() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = CupertinoRed)
+                ) {
+                    Icon(imageVector = Icons.Rounded.Close, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cancel Update", fontWeight = FontWeight.SemiBold)
+                }
+            } else {
+                Button(
+                    onClick = { vm.start() },
+                    enabled = s.canStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CupertinoBlue,
+                        disabledContainerColor = CardSubtle
+                    )
+                ) {
+                    Icon(imageVector = Icons.Rounded.SystemUpdate, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Flash Firmware to Machine", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+
+                    Spacer(Modifier.height(6.dp))
                 }
             }
         }
