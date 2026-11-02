@@ -27,10 +27,12 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -202,39 +204,61 @@ class MainActivity : ComponentActivity() {
             if (uri != null) vm.loadImage(uri, displayName(uri))
         }
 
-        Box(Modifier.fillMaxSize()) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 64.dp) // Leave room for persistent log dock
+        Column(Modifier.fillMaxSize()) {
+            // Header & Device Connection Bar at Top
+            DeviceHeaderBar(s, vm, askPermissions, permissions)
+
+            // Scrollable Content Area: Bottom-anchored in the thumb zone
+            BoxWithConstraints(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
             ) {
-                // Header & Device Connection Bar
-                DeviceHeaderBar(s, vm, askPermissions, permissions)
-
-                // Cupertino Segmented Control Tab Row
-                CupertinoSegmentedTabs(
-                    selectedTab = s.selectedTab,
-                    onSelect = { vm.selectTab(it) }
-                )
-
-                // Scrollable Content
+                val minHeight = maxHeight
+                val scrollState = rememberScrollState()
                 Column(
-                    Modifier
+                    modifier = Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .verticalScroll(scrollState)
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
                 ) {
-                    if (s.selectedTab == 0) {
-                        OtaSection(s, vm, askPermissions, pickFile, permissions)
-                    } else {
-                        DiagnosticsSection(s, vm, askPermissions, permissions)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .defaultMinSize(minHeight = minHeight),
+                        verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom)
+                    ) {
+                        if (s.selectedTab == 0) {
+                            OtaSection(s, vm, askPermissions, pickFile, permissions)
+                        } else {
+                            DiagnosticsSection(s, vm, askPermissions, permissions)
+                        }
                     }
                 }
             }
 
-            // Collapsible Bottom Sheet Log Dock
-            LogDockAndSheet(s, vm, Modifier.align(Alignment.BottomCenter))
+            // Bottom Navigation & Log Dock Bar
+            BottomControlBar(s, vm)
+        }
+    }
+
+    @Composable
+    private fun BottomControlBar(s: OtaUiState, vm: OtaViewModel) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(DarkBg)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Collapsible Log Pill directly above tabs
+            LogDockAndSheet(s, vm)
+
+            // Cupertino Segmented Control Tab Row at the bottom
+            CupertinoSegmentedTabs(
+                selectedTab = s.selectedTab,
+                onSelect = { vm.selectTab(it) }
+            )
         }
     }
 
@@ -360,12 +384,12 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun CupertinoSegmentedTabs(
         selectedTab: Int,
-        onSelect: (Int) -> Unit
+        onSelect: (Int) -> Unit,
+        modifier: Modifier = Modifier
     ) {
         Row(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
                 .clip(RoundedCornerShape(14.dp))
                 .background(CardSubtle)
                 .padding(4.dp),
@@ -1259,18 +1283,16 @@ class MainActivity : ComponentActivity() {
 
         // 1. Persistent 1-Line Log Pill at bottom
         Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+            modifier = modifier.fillMaxWidth()
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .background(CardBg)
-                    .border(1.dp, CardBorder, RoundedCornerShape(16.dp))
+                    .border(1.dp, CardBorder, RoundedCornerShape(14.dp))
                     .clickable { showSheet = true }
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
