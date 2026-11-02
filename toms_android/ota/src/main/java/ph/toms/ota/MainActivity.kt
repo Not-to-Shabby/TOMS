@@ -601,7 +601,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        // Tap Counter Pill
+                        // Card Counter Pill
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
@@ -609,7 +609,7 @@ class MainActivity : ComponentActivity() {
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = "Taps: ${s.cardTapCount}",
+                                text = "Inserts: ${s.cardTapCount}",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = if (cardDetected) Color.White else CupertinoSlate
@@ -711,8 +711,8 @@ class MainActivity : ComponentActivity() {
                                     else -> "PN532 Reader Offline"
                                 }
                                 val nfcSubtitle = when {
-                                    !s.isDiagConnected -> "Hold transit card near PN532 coil"
-                                    s.isNfcOnline -> "PN532 active on I2C 0x24 • Ready for card taps"
+                                    !s.isDiagConnected -> "Insert transit card into return slot"
+                                    s.isNfcOnline -> "PN532 active on I2C 0x24 • Ready for card insertion"
                                     else -> "I2C error: Check jumper wires (SDA=4, SCL=5)"
                                 }
                                 Text(

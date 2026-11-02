@@ -333,15 +333,15 @@ static void diag_page(void)
 		snprintk(line, sizeof(line), "TYPE  : %s", card_type_str(atype));
 		draw_text(6, 72, 1, C_GREEN, line);
 	} else {
-		draw_text(6, 60, 1, C_GRAY, "CARD  : TAP CARD TO TEST");
-		draw_text(6, 72, 1, C_GRAY, "HEALTH: WAITING FOR TAP");
+		draw_text(6, 60, 1, C_GRAY, "CARD  : INSERT CARD TO TEST");
+		draw_text(6, 72, 1, C_GRAY, "HEALTH: WAITING FOR CARD");
 	}
 
 	snprintk(line, sizeof(line), "BUTTON: %u PRESSES", (unsigned int)diag_btn_count);
 	draw_text(6, 86, 1, C_WHITE, line);
 
 	draw_text(6, 98, 1, C_WHITE, "BUZZER: GPIO6 ACTIVE");
-	draw_text(6, 110, 1, C_YELLOW, "BEEPS ON TAP/PRESS");
+	draw_text(6, 110, 1, C_YELLOW, "BEEPS ON INSERT/PRESS");
 
 	draw_centered(120, 1, C_GRAY, "PRESS BTN: TEST/NEXT");
 }
@@ -363,7 +363,7 @@ static void card_page(void)
 	draw_centered(6, 2, C_GREEN, "CARD VERIFIED");
 	if (len == 0) {
 		draw_centered(50, 1, C_GRAY, "NONE YET");
-		draw_centered(66, 1, C_WHITE, "TAP CARD ON ANTENNA");
+		draw_centered(66, 1, C_WHITE, "INSERT CARD IN SLOT");
 		return;
 	}
 	for (uint8_t i = 0; i < len; i++) {
@@ -452,7 +452,7 @@ static void passenger_idle_page(void)
 	fill_rect(cx - 18, cy + 2, 8, 8, C_YELLOW);
 
 	/* Big clear instructions */
-	draw_centered(68, 2, C_WHITE, "TAP CARD");
+	draw_centered(68, 2, C_WHITE, "INSERT CARD");
 	draw_centered(88, 2, C_CYAN, "TO EXIT");
 
 	/* Bottom Status Bar */
