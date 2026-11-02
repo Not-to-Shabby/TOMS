@@ -17,6 +17,14 @@ import kotlinx.coroutines.launch
 
 enum class Phase { IDLE, SCANNING, UPLOADING, DONE, FAILED }
 
+data class CardTapRecord(
+    val uid: String,
+    val len: Int,
+    val type: String,
+    val time: String,
+    val tapIndex: Int
+)
+
 data class OtaUiState(
     val selectedTab: Int = 0, // 0 = OTA Update, 1 = Diagnostic Tools
     val phase: Phase = Phase.IDLE,
@@ -27,8 +35,12 @@ data class OtaUiState(
     val imageProblem: String? = null,
     val sent: Long = 0,
     val total: Long = 0,
+    val transferSpeedKBps: Float = 0f,
+    val etaSeconds: Int = 0,
+    val elapsedSeconds: Int = 0,
     val headline: String = "Pick the update file, then find the machine.",
     val log: List<String> = emptyList(),
+    val isLogSheetOpen: Boolean = false,
 
     // Diagnostic Tools state
     val isDiagConnected: Boolean = false,
@@ -38,6 +50,7 @@ data class OtaUiState(
     val lastCardType: String? = null,
     val lastCardTime: String? = null,
     val cardTapCount: Int = 0,
+    val cardHistory: List<CardTapRecord> = emptyList(),
     val buttonPressCount: Int = 0,
     val buttonLastTime: String? = null,
     val screenBacklight: Boolean = true,
@@ -187,7 +200,18 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
         val image = s.image ?: return
         val machine = s.selected ?: return
         job?.cancel()
-        _state.update { it.copy(phase = Phase.UPLOADING, sent = 0, total = image.size.toLong(), headline = "Starting. Do not move away or switch the machine off.") }
+        val uploadStartMs = System.currentTimeMillis()
+        _state.update {
+            it.copy(
+                phase = Phase.UPLOADING,
+                sent = 0,
+                total = image.size.toLong(),
+                transferSpeedKBps = 0f,
+                etaSeconds = 0,
+                elapsedSeconds = 0,
+                headline = "Starting. Do not move away or switch the machine off."
+            )
+        }
         say("upload to ${machine.name} (${machine.address})")
         job = viewModelScope.launch {
             val maxRounds = 3
@@ -198,28 +222,47 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 try {
                     val result = uploader.upload(image) { sent, total ->
-                        _state.update { it.copy(sent = sent, total = total, headline = "Sending ${100 * sent / total}%") }
+                        val now = System.currentTimeMillis()
+                        val elapsedMs = (now - uploadStartMs).coerceAtLeast(1)
+                        val speed = (sent.toFloat() / (elapsedMs / 1000f)) / 1024f
+                        val remainingBytes = (total - sent).coerceAtLeast(0)
+                        val eta = if (speed > 0.5f) (remainingBytes / (speed * 1024f)).toInt() else 0
+                        _state.update {
+                            it.copy(
+                                sent = sent,
+                                total = total,
+                                transferSpeedKBps = speed,
+                                etaSeconds = eta,
+                                elapsedSeconds = (elapsedMs / 1000).toInt(),
+                                headline = "Sending ${100 * sent / total}% (${String.format(Locale.US, "%.1f", speed)} KB/s)"
+                            )
+                        }
                     }
                     when (result) {
                         is OtaOutcome.Installed -> {
                             say("the machine accepted the image and is restarting")
                             _state.update {
-                                it.copy(phase = Phase.DONE, sent = it.total,
-                                    headline = "Sent and checked. The machine restarts into the new version on trial. " +
-                                        "Wait about a minute, then reconnect: it reports the new version once it is satisfied, " +
-                                        "or returns to the old one by itself.")
+                                it.copy(
+                                    phase = Phase.DONE,
+                                    sent = it.total,
+                                    transferSpeedKBps = 0f,
+                                    etaSeconds = 0,
+                                    headline = "Update installed successfully. The machine is restarting into the new version."
+                                )
                             }
                         }
                         OtaOutcome.Unknown -> _state.update {
-                            it.copy(phase = Phase.DONE,
-                                headline = "All data was sent, but the link dropped at the end. Wait a minute, then reconnect and read the machine's version.")
+                            it.copy(
+                                phase = Phase.DONE,
+                                headline = "All data was sent, link dropped at restart. Reconnect to verify version."
+                            )
                         }
                     }
                     return@launch
                 } catch (e: OtaRefused) {
                     // The machine said no for a real reason; retrying will not change it.
                     say("REFUSED: ${e.message}")
-                    _state.update { it.copy(phase = Phase.FAILED, headline = "The machine refused the update. ${e.status.meaning}.") }
+                    _state.update { it.copy(phase = Phase.FAILED, headline = "The machine refused the update: ${e.status.meaning}.") }
                     return@launch
                 } catch (e: CancellationException) {
                     say("cancelled")
@@ -227,7 +270,7 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 } catch (e: Exception) {
                     if (round == maxRounds) {
                         say("failed: ${e.message}")
-                        _state.update { it.copy(phase = Phase.FAILED, headline = "Update stopped: ${e.message}. Nothing was installed; the machine keeps its current version.") }
+                        _state.update { it.copy(phase = Phase.FAILED, headline = "Update stopped: ${e.message}. Machine keeps current version.") }
                         return@launch
                     }
                     say("round $round stopped (${e.message}); retrying ${round + 1} of $maxRounds")
@@ -279,12 +322,20 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                         val now = clock.format(Date())
                         say("NFC TAP: ${card.uidHex} ($atypeName)")
                         _state.update {
+                            val newRecord = CardTapRecord(
+                                uid = card.uidHex,
+                                len = card.uidLen,
+                                type = atypeName,
+                                time = now,
+                                tapIndex = it.cardTapCount + 1
+                            )
                             it.copy(
                                 lastCardUid = card.uidHex,
                                 lastCardLen = card.uidLen,
                                 lastCardType = atypeName,
                                 lastCardTime = now,
-                                cardTapCount = it.cardTapCount + 1
+                                cardTapCount = it.cardTapCount + 1,
+                                cardHistory = (listOf(newRecord) + it.cardHistory).take(5)
                             )
                         }
                     }
@@ -354,6 +405,18 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 say("diag: backlight command failed (not connected?)")
             }
         }
+    }
+
+    fun clearLogs() {
+        _state.update { it.copy(log = emptyList()) }
+    }
+
+    fun toggleLogSheet(open: Boolean? = null) {
+        _state.update { it.copy(isLogSheetOpen = open ?: !it.isLogSheetOpen) }
+    }
+
+    fun resetButtonCounter() {
+        _state.update { it.copy(buttonPressCount = 0, buttonLastTime = null) }
     }
 
     fun simulateCardTap(uidHex: String = "04 08 04 62") {
