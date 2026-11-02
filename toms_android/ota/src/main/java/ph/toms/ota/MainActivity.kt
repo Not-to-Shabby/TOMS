@@ -10,17 +10,33 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -38,6 +54,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -195,142 +214,231 @@ class MainActivity : ComponentActivity() {
         askPermissions: androidx.activity.result.ActivityResultLauncher<Array<String>>,
         permissions: Array<String>
     ) {
+        val machine = s.selected
+
+        // ── Connection Card ──────────────────────────────────────────────
         Card(
             Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            colors = CardDefaults.cardColors(
+                containerColor = if (s.isDiagConnected)
+                    MaterialTheme.colorScheme.primaryContainer
+                else
+                    MaterialTheme.colorScheme.surfaceVariant
+            ),
+            shape = RoundedCornerShape(16.dp)
         ) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val machine = s.selected
+            Column(Modifier.padding(16.dp)) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                    Column(Modifier.weight(1f)) {
                         Text(
-                            text = if (machine != null) machine.name else "No machine selected",
+                            if (s.isDiagConnected) "Connected" else "Hardware Diagnostics",
                             fontWeight = FontWeight.Bold,
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        if (machine != null) {
-                            Text(
-                                text = machine.address,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    if (s.isDiagConnected) {
-                        Button(
-                            onClick = { vm.disconnectDiagnostics() },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) {
-                            Text("Disconnect")
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                if (machine == null) askPermissions.launch(permissions)
-                                else vm.connectDiagnostics()
-                            },
-                            enabled = machine != null && s.phase != Phase.UPLOADING
-                        ) {
-                            Text(if (machine != null) "Connect" else "Find Machine")
-                        }
-                    }
-                }
-                Text(s.diagStatus, style = MaterialTheme.typography.bodySmall)
-            }
-        }
-
-        if (s.isDiagConnected) {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (s.lastCardUid != null)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("NFC Card Reader (PN532)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        if (s.lastCardUid != null) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.primary,
-                                shape = MaterialTheme.shapes.small
-                            ) {
-                                Text(
-                                    " CARD WORKING ",
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                    if (s.lastCardUid != null) {
-                        Text(
-                            "UID: ${s.lastCardUid}",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            color = if (s.isDiagConnected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "Type: ${s.lastCardType ?: "ISO 14443-A"}  |  Length: ${s.lastCardLen} bytes",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            "RF Coupling: Healthy (ATQA / SAK validated)\nLast read: ${s.lastCardTime ?: "--"} (Total taps: ${s.cardTapCount})",
+                            machine?.name ?: "No machine selected",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else {
-                        Text("Ready. Tap physical NFC card against reader antenna...", style = MaterialTheme.typography.bodyMedium)
                     }
-                    OutlinedButton(onClick = { vm.simulateCardTap("04 08 04 62") }) {
-                        Text("Simulate Tap (04 08 04 62)")
+                    Button(
+                        onClick = {
+                            if (s.isDiagConnected) vm.disconnectDiagnostics()
+                            else if (machine != null) vm.connectDiagnostics()
+                            else askPermissions.launch(permissions)
+                        },
+                        enabled = (machine != null || s.phase != Phase.SCANNING) && s.phase != Phase.UPLOADING,
+                        colors = if (s.isDiagConnected)
+                            ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        else ButtonDefaults.buttonColors()
+                    ) {
+                        Text(
+                            if (s.isDiagConnected) "Disconnect"
+                            else if (s.phase == Phase.SCANNING) "Scanning..."
+                            else if (machine != null) "Connect"
+                            else "Find Machine"
+                        )
                     }
                 }
+                if (s.isDiagConnected || s.diagStatus.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(s.diagStatus, style = MaterialTheme.typography.bodySmall)
+                }
             }
+        }
 
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Buzzer Test (GPIO6)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Button(onClick = { vm.testBuzzer(1) }, modifier = Modifier.weight(1f)) { Text("OK", fontSize = 11.sp) }
-                        Button(onClick = { vm.testBuzzer(2) }, modifier = Modifier.weight(1f)) { Text("Warn", fontSize = 11.sp) }
-                        Button(onClick = { vm.testBuzzer(0) }, modifier = Modifier.weight(1f)) { Text("Boot", fontSize = 11.sp) }
-                        Button(onClick = { vm.testBuzzer(5) }, modifier = Modifier.weight(1f)) { Text("Dup", fontSize = 11.sp) }
-                    }
-                }
-            }
+        if (s.phase == Phase.SCANNING) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
 
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Button (GPIO4) & Screen (ST7735)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                    Text("Hardware Button Presses: ${s.buttonPressCount}" + (if (s.buttonLastTime != null) " (at ${s.buttonLastTime})" else ""), style = MaterialTheme.typography.bodyMedium)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { vm.testScreenNext() }, modifier = Modifier.weight(1f)) {
-                            Text("Next Page")
-                        }
-                        OutlinedButton(onClick = { vm.testToggleBacklight() }, modifier = Modifier.weight(1f)) {
-                            Text("Backlight: ${if (s.screenBacklight) "ON" else "OFF"}")
+        if (!s.isDiagConnected && s.machines.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("Select Machine to Connect:", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Spacer(Modifier.height(4.dp))
+                    s.machines.forEach { m ->
+                        val chosen = m.address == s.selected?.address
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable { vm.select(m) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                (if (chosen) "● " else "○ ") + "${m.name}  (${m.rssi} dBm)",
+                                fontWeight = if (chosen) FontWeight.Bold else FontWeight.Normal,
+                                color = if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp
+                            )
                         }
                     }
                 }
             }
-        } else {
-            Text(
-                "Select a machine and tap 'Connect' above to test hardware: NFC, Buzzer, Button, and Screen.",
-                style = MaterialTheme.typography.bodyMedium
-            )
+        }
+
+        // ── NFC Card Reader: Big Animated Card ───────────────────────────
+        val cardDetected = s.lastCardUid != null
+        val nfcCardColor by animateColorAsState(
+            targetValue = if (cardDetected) Color(0xFF1B5E20) else Color(0xFF37474F),
+            animationSpec = tween(500), label = "nfcCard"
+        )
+        val pulseTransition = rememberInfiniteTransition(label = "nfcPulse")
+        val pulseAlpha by pulseTransition.animateFloat(
+            initialValue = 0.4f, targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "pulseA"
+        )
+
+        Card(
+            Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = nfcCardColor),
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+        ) {
+            Column(
+                Modifier.padding(20.dp).fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (!cardDetected) {
+                        Box(
+                            Modifier.size(72.dp).scale(pulseAlpha)
+                                .clip(CircleShape)
+                                .border(3.dp, Color(0xFF80CBC4).copy(alpha = pulseAlpha), CircleShape)
+                        )
+                    }
+                    Box(
+                        Modifier.size(56.dp).clip(CircleShape)
+                            .background(if (cardDetected) Color(0xFF4CAF50) else Color(0xFF546E7A)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (cardDetected) "✓" else "...",
+                            color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    if (cardDetected) "CARD DETECTED" else "TAP CARD ON ANTENNA",
+                    fontWeight = FontWeight.Bold, fontSize = 16.sp,
+                    color = if (cardDetected) Color(0xFFA5D6A7) else Color(0xFFB0BEC5)
+                )
+                if (cardDetected) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(s.lastCardUid ?: "", fontFamily = FontFamily.Monospace,
+                        fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        "${s.lastCardType ?: "ISO 14443-A"} • ${s.lastCardLen} bytes • ${s.lastCardTime}",
+                        fontSize = 12.sp, color = Color(0xFFC8E6C9)
+                    )
+                    Text("Total Taps: ${s.cardTapCount}", fontSize = 11.sp, color = Color(0xFFA5D6A7))
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.simulateCardTap("04 08 04 62") },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF80CBC4))
+                ) { Text("Simulate Tap", fontSize = 12.sp) }
+            }
+        }
+
+        // ── Buzzer Test: Large Color-Coded Buttons ───────────────────────
+        Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Buzzer Test", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                Text("GPIO6 Active Buzzer", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BigBuzzerButton("OK", Color(0xFF2E7D32), Color.White, Modifier.weight(1f)) { vm.testBuzzer(1) }
+                    BigBuzzerButton("WARN", Color(0xFFF57F17), Color.Black, Modifier.weight(1f)) { vm.testBuzzer(2) }
+                    BigBuzzerButton("BOOT", Color(0xFF1565C0), Color.White, Modifier.weight(1f)) { vm.testBuzzer(0) }
+                    BigBuzzerButton("DUP", Color(0xFF6A1B9A), Color.White, Modifier.weight(1f)) { vm.testBuzzer(5) }
+                }
+            }
+        }
+
+        // ── Button Counter & Screen: Animated Cards ──────────────────────
+        val backlightColor by animateColorAsState(
+            targetValue = if (s.screenBacklight) Color(0xFF1565C0) else Color(0xFF78909C),
+            animationSpec = tween(300), label = "blColor"
+        )
+        val screenScale by animateFloatAsState(
+            targetValue = if (s.screenBacklight) 1.0f else 0.92f,
+            animationSpec = tween(300), label = "scrScale"
+        )
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Card(Modifier.weight(1f), shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)) {
+                Column(Modifier.padding(16.dp).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("${s.buttonPressCount}", fontSize = 36.sp, fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary)
+                    Text("BUTTON PRESSES", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (s.buttonLastTime != null) {
+                        Text(s.buttonLastTime ?: "", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            Card(Modifier.weight(1f).scale(screenScale), shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = backlightColor),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)) {
+                Column(Modifier.padding(16.dp).fillMaxWidth().clickable { vm.testToggleBacklight() },
+                    horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(if (s.screenBacklight) "☀ ON" else "🌙 OFF",
+                        color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Tap to toggle", fontSize = 10.sp, color = Color.White.copy(alpha = 0.7f))
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = { vm.testScreenNext() },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) {
+                        Text("Next Page", fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun BigBuzzerButton(
+        label: String, bgColor: Color, txtColor: Color,
+        modifier: Modifier = Modifier, onClick: () -> Unit
+    ) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = bgColor),
+            shape = RoundedCornerShape(12.dp),
+            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
+            modifier = modifier.height(48.dp)
+        ) {
+            Text(label, color = txtColor, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
         }
     }
 }

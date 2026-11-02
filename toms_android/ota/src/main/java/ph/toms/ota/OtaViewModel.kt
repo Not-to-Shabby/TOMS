@@ -149,6 +149,10 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val n = _state.value.machines.size
                 say("scan finished: $n machine(s)")
+                val autoPick = _state.value.selected
+                    ?: _state.value.machines.firstOrNull { it.name.contains("TOMS", ignoreCase = true) }
+                    ?: _state.value.machines.firstOrNull()
+
                 if (autoRun && n > 0) {
                     val best = _state.value.machines.maxBy { it.rssi }
                     say("auto: picked ${best.name} (${best.rssi} dBm)")
@@ -157,7 +161,13 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                     return@launch
                 }
                 _state.update {
-                    it.copy(phase = Phase.IDLE, headline = if (n == 0) "No machine found. Is it powered and close by?" else "Choose a machine.")
+                    it.copy(
+                        phase = Phase.IDLE,
+                        selected = autoPick,
+                        headline = if (n == 0) "No machine found. Is it powered and close by?"
+                                   else if (autoPick != null) "Selected ${autoPick.name}."
+                                   else "Choose a machine."
+                    )
                 }
             } catch (e: CancellationException) {
                 throw e
