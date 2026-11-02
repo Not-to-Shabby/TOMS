@@ -200,6 +200,18 @@ fun MoreScreen(
             if (fix == null) "no fix yet" else "%.5f, %.5f  ±%s m".format(fix.lat, fix.lon, fix.accuracyMeters?.let { "%.0f".format(it) } ?: "?"),
         )
         Fact("Nearest stop", state.nearestStop?.let { "${it.stop.name} (%.0f m)".format(it.distanceMeters) } ?: "none within range")
+        val rmConn = state.rmConnection
+        val rmLabel = when (rmConn) {
+            is ph.toms.conductor.ble.RmConnectionState.Connected -> "${rmConn.deviceName} (connected)"
+            is ph.toms.conductor.ble.RmConnectionState.Connecting -> "${rmConn.deviceName} (connecting...)"
+            ph.toms.conductor.ble.RmConnectionState.Scanning -> "searching..."
+            ph.toms.conductor.ble.RmConnectionState.Disconnected -> "offline"
+        }
+        Fact("Return Machine", rmLabel)
+        state.rmHeartbeat?.let { hb ->
+            Fact("RM battery", if (hb.isOnUsb) "USB power" else "${hb.batteryPct}% (${hb.batteryMv} mV)")
+            Fact("RM uptime", "${hb.uptimeS}s")
+        }
 
         Text("Last card reads", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
         if (state.recentReads.isEmpty()) {
