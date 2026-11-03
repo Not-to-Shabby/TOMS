@@ -37,10 +37,19 @@ static uint8_t reset_reason;
 static int display_rc = -1;
 static int ble_rc = -1;
 
-/* Read de-duplication: same UID within 2 s is not re-notified (PROTOCOL.md). */
-static uint8_t last_uid[TOMS_UID_MAX];
-static uint8_t last_uid_len;
-static int64_t last_read_ms;
+/* Read de-duplication and slot presence tracking */
+enum card_presence {
+	PRESENCE_EMPTY = 0,
+	PRESENCE_SEATED = 1,
+};
+
+static enum card_presence slot_presence = PRESENCE_EMPTY;
+static uint8_t seated_uid[TOMS_UID_MAX];
+static uint8_t seated_uid_len;
+static int64_t last_seen_ms;
+static int64_t card_removed_ms;
+static uint8_t last_removed_uid[TOMS_UID_MAX];
+static uint8_t last_removed_len;
 
 static void log_uid(const char *what, const uint8_t *uid, uint8_t len)
 {
@@ -101,18 +110,6 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 {
 	k_mutex_lock(&card_lock, K_FOREVER);
 
-	int64_t now = k_uptime_get();
-	if (last_uid_len == uid_len && memcmp(last_uid, uid, uid_len) == 0 &&
-	    now - last_read_ms < 2000) {
-		play(TOMS_TONE_DUPLICATE);
-		display_set_verdict(TOMS_VERDICT_ALREADY_RETURNED, uid, uid_len, atype);
-		k_mutex_unlock(&card_lock);
-		return;
-	}
-	memcpy(last_uid, uid, uid_len);
-	last_uid_len = uid_len;
-	last_read_ms = now;
-
 	uint8_t status = rm_ble_state_lookup(uid, uid_len);
 	log_uid("card read", uid, uid_len);
 	LOG_INF("type %u, cached state %u", atype, status);
@@ -151,14 +148,25 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	rc = rm_ble_paid_check(uid, uid_len, cfg.paid_timeout_ms, &verdict);
 	if (rc == 0) {
 		LOG_INF("paid_reply: verdict %u", verdict);
-		play(tone_for_verdict(verdict));
+		if (verdict == TOMS_VERDICT_UNPAID) {
+			buzzer_alarm_start(30000); /* 30-second persistent alarm */
+		} else {
+			buzzer_alarm_stop();
+			play(tone_for_verdict(verdict));
+		}
 		display_set_verdict(verdict, uid, uid_len, atype);
 	} else {
 		LOG_INF("no paid_reply (%d); using cached state", rc);
 		uint8_t tone = tone_for_cached(status);
-		play(tone);
-		uint8_t v = (tone == TOMS_TONE_OK) ? TOMS_VERDICT_OK : 0xFF;
-		display_set_verdict(v, uid, uid_len, atype);
+		if (tone == TOMS_TONE_UNPAID) {
+			buzzer_alarm_start(30000);
+			display_set_verdict(TOMS_VERDICT_UNPAID, uid, uid_len, atype);
+		} else {
+			buzzer_alarm_stop();
+			play(tone);
+			uint8_t v = (tone == TOMS_TONE_OK) ? TOMS_VERDICT_OK : 0xFF;
+			display_set_verdict(v, uid, uid_len, atype);
+		}
 	}
 	k_mutex_unlock(&card_lock);
 }
@@ -225,22 +233,63 @@ static void nfc_loop(void *a, void *b, void *c)
 		display_test_set_nfc_status(true);
 		buzzer_play(TOMS_TONE_BOOT);
 
-		for (;;) {
-			struct pn532_target t;
-			trial_alive(TRIAL_TASK_NFC);
-			int rc = pn532_read_target(&t, K_MSEC(300));
-			if (rc == 0) {
-				on_read(t.uid, t.uid_len, t.atype);
-			} else if (rc == -ETIMEDOUT) {
-				/* No card this round: pause so the poll does not hot-loop
-				 * (and flood the log) while the field is empty. */
-				k_sleep(K_MSEC(150));
-				continue;
-			} else {
-				LOG_WRN("PN532 read error (%d); re-init", rc);
-				break;
+			for (;;) {
+				struct pn532_target t;
+				trial_alive(TRIAL_TASK_NFC);
+				int rc = pn532_read_target(&t, K_MSEC(300));
+				int64_t now = k_uptime_get();
+
+				if (rc == 0) {
+					last_seen_ms = now;
+
+					/* If this exact card is already seated in the slot, ignore continuous re-reads */
+					if (slot_presence == PRESENCE_SEATED &&
+					    seated_uid_len == t.uid_len &&
+					    memcmp(seated_uid, t.uid, t.uid_len) == 0) {
+						/* Card is resting in the slot: no-op, suppress duplicates */
+						k_sleep(K_MSEC(100));
+						continue;
+					}
+
+					/* Card is newly detected in slot */
+					slot_presence = PRESENCE_SEATED;
+					memcpy(seated_uid, t.uid, t.uid_len);
+					seated_uid_len = t.uid_len;
+
+					/* Check if this card was recently removed within duplicate window (5.0s) */
+					if (last_removed_len == t.uid_len &&
+					    memcmp(last_removed_uid, t.uid, t.uid_len) == 0 &&
+					    now - card_removed_ms < 5000) {
+						LOG_INF("card re-inserted within 5s -> DUPLICATE");
+						buzzer_alarm_stop();
+						play(TOMS_TONE_DUPLICATE);
+						display_set_verdict(TOMS_VERDICT_ALREADY_RETURNED, t.uid, t.uid_len, t.atype);
+					} else {
+						/* Fresh card insertion */
+						on_read(t.uid, t.uid_len, t.atype);
+					}
+				} else if (rc == -ETIMEDOUT) {
+					/* No card in RF field this round */
+					if (slot_presence == PRESENCE_SEATED) {
+						/* Check if card has been absent for > 400ms */
+						if (now - last_seen_ms >= 400) {
+							LOG_INF("card removed from slot");
+							slot_presence = PRESENCE_EMPTY;
+							card_removed_ms = now;
+							memcpy(last_removed_uid, seated_uid, seated_uid_len);
+							last_removed_len = seated_uid_len;
+							seated_uid_len = 0;
+						}
+					}
+					k_sleep(K_MSEC(100));
+					continue;
+				} else {
+					LOG_WRN("PN532 read error (%d); re-init", rc);
+					slot_presence = PRESENCE_EMPTY;
+					seated_uid_len = 0;
+					break;
+				}
 			}
-		}
 	}
 }
 
@@ -276,6 +325,13 @@ static void on_button(void)
 {
 	btn_press_count++;
 	LOG_INF("button pressed (#%u)", (unsigned int)btn_press_count);
+	if (buzzer_is_alarming() || display_is_alarming()) {
+		LOG_INF("button pressed: silencing unpaid alarm");
+		buzzer_alarm_stop();
+		display_clear_alarm();
+		display_test_record_button_press(btn_press_count);
+		return;
+	}
 	buzzer_play(TOMS_TONE_OK);
 	display_test_record_button_press(btn_press_count);
 	display_test_button();

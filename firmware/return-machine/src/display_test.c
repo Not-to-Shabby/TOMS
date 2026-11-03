@@ -12,6 +12,7 @@
 LOG_MODULE_REGISTER(display_test, LOG_LEVEL_INF);
 
 #include "ble/svc.h"
+#include "buzzer.h"
 #include "toms_pins.h"
 #include "trial.h"
 #include "ota_ui.h"
@@ -57,6 +58,7 @@ enum page {
 #define REQ_CARD BIT(2)
 #define REQ_DIAG_ON BIT(3)
 #define REQ_DIAG_OFF BIT(4)
+#define REQ_ALARM_CLEAR BIT(5)
 
 #define DISPLAY_STACK 4096
 #define DISPLAY_PRIO 8
@@ -80,6 +82,7 @@ static uint8_t card_verdict = 0xFF;
 static bool diag_nfc_ready = true;
 static uint16_t diag_btn_count;
 static bool diag_mode_active;
+static bool screen_alarming;
 
 static int backlight_level = IS_ENABLED(CONFIG_TOMS_BACKLIGHT_ACTIVE_HIGH) ? 1 : 0;
 /* Boots on the live Bluetooth page; the button walks the other pages. */
@@ -510,7 +513,7 @@ static void passenger_verdict_page(void)
 		draw_centered(44, 2, C_YELLOW, "PLEASE PAY");
 		draw_centered(64, 2, C_YELLOW, "CONDUCTOR");
 		draw_centered(90, 1, C_WHITE, hex);
-		draw_centered(108, 1, C_YELLOW, "ALARM TRIGGERED");
+		draw_centered(108, 1, C_YELLOW, "PRESS BTN TO MUTE");
 		break;
 
 	case 3: /* TOMS_VERDICT_ALREADY_RETURNED: Amber Gold */
@@ -669,64 +672,92 @@ static void display_loop(void *a, void *b, void *c)
 
 		/* Never wait longer than 500 ms: the watchdog treats a silent display thread as hung. */
 		int rc = k_sem_take(&wake, K_MSEC(500));
-		if (rc == -EAGAIN) {
-			idle_ms += 500;
-			if (!diag_mode_active) {
-				if (page == PAGE_PASSENGER_IDLE) {
-					if (idle_ms >= 1000) {
-						idle_ms = 0;
-						redraw = true; /* update clock / connection status */
+			if (rc == -EAGAIN) {
+				idle_ms += 500;
+				if (!diag_mode_active) {
+					if (page == PAGE_PASSENGER_IDLE) {
+						if (idle_ms >= 1000) {
+							idle_ms = 0;
+							redraw = true; /* update clock / connection status */
+						}
+					} else if (page == PAGE_PASSENGER_VERDICT) {
+						if (screen_alarming) {
+							if (idle_ms >= 30000 || !buzzer_is_alarming()) {
+								/* 30s auto-timeout or alarm silenced */
+								LOG_INF("display: unpaid alarm timed out");
+								screen_alarming = false;
+								buzzer_alarm_stop();
+								idle_ms = 0;
+								page = PAGE_PASSENGER_IDLE;
+								redraw = true;
+							}
+						} else if (idle_ms >= 2500) {
+							idle_ms = 0;
+							page = PAGE_PASSENGER_IDLE;
+							redraw = true;
+						}
 					}
-				} else if (page == PAGE_PASSENGER_VERDICT) {
-					if (idle_ms >= 2500) {
+				} else {
+					/* In diagnostic mode: auto-revert to passenger idle after 20s of inactivity */
+					if (idle_ms >= 20000) {
+						LOG_INF("display: diag mode timeout -> reverting to passenger idle");
+						diag_mode_active = false;
+						screen_alarming = false;
+						buzzer_alarm_stop();
 						idle_ms = 0;
 						page = PAGE_PASSENGER_IDLE;
 						redraw = true;
+					} else if (page == PAGE_BLE || page == PAGE_DIAG) {
+						if (idle_ms % 1000 == 0) {
+							redraw = true;
+						}
+					} else if (page == PAGE_CARD) {
+						if (idle_ms >= 4000) {
+							idle_ms = 0;
+							page = PAGE_DIAG;
+							redraw = true;
+						}
+					} else if (page == PAGE_PASSENGER_VERDICT) {
+						if (screen_alarming) {
+							if (idle_ms >= 30000 || !buzzer_is_alarming()) {
+								screen_alarming = false;
+								buzzer_alarm_stop();
+								idle_ms = 0;
+								page = PAGE_DIAG;
+								redraw = true;
+							}
+						} else if (idle_ms >= 2500) {
+							idle_ms = 0;
+							page = PAGE_DIAG;
+							redraw = true;
+						}
 					}
 				}
-			} else {
-				/* In diagnostic mode: auto-revert to passenger idle after 20s of inactivity */
-				if (idle_ms >= 20000) {
-					LOG_INF("display: diag mode timeout -> reverting to passenger idle");
-					diag_mode_active = false;
-					idle_ms = 0;
-					page = PAGE_PASSENGER_IDLE;
-					redraw = true;
-				} else if (page == PAGE_BLE || page == PAGE_DIAG) {
-					if (idle_ms % 1000 == 0) {
-						redraw = true;
-					}
-				} else if (page == PAGE_CARD) {
-					if (idle_ms >= 4000) {
-						idle_ms = 0;
-						page = PAGE_DIAG;
-						redraw = true;
-					}
-				} else if (page == PAGE_PASSENGER_VERDICT) {
-					if (idle_ms >= 2500) {
-						idle_ms = 0;
-						page = PAGE_DIAG;
-						redraw = true;
-					}
-				}
+				continue;
 			}
-			continue;
-		}
-		idle_ms = 0;
+			idle_ms = 0;
 
-		uint32_t req = (uint32_t)atomic_set(&requests, 0);
-		if (req & REQ_DIAG_ON) {
-			diag_mode_active = true;
-			idle_ms = 0;
-			page = PAGE_DIAG;
-			redraw = true;
-		}
-		if (req & REQ_DIAG_OFF) {
-			diag_mode_active = false;
-			idle_ms = 0;
-			page = PAGE_PASSENGER_IDLE;
-			redraw = true;
-		}
+			uint32_t req = (uint32_t)atomic_set(&requests, 0);
+			if (req & REQ_ALARM_CLEAR) {
+				screen_alarming = false;
+				idle_ms = 0;
+				page = diag_mode_active ? PAGE_DIAG : PAGE_PASSENGER_IDLE;
+				redraw = true;
+			}
+			if (req & REQ_DIAG_ON) {
+				diag_mode_active = true;
+				idle_ms = 0;
+				page = PAGE_DIAG;
+				redraw = true;
+			}
+			if (req & REQ_DIAG_OFF) {
+				diag_mode_active = false;
+				screen_alarming = false;
+				buzzer_alarm_stop();
+				idle_ms = 0;
+				page = PAGE_PASSENGER_IDLE;
+				redraw = true;
+			}
 		if (req & REQ_BACKLIGHT) {
 			backlight_level = !backlight_level;
 			apply_backlight();
@@ -837,14 +868,41 @@ void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8
 	card_uid_len = len;
 	card_uid_atype = atype;
 	card_verdict = verdict;
+	screen_alarming = (verdict == 1); /* 1 = TOMS_VERDICT_UNPAID */
 	k_mutex_unlock(&uid_lock);
 
 	atomic_or(&requests, REQ_CARD);
 	k_sem_give(&wake);
 }
 
+void display_clear_alarm(void)
+{
+	k_mutex_lock(&uid_lock, K_FOREVER);
+	screen_alarming = false;
+	k_mutex_unlock(&uid_lock);
+
+	atomic_or(&requests, REQ_ALARM_CLEAR);
+	k_sem_give(&wake);
+}
+
+bool display_is_alarming(void)
+{
+	k_mutex_lock(&uid_lock, K_FOREVER);
+	bool a = screen_alarming;
+	k_mutex_unlock(&uid_lock);
+	return a;
+}
+
 void display_test_button(void)
 {
+	/* 1. If an unpaid alarm is active, button press immediately silences it! */
+	if (display_is_alarming() || buzzer_is_alarming()) {
+		LOG_INF("button pressed: silencing unpaid alarm");
+		buzzer_alarm_stop();
+		display_clear_alarm();
+		return;
+	}
+
 	/* Runs in the system workqueue right after the debounced press. */
 	if (ota_ui_pair_button()) {
 		return; /* the press confirms the pairing number */

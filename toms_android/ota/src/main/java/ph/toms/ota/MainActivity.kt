@@ -547,6 +547,58 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Spacer(Modifier.height(6.dp))
 
+                    // Active Unpaid Fare Alarm Banner
+                    AnimatedVisibility(visible = s.isAlarmActive) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = CupertinoRed.copy(alpha = 0.2f)),
+                            border = BorderStroke(1.5.dp, CupertinoRed)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Warning,
+                                        contentDescription = null,
+                                        tint = CupertinoRed,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "UNPAID FARE ALARM ACTIVE",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = CupertinoRed
+                                        )
+                                        Text(
+                                            text = "Card: ${s.alarmCardUid ?: "Unknown"}",
+                                            fontSize = 11.sp,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+
+                                Button(
+                                    onClick = { vm.clearAlarm() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = CupertinoRed),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Clear Alarm", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
                     // 1. Apple Wallet-Style NFC Pass Card
             val cardGradient = if (cardDetected) {
             Brush.verticalGradient(listOf(Color(0xFF143823), Color(0xFF0D1E15)))
@@ -1110,6 +1162,121 @@ class MainActivity : ComponentActivity() {
                         )
                         Spacer(Modifier.width(4.dp))
                         Text("Next Page", fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
+
+        // 4. Hardware Module Configuration Card
+        var showSettings by remember { mutableStateOf(false) }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            colors = CardDefaults.cardColors(containerColor = CardBg),
+            border = BorderStroke(1.dp, CardBorder)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSettings = !showSettings },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "HARDWARE MODULE SETTINGS",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp,
+                            letterSpacing = 1.sp,
+                            color = CupertinoSlate
+                        )
+                        Text(
+                            text = "NFC Debounce • Buzzer Alarm • Display Dwell",
+                            fontSize = 11.sp,
+                            color = CupertinoSlate
+                        )
+                    }
+                    Icon(
+                        imageVector = if (showSettings) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = CupertinoSlate,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                AnimatedVisibility(visible = showSettings) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        // NFC Slide Debounce & Removal
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CardSubtle)
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("NFC Slot Debounce", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                                Text("Ignores re-reads while card is seated", fontSize = 10.sp, color = CupertinoSlate)
+                            }
+                            MetadataBadge("400 ms Active", CupertinoGreen)
+                        }
+
+                        // Unpaid Continuous Alarm Timeout
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CardSubtle)
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Unpaid Alarm Loop", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                                Text("Continuous siren (200ms on/off)", fontSize = 10.sp, color = CupertinoSlate)
+                            }
+                            MetadataBadge("30s Auto-Stop", CupertinoOrange)
+                        }
+
+                        // Display Dwell Time
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CardSubtle)
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Verdict Screen Dwell", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                                Text("Time PAID/UNPAID remains on LCD", fontSize = 10.sp, color = CupertinoSlate)
+                            }
+                            MetadataBadge("2.5 Seconds", CupertinoCyan)
+                        }
+
+                        // Button Silence
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CardSubtle)
+                                .padding(10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text("Alarm Mute Trigger", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Color.White)
+                                Text("Button tap or App button silences alarm", fontSize = 10.sp, color = CupertinoSlate)
+                            }
+                            MetadataBadge("App & Button", CupertinoPurple)
+                        }
                     }
                 }
             }

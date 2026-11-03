@@ -376,6 +376,16 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 		return -EACCES;
 	}
 
+	/* Command 0x05: Clear / Silence Unpaid Alarm (allowed for conductors anytime) */
+	if (cmd == 0x05) {
+		buzzer_alarm_stop();
+		display_clear_alarm();
+		LOG_INF("diag: unpaid alarm cleared/silenced by phone");
+		uint8_t ack[4] = { 0x85, 0x00, 0x00, 0x00 };
+		(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+		return 0;
+	}
+
 	/* Protected commands 0x01..0x04 require diagnostic session to be unlocked */
 	if (!diag_authenticated && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
 		LOG_WRN("diag: cmd 0x%02X rejected (diagnostic session locked)", cmd);

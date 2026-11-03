@@ -3,6 +3,9 @@
 #ifndef TOMS_BUZZER_H
 #define TOMS_BUZZER_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 enum toms_tone {
 	TOMS_TONE_BOOT = 0,   /* rising 3 quick beeps: boot / reconnect */
 	TOMS_TONE_OK = 1,     /* 1 x 80 ms: card read, paid */
@@ -15,5 +18,15 @@ enum toms_tone {
 void buzzer_init(void);
 /* Non-blocking; playing a new tone replaces the one in progress. */
 void buzzer_play(enum toms_tone tone);
+
+/* Start continuous pulsing alarm (200ms on, 150ms off repeating).
+ * Stops automatically after timeout_ms (e.g. 30000ms), or when buzzer_alarm_stop() is called. */
+void buzzer_alarm_start(uint32_t timeout_ms);
+
+/* Stop any active continuous alarm immediately and silence the buzzer. */
+void buzzer_alarm_stop(void);
+
+/* Returns true if the continuous alarm is currently sounding. */
+bool buzzer_is_alarming(void);
 
 #endif /* TOMS_BUZZER_H */

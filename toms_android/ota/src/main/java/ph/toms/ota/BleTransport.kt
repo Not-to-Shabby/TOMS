@@ -272,6 +272,11 @@ class BleTransport private constructor(
         writeChar(c, Ota.paidReplyFrame(checkSeq, verdict), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
     }
 
+    suspend fun writeClearAlarm(): Boolean = ops.withLock {
+        val c = diagChar ?: return@withLock false
+        writeChar(c, byteArrayOf(0x05, 0x00), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+    }
+
     override fun close() {
         if (closed) return
         closed = true

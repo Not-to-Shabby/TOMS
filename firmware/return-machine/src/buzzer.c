@@ -27,6 +27,8 @@ static const struct tone_step patterns[][8] = {
 static const struct tone_step *current;
 static uint8_t step;
 static bool sounding;
+static bool alarm_active;
+static int64_t alarm_deadline_ms;
 
 static void step_run(struct k_work *work);
 
@@ -44,6 +46,19 @@ static void step_run(struct k_work *work)
 		/* On phase elapsed: silence, then move to the next step. */
 		gpio_pin_set_dt(&bz, 0);
 		sounding = false;
+
+		if (alarm_active) {
+			if (k_uptime_get() >= alarm_deadline_ms) {
+				LOG_INF("buzzer: unpaid alarm auto-timeout after 30s");
+				alarm_active = false;
+				current = NULL;
+				return;
+			}
+			/* Unpaid continuous alarm pattern: 200ms ON, 150ms OFF */
+			k_work_reschedule(&step_work, K_MSEC(150));
+			return;
+		}
+
 		if (current[step + 1].on_ms == 0) {
 			current = NULL;
 			return;
@@ -60,7 +75,8 @@ static void step_run(struct k_work *work)
 
 	gpio_pin_set_dt(&bz, 1);
 	sounding = true;
-	k_work_reschedule(&step_work, K_MSEC(current[step].on_ms));
+	uint16_t on_time = alarm_active ? 200 : current[step].on_ms;
+	k_work_reschedule(&step_work, K_MSEC(on_time));
 }
 
 void buzzer_play(enum toms_tone tone)
@@ -69,11 +85,42 @@ void buzzer_play(enum toms_tone tone)
 		return;
 	}
 	k_work_cancel_delayable(&step_work);
+	alarm_active = false;
 	gpio_pin_set_dt(&bz, 0);
 	sounding = false;
 	current = patterns[tone];
 	step = 0;
 	step_run(&step_work.work);
+}
+
+void buzzer_alarm_start(uint32_t timeout_ms)
+{
+	k_work_cancel_delayable(&step_work);
+	gpio_pin_set_dt(&bz, 0);
+	sounding = false;
+	alarm_active = true;
+	alarm_deadline_ms = k_uptime_get() + (timeout_ms > 0 ? timeout_ms : 30000u);
+	current = patterns[TOMS_TONE_UNPAID];
+	step = 0;
+	LOG_INF("buzzer: continuous unpaid alarm started (timeout %u ms)", (unsigned int)timeout_ms);
+	step_run(&step_work.work);
+}
+
+void buzzer_alarm_stop(void)
+{
+	if (alarm_active || sounding) {
+		LOG_INF("buzzer: alarm stopped / silenced");
+	}
+	alarm_active = false;
+	k_work_cancel_delayable(&step_work);
+	gpio_pin_set_dt(&bz, 0);
+	sounding = false;
+	current = NULL;
+}
+
+bool buzzer_is_alarming(void)
+{
+	return alarm_active;
 }
 
 void buzzer_init(void)

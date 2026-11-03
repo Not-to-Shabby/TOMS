@@ -51,6 +51,8 @@ data class OtaUiState(
     val machineUptimeS: Long = 0,
     val batteryPct: Int = 0xFF,
     val batteryMv: Int = 0,
+    val isAlarmActive: Boolean = false,
+    val alarmCardUid: String? = null,
     val simulatedVerdict: Int = 1, // 0 = PAID/OK, 1 = UNPAID, 2 = UNKNOWN, 3 = ALREADY_RETURNED
     val lastCardUid: String? = null,
     val lastCardLen: Int = 0,
@@ -415,7 +417,11 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                         val vName = vNames.getOrNull(verdict) ?: "Verdict $verdict"
                         say("PAID_CHECK: card ${chk.uidHex} (seq ${chk.checkSeq}) -> sending $vName")
                         val ok = transport.writePaidReply(chk.checkSeq, verdict)
-                        if (!ok) say("PAID_REPLY: failed to send verdict")
+                        if (!ok) {
+                            say("PAID_REPLY: failed to send verdict")
+                        } else if (verdict == 1) { // 1 = UNPAID
+                            _state.update { it.copy(isAlarmActive = true, alarmCardUid = chk.uidHex) }
+                        }
                     }
                 }
             } catch (e: CancellationException) {
@@ -427,11 +433,24 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun clearAlarm() {
+        viewModelScope.launch {
+            say("diag: sending clear alarm command")
+            val ok = diagTransport?.writeClearAlarm() ?: false
+            if (ok) {
+                say("diag: alarm cleared / silenced")
+                _state.update { it.copy(isAlarmActive = false) }
+            } else {
+                say("diag: clear alarm failed (not connected?)")
+            }
+        }
+    }
+
     fun disconnectDiagnostics() {
         diagJob?.cancel()
         diagTransport?.close()
         diagTransport = null
-        _state.update { it.copy(isDiagConnected = false, diagStatus = "Disconnected", isNfcOnline = false, nfcHealthStatus = "CHECKING...") }
+        _state.update { it.copy(isDiagConnected = false, diagStatus = "Disconnected", isNfcOnline = false, isAlarmActive = false, nfcHealthStatus = "CHECKING...") }
         say("diag: disconnected")
     }
 

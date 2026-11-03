@@ -35,6 +35,12 @@ void display_test_set_uid(const uint8_t *uid, uint8_t len, uint8_t atype);
  * TOMS_VERDICT_ALREADY_RETURNED, or 0xFF (offline unverified). */
 void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8_t atype);
 
+/* Immediately silences active unpaid alarm and returns display to idle. */
+void display_clear_alarm(void);
+
+/* Returns true if an unpaid fare alarm is currently active on screen. */
+bool display_is_alarming(void);
+
 /* Switches between normal passenger transit UI (false) and hardware diagnostic test mode (true). */
 void display_set_diag_mode(bool active);
 
