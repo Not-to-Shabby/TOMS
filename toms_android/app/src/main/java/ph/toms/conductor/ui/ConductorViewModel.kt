@@ -74,11 +74,23 @@ data class EndShiftPrompt(
     val paidOutCount: Int,
 )
 
+/**
+ * What the Clear-alarm button has to ask before it does anything. A returned-unpaid alarm must not be
+ * cleared silently: the conductor answers whether the passenger paid, and the card's next state follows
+ * from that answer. Cancel changes nothing and leaves the hardware alarming.
+ */
+data class ClearAlarmPrompt(
+    val trip: Trip,
+    val state: CardState,
+)
+
 data class ConductorState(
     val shift: Shift? = null,
     /** An open shift of someone else, or on another vehicle or route. It must be ended before a new shift starts. */
     val blockedBy: Shift? = null,
     val endPrompt: EndShiftPrompt? = null,
+    /** Set when Clear alarm was tapped on a returned-unpaid card, until the conductor answers. */
+    val clearAlarmPrompt: ClearAlarmPrompt? = null,
     val ending: Boolean = false,
     val showSummary: Boolean = false,
     val summary: ShiftSummary? = null,
@@ -522,9 +534,47 @@ class ConductorViewModel @Inject constructor(
 
     fun markPaid(tripId: String) = apply(tripId, CardEvent.MARK_PAID)
     fun returnCard(tripId: String) = apply(tripId, CardEvent.RETURNED_AT_TERMINAL)
-    fun clearAlarm(tripId: String) {
+
+    /**
+     * Clear alarm was tapped. Nothing is done yet: the conductor is asked whether the passenger paid,
+     * because clearing a returned-unpaid alarm silently would lose the fare with no audit trail.
+     */
+    fun requestClearAlarm(tripId: String) {
+        val trip = tripByCard.values.firstOrNull { it.id == tripId } ?: return
+        val state = cardStates[trip.nfcUid] ?: return
+        if (state != CardState.RETURNED_UNPAID) return
+        _state.update { it.copy(clearAlarmPrompt = ClearAlarmPrompt(trip, state)) }
+    }
+
+    fun dismissClearAlarm() = _state.update { it.copy(clearAlarmPrompt = null) }
+
+    /**
+     * The passenger paid at the terminal after all. The payment is recorded as a `fare_recovered` audit
+     * event (release is final, so the card state is not reopened), then the card is resolved back to
+     * AVAILABLE and the hardware alarm is silenced. The fare lands in this shift's collected cash.
+     * The recovery is written before the resolve, so it still sees the card as returned-unpaid.
+     */
+    fun confirmClearAlarmPaid() {
+        val prompt = _state.value.clearAlarmPrompt ?: return
+        _state.update { it.copy(clearAlarmPrompt = null) }
         rmLink.sendAlarmClear()
-        apply(tripId, CardEvent.CONDUCTOR_RESOLVE)
+        val shiftId = _state.value.shift?.id
+        viewModelScope.launch {
+            trips.recordFareRecovered(shiftId, prompt.trip.id, actor)
+            apply(prompt.trip.id, CardEvent.CONDUCTOR_RESOLVE)
+        }
+    }
+
+    /**
+     * The fare really was not paid. The card keeps its true RETURNED_UNPAID state so End Shift asks about
+     * the write-off, keeping the audit trail intact. The hardware alarm is silenced only so it does not
+     * ring the whole ride.
+     */
+    fun confirmClearAlarmUnpaid() {
+        val prompt = _state.value.clearAlarmPrompt ?: return
+        _state.update { it.copy(clearAlarmPrompt = null) }
+        feedback.play(Cue.Done)
+        rmLink.sendAlarmClear()
     }
 
     private fun apply(tripId: String, event: CardEvent) {

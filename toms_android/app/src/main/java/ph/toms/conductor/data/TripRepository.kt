@@ -39,6 +39,7 @@ object EventTypes {
     const val SHIFT_ENDED = "shift_ended"
     const val FARE_WRITTEN_OFF = "fare_written_off"
     const val CONDUCTOR_RELEASED_UNPAID = "conductor_released_unpaid"
+    const val FARE_RECOVERED = "fare_recovered"
 }
 
 @Serializable
@@ -309,6 +310,38 @@ class TripRepository(
         db.cards().all().associate { it.nfcUid to CardState.valueOf(it.state) }
 
     suspend fun loadTrips(): List<Trip> = db.trips().all().map { it.toDomain() }
+
+    /**
+     * Records the fare of an already-returned unpaid card being paid late, without touching the card state
+     * (release is final; the recovery is an audit event on the trip, never a card transition). The server
+     * keeps this event type in its payload column, so no backend change is needed to accept it.
+     * Returns false when the shift, trip or card is missing, or the card is not returned-unpaid.
+     */
+    suspend fun recordFareRecovered(shiftId: String?, tripId: String, actingConductor: String): Boolean {
+        val wrote = db.withTransaction {
+            val shift = shiftId?.let { db.shifts().byId(it) }
+            val trip = db.trips().byId(tripId) ?: return@withTransaction false
+            val card = db.cards().byTrip(tripId) ?: return@withTransaction false
+            if (CardState.valueOf(card.state) != CardState.RETURNED_UNPAID) return@withTransaction false
+
+            appendEvent(
+                EventTypes.FARE_RECOVERED,
+                json.encodeToString(
+                    WriteOffPayload(
+                        shiftId = shiftId ?: "", tripId = tripId, cardUuid = trip.cardUuid, nfcUid = trip.nfcUid,
+                        amountCentavos = trip.fareCentavos, reason = "paid after returning unpaid",
+                        shiftConductor = shift?.conductor ?: "", actingConductor = actingConductor.trim(),
+                    ),
+                ),
+                clock(),
+                shiftId = shiftId,
+                tripId = tripId,
+            )
+            true
+        }
+        if (wrote) uploadKick.kick()
+        return wrote
+    }
 
     /** Trips that have been written off, by trip id. Used to keep them off the Collect list and the owed total. */
     suspend fun writtenOffTripIds(): Set<String> =

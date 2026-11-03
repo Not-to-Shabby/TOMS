@@ -93,6 +93,48 @@ fun EndShiftDialog(
     )
 }
 
+/**
+ * Asked once when Clear alarm is tapped on a returned-unpaid card. The conductor answers whether the
+ * passenger paid; the card's next state follows from that answer, and Cancel leaves everything as it is.
+ */
+@Composable
+fun ClearAlarmDialog(
+    prompt: ClearAlarmPrompt,
+    onPaidNow: () -> Unit,
+    onStillUnpaid: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Did the passenger pay?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "${peso(prompt.trip.fareCentavos.toLong())}  ·  ${prompt.trip.nfcUid}",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = TomsColors.Bad,
+                )
+                Text(
+                    "The card came back unpaid. Clearing the alarm silences the terminal.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                Text(
+                    "If the fare is still owed, the card stays on this shift's list and End Shift asks about it.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TomsColors.InkSoft,
+                )
+            }
+        },
+        confirmButton = {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Gap)) {
+                BigButton("Passenger paid now", onPaidNow)
+                QuietButton("Still unpaid — silence terminal only", onStillUnpaid, Modifier.fillMaxWidth())
+                QuietButton("Cancel", onCancel, Modifier.fillMaxWidth())
+            }
+        },
+    )
+}
+
 /** Shown once after a shift is ended: the figures the conductor hands over. */
 @Composable
 fun ShiftEndedDialog(summary: ShiftSummary, config: TomsConfig, continues: Boolean, onOk: () -> Unit) {

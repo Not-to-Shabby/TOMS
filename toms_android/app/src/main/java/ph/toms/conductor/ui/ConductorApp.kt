@@ -121,6 +121,14 @@ fun ConductorApp(
             onCancel = if (state.blockedBy != null) vm::abandonBlockedStart else vm::dismissEndPrompt,
         )
     }
+    state.clearAlarmPrompt?.let { prompt ->
+        ClearAlarmDialog(
+            prompt = prompt,
+            onPaidNow = vm::confirmClearAlarmPaid,
+            onStillUnpaid = vm::confirmClearAlarmUnpaid,
+            onCancel = vm::dismissClearAlarm,
+        )
+    }
     state.endedSummary?.let { ShiftEndedDialog(it, state.config, state.endedContinues, vm::acknowledgeEnded) }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -149,7 +157,7 @@ fun ConductorApp(
                     onPaid = { vm.markPaid(it.id) },
                     onCalc = vm::openCalcFor,
                     onReturn = { vm.returnCard(it.id) },
-                    onClearAlarm = { vm.clearAlarm(it.id) },
+                    onClearAlarm = { vm.requestClearAlarm(it.id) },
                     onUseNearest = vm::useNearestAsBoarding,
                     onCalcPreview = vm::openCalcForBoard,
                     onRetry = vm::refreshConfig,
@@ -159,7 +167,7 @@ fun ConductorApp(
                     onPaid = { vm.markPaid(it.id) },
                     onCalc = vm::openCalcFor,
                     onReturn = { vm.returnCard(it.id) },
-                    onClearAlarm = { vm.clearAlarm(it.id) },
+                    onClearAlarm = { vm.requestClearAlarm(it.id) },
                 )
                 Tab.Calc -> CalcScreen(state = state, onMode = vm::setCalcMode)
                 Tab.More -> MoreScreen(

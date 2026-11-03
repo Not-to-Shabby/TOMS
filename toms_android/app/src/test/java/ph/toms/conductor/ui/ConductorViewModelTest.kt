@@ -27,6 +27,7 @@ import org.robolectric.annotation.Config
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.ble.RmProtocol
 import ph.toms.conductor.data.FakeConfigSync
+import ph.toms.conductor.data.EventTypes
 import ph.toms.conductor.data.InitialConfig
 import ph.toms.conductor.data.TestConfig
 import ph.toms.conductor.data.TripRepository
@@ -691,28 +692,76 @@ class ConductorViewModelTest {
     }
 
     @Test
-    fun `clearAlarm resolves card to available and sends remote alarm silence command to RM`() = runTest {
+    fun `clear alarm asks first, does nothing until answered`() = runTest {
         advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))
         advanceUntilIdle()
         fakeRmLink.emitPaidCheck(checkSeq = 105L, uidHex = "6F:F1:AD:39")
         advanceUntilIdle()
         assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
-
-        val tripId = vm.state.value.openTrips.single().trip.id
         assertEquals(0, fakeRmLink.alarmClearCalls)
 
-        // Conductor taps "Clear alarm" on phone
-        vm.clearAlarm(tripId)
+        // Tapping Clear alarm opens the prompt and changes nothing
+        vm.requestClearAlarm(vm.state.value.openTrips.single().trip.id)
+        assertNotNull(vm.state.value.clearAlarmPrompt)
+        assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
+        assertEquals("the hardware is still alarming", 0, fakeRmLink.alarmClearCalls)
+
+        // Cancel: prompt closes, card stays on the alarm list, hardware still alarming
+        vm.dismissClearAlarm()
+        advanceUntilIdle()
+        assertNull(vm.state.value.clearAlarmPrompt)
+        assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
+        assertEquals(0, fakeRmLink.alarmClearCalls)
+    }
+
+    @Test
+    fun `clear alarm answered paid records fare_recovered, resolves the card, and silences the terminal`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        fakeRmLink.emitPaidCheck(checkSeq = 106L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+        val tripId = vm.state.value.openTrips.single().trip.id
+
+        vm.requestClearAlarm(tripId)
+        vm.confirmClearAlarmPaid()
+        advanceUntilIdle()
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.AVAILABLE }
+
+        // Hardware silenced
+        assertEquals(1, fakeRmLink.alarmClearCalls)
+        assertTrue(vm.state.value.openTrips.isEmpty())
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["6FF1AD39"])
+
+        // The payment is on the audit trail: fare_recovered with the trip's amount
+        val events = runBlocking { db.events().all() }.filter { it.tripId == tripId }
+        val recovered = events.first { it.type == EventTypes.FARE_RECOVERED }
+        assertTrue(recovered.payload.contains("\"amountCentavos\":1500"))
+        assertTrue(recovered.payload.contains("paid after returning unpaid"))
+
+        // Card sequence: the unpaid return at the terminal (boarding is implied by trip_created), then the resolve
+        val cardStates = events.filter { it.type == EventTypes.CARD_STATE_CHANGED }.map { it.cardState }
+        assertEquals(listOf(CardState.RETURNED_UNPAID.name, CardState.AVAILABLE.name), cardStates)
+    }
+
+    @Test
+    fun `clear alarm answered still unpaid keeps the card on the list and silences the terminal only`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        fakeRmLink.emitPaidCheck(checkSeq = 107L, uidHex = "6F:F1:AD:39")
         advanceUntilIdle()
 
-        // 1. Sends hardware silence command 0x05 to RM via CHAR_DIAG
-        assertEquals(1, fakeRmLink.alarmClearCalls)
+        vm.requestClearAlarm(vm.state.value.openTrips.single().trip.id)
+        vm.confirmClearAlarmUnpaid()
+        advanceUntilIdle()
 
-        // 2. Card resolves to AVAILABLE and is cleared from open trips
-        assertTrue(vm.state.value.openTrips.isEmpty())
-        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.AVAILABLE }
-        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["6FF1AD39"])
+        assertEquals(1, fakeRmLink.alarmClearCalls)
+        assertNull(vm.state.value.clearAlarmPrompt)
+        assertEquals("the fare is still owed", 1, vm.state.value.openTrips.size)
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.RETURNED_UNPAID }
+        assertEquals(CardState.RETURNED_UNPAID, repo.loadCardStates()["6FF1AD39"])
     }
 
     @Test
