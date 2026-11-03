@@ -2,6 +2,7 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import type { RateLimiter } from './rateLimit';
+import { OPEN_STATES, OPEN_TRIP_WINDOW_HOURS } from './dashboard';
 
 const uuidSchema = z.string().uuid();
 
@@ -41,9 +42,14 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
       return void res.status(410).json({ active: false, card_status: cardStatus, message: 'This card is no longer in use.', card_uuid: cardUuid });
     }
 
-    // Look up the latest trip associated with this card
+    // Look up the latest trip associated with this card.
+    // A reusable passenger card's QR code must only link to a receipt while the trip is actively open
+    // (ASSIGNED_UNPAID or ASSIGNED_PAID within OPEN_TRIP_WINDOW_HOURS). Once the card is returned into
+    // the Return Machine or returned to the conductor (or abandoned past 24 hours), scanning the physical
+    // card must never disclose the previous passenger's private trip details.
     const { rows } = await pool.query(
-      `SELECT trip_id, receipt_token, current_state, paid, effective_at
+      `SELECT trip_id, receipt_token, current_state, paid, effective_at,
+              (current_state IN ${OPEN_STATES} AND effective_at > now() - interval '${OPEN_TRIP_WINDOW_HOURS} hours') AS is_active_trip
        FROM trip_status
        WHERE card_uuid = $1::uuid
        ORDER BY effective_at DESC
@@ -51,13 +57,13 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
       [cardUuid],
     );
 
-    if (rows.length === 0) {
+    if (rows.length === 0 || !rows[0].is_active_trip) {
       if (req.accepts('html')) {
         return void res.redirect(`/receipt/inactive?card=${encodeURIComponent(cardUuid)}`);
       }
       return void res.status(404).json({
         active: false,
-        message: 'No trip found for this card.',
+        message: 'No active trip found for this card right now.',
         card_uuid: cardUuid,
       });
     }
