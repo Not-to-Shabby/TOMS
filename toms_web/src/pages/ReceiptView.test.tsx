@@ -1,10 +1,30 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import axios from 'axios';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReceiptView from './ReceiptView';
 
 afterEach(() => vi.restoreAllMocks());
+
+/** Renders the live path alongside the routed page, so tests can assert where the passenger actually is. */
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="route">{pathname}{search}</div>;
+}
+
+/** The scan entry renders inside a layout that also reports the current URL. */
+function atCardEntry(entry: string) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route element={<><Outlet /><LocationProbe /></>}>
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 const sampleReceipt = {
   receipt_token: '11111111-2222-3333-4444-555555555555',
@@ -199,17 +219,26 @@ describe('ReceiptView grace banner', () => {
       .spyOn(axios, 'get')
       .mockResolvedValueOnce({ data: { receipt_token: sampleReceipt.receipt_token, grace: true } })
       .mockResolvedValueOnce({ data: sampleReceipt });
-    render(
-      <MemoryRouter initialEntries={['/r/11111111-2222-4333-8444-555555555555']}>
-        <Routes>
-          <Route path="/r/:cardUuid" element={<ReceiptView />} />
-        </Routes>
-      </MemoryRouter>,
-    );
+    atCardEntry('/r/11111111-2222-4333-8444-555555555555');
 
     expect(await screen.findByText(bannerText)).toBeInTheDocument();
     expect(screen.getByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    // The sticker URL must be gone: the passenger is on the receipt's own permanent link.
+    expect(screen.getByTestId('route')).toHaveTextContent(
+      '/receipt/11111111-2222-3333-4444-555555555555?grace=1',
+    );
     expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('swaps the sticker URL for the plain receipt link when the card resolves without a grace flag', async () => {
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({ data: { receipt_token: sampleReceipt.receipt_token } })
+      .mockResolvedValueOnce({ data: sampleReceipt });
+    atCardEntry('/r/11111111-2222-4333-8444-555555555555');
+
+    expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(screen.getByTestId('route')).toHaveTextContent('/receipt/11111111-2222-3333-4444-555555555555');
+    expect(screen.queryByText(/already been returned/)).not.toBeInTheDocument();
   });
 
   it('shows no banner for a plain mid-trip scan', async () => {
