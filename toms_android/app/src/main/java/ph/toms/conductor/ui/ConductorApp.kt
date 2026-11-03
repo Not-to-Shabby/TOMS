@@ -40,6 +40,7 @@ import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.nfc.NfcAvailability
 import ph.toms.conductor.nfc.NfcReader
 import ph.toms.conductor.settings.Handedness
+import ph.toms.conductor.sync.UplinkState
 import ph.toms.conductor.ui.theme.Status
 import ph.toms.conductor.ui.theme.StatusChip
 import ph.toms.conductor.ui.theme.TomsColors
@@ -95,6 +96,17 @@ fun ConductorApp(
                 vm.startBleScanning()
             }
             try { awaitCancellation() } finally { vm.stopBleScanning() }
+        }
+    }
+
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            syncVm.uplinkRestored.collect {
+                if (!sync.needsServer && sync.isEnrolled) {
+                    vm.syncApprovedCards()
+                    vm.refreshConfig()
+                }
+            }
         }
     }
 
@@ -197,9 +209,17 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
         is RmConnectionState.Connecting, RmConnectionState.Scanning -> "RM searching" to Status.Neutral
         RmConnectionState.Disconnected -> "RM offline" to Status.Warn
     }
+    val uplink: Pair<String, Status> = when (val u = sync.uplinkState) {
+        is UplinkState.Online -> {
+            val label = if (u.isCellular) "Cellular" else "Wi-Fi"
+            label to Status.Good
+        }
+        is UplinkState.Connecting -> "Connecting..." to Status.Neutral
+        is UplinkState.Offline -> "Offline" to Status.Warn
+    }
     Column(Modifier.fillMaxWidth().background(TomsColors.Surface).padding(horizontal = 16.dp, vertical = 6.dp)) {
         Text(header, style = MaterialTheme.typography.titleMedium, maxLines = 1)
-        // Four chips wrap across lines if needed on narrower screens
+        // Five chips wrap across lines if needed on narrower screens
         FlowRow(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -208,6 +228,7 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
             StatusChip(reader.first, reader.second)
             StatusChip(gps.first, gps.second)
             StatusChip(rm.first, rm.second)
+            StatusChip(uplink.first, uplink.second)
             if (sync.pendingCount > 0) StatusChip("${sync.pendingCount} unsent", Status.Neutral)
         }
     }

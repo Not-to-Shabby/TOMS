@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import java.util.Date
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.sync.NO_SERVER_MESSAGE
+import ph.toms.conductor.sync.UplinkState
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
 import ph.toms.conductor.ui.theme.QuietButton
@@ -169,6 +170,12 @@ fun MoreScreen(
         Text("Diagnostics", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 16.dp))
         Text("For whoever is fixing the app, not for the conductor.", style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
 
+        val uplinkDesc = when (val u = sync.uplinkState) {
+            is UplinkState.Online -> if (u.isCellular) "Online (Mobile Data)" else "Online (Wi-Fi)"
+            is UplinkState.Connecting -> "Connecting / Validating..."
+            is UplinkState.Offline -> "Offline (saving locally in dead zone)"
+        }
+        Fact("Cellular Uplink", uplinkDesc)
         Fact("Waiting to upload", "${sync.pendingCount} events")
         if (sync.parkedCount > 0) {
             Fact("Refused by the server", "${sync.parkedCount} events, not retried")

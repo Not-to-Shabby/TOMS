@@ -39,6 +39,7 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.sync.ConfigRefresher
+import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.UploadResult
 import ph.toms.conductor.data.FakeConfigSync
 import ph.toms.conductor.data.InitialConfig
@@ -87,7 +88,7 @@ class ShiftFlowTest {
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
             Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), InitialConfig(TestConfig.config),
         )
-        syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader))
+        syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader), FakeUplinkManager())
     }
 
     /** Waits until no more database writes are arriving, so a late write cannot hit a closed database. */

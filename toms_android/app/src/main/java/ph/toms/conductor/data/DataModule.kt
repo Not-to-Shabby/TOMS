@@ -28,12 +28,14 @@ import ph.toms.conductor.BuildConfig
 import ph.toms.conductor.ble.AndroidBleReturnMachineLink
 import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.domain.TomsConfig
+import ph.toms.conductor.sync.AndroidUplinkManager
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigSync
 import ph.toms.conductor.sync.ConductorAuthService
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
+import ph.toms.conductor.sync.UplinkManager
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -64,6 +66,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun returnMachineLink(impl: AndroidBleReturnMachineLink): ReturnMachineLink
+
+    @Binds
+    abstract fun uplinkManager(impl: AndroidUplinkManager): UplinkManager
 }
 
 @Module
