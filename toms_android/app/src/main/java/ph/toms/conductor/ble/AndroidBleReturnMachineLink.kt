@@ -20,6 +20,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 @Singleton
 @SuppressLint("MissingPermission")
@@ -58,6 +60,9 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private var scanning = false
     private val gattMutex = Mutex()
 
+    private var descDone: CompletableDeferred<Int>? = null
+    private var charWritten: CompletableDeferred<Int>? = null
+
     // Characteristic handles
     private var charPaidReply: BluetoothGattCharacteristic? = null
     private var charStateUpdate: BluetoothGattCharacteristic? = null
@@ -66,10 +71,13 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
-            val name = result.scanRecord?.deviceName ?: device.name ?: ""
-            if (name.startsWith(RmProtocol.DEVICE_NAME_PREFIX)) {
+            val rawName = result.scanRecord?.deviceName ?: device.name
+            val hasMatchingUuid = result.scanRecord?.serviceUuids?.contains(ParcelUuid(RmProtocol.SERVICE_UUID)) == true
+            val matchesName = rawName?.startsWith(RmProtocol.DEVICE_NAME_PREFIX) == true
+            if (hasMatchingUuid || matchesName) {
+                val displayName = rawName ?: RmProtocol.DEVICE_NAME_PREFIX
                 stopScanning()
-                connectTo(device, name)
+                connectTo(device, displayName)
             }
         }
 
@@ -87,8 +95,13 @@ class AndroidBleReturnMachineLink @Inject constructor(
 
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 _connectionState.value = RmConnectionState.Connecting(name, address)
-                // Request MTU 247 as per PROTOCOL.md
-                g.requestMtu(247)
+                if (device.bondState == BluetoothDevice.BOND_NONE) {
+                    device.createBond()
+                }
+                if (!g.requestMtu(247)) {
+                    refreshGatt(g)
+                    g.discoverServices()
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 cleanup()
                 _connectionState.value = RmConnectionState.Disconnected
@@ -101,7 +114,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
         }
 
         override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-            // Discover services once MTU is settled
+            refreshGatt(g)
             g.discoverServices()
         }
 
@@ -120,7 +133,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
             charStateUpdate = service.getCharacteristic(RmProtocol.CHAR_STATE_UPDATE)
             charTimeSync = service.getCharacteristic(RmProtocol.CHAR_TIME_SYNC)
 
-            // Subscribe to notifications sequentially
+            // Subscribe to notifications strictly sequentially, awaiting each onDescriptorWrite
             scope.launch {
                 val notifyChars = listOf(
                     service.getCharacteristic(RmProtocol.CHAR_PAID_CHECK),
@@ -131,7 +144,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
 
                 for (c in notifyChars) {
                     subscribeCharacteristic(g, c)
-                    delay(100)
+                    delay(50)
                 }
 
                 val name = g.device.name ?: RmProtocol.DEVICE_NAME_PREFIX
@@ -141,6 +154,14 @@ class AndroidBleReturnMachineLink @Inject constructor(
                 // Sync time immediately on connection
                 sendTimeSync()
             }
+        }
+
+        override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            descDone?.complete(status)
+        }
+
+        override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            charWritten?.complete(status)
         }
 
         override fun onCharacteristicChanged(
@@ -187,16 +208,42 @@ class AndroidBleReturnMachineLink @Inject constructor(
         }
     }
 
-    private fun subscribeCharacteristic(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
-        g.setCharacteristicNotification(c, true)
-        val descriptor = c.getDescriptor(RmProtocol.CCCD_UUID) ?: return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-        } else {
-            @Suppress("DEPRECATION")
-            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            @Suppress("DEPRECATION")
-            g.writeDescriptor(descriptor)
+    private suspend fun subscribeCharacteristic(g: BluetoothGatt, c: BluetoothGattCharacteristic): Boolean =
+        gattMutex.withLock {
+            g.setCharacteristicNotification(c, true)
+            val descriptor = c.getDescriptor(RmProtocol.CCCD_UUID) ?: return@withLock false
+            val deferred = CompletableDeferred<Int>()
+            descDone = deferred
+
+            val writeStarted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                g.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
+            } else {
+                @Suppress("DEPRECATION")
+                descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                @Suppress("DEPRECATION")
+                g.writeDescriptor(descriptor)
+            }
+
+            if (!writeStarted) {
+                descDone = null
+                return@withLock false
+            }
+
+            try {
+                withTimeout(3000) { deferred.await() == BluetoothGatt.GATT_SUCCESS }
+            } catch (_: Exception) {
+                false
+            } finally {
+                descDone = null
+            }
+        }
+
+    private fun refreshGatt(g: BluetoothGatt): Boolean {
+        return try {
+            val method = g.javaClass.getMethod("refresh")
+            (method.invoke(g) as? Boolean) ?: false
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -271,9 +318,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
         val ch = charStateUpdate ?: return
         val bytes = RmProtocol.encodeStateUpdate(tableVersion, snapshot, entries)
         scope.launch {
-            gattMutex.withLock {
-                writeCharacteristic(g, ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            writeCharWithResp(g, ch, bytes)
         }
     }
 
@@ -282,9 +327,28 @@ class AndroidBleReturnMachineLink @Inject constructor(
         val ch = charTimeSync ?: return
         val bytes = RmProtocol.encodeTimeSync(nowMillis)
         scope.launch {
-            gattMutex.withLock {
-                writeCharacteristic(g, ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
-            }
+            writeCharWithResp(g, ch, bytes)
+        }
+    }
+
+    private suspend fun writeCharWithResp(
+        g: BluetoothGatt,
+        c: BluetoothGattCharacteristic,
+        bytes: ByteArray,
+    ): Boolean = gattMutex.withLock {
+        val deferred = CompletableDeferred<Int>()
+        charWritten = deferred
+        val started = writeCharacteristic(g, c, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        if (!started) {
+            charWritten = null
+            return@withLock false
+        }
+        try {
+            withTimeout(3000) { deferred.await() == BluetoothGatt.GATT_SUCCESS }
+        } catch (_: Exception) {
+            false
+        } finally {
+            charWritten = null
         }
     }
 
@@ -293,10 +357,10 @@ class AndroidBleReturnMachineLink @Inject constructor(
         c: BluetoothGattCharacteristic,
         bytes: ByteArray,
         writeType: Int,
-    ) {
+    ): Boolean {
         c.writeType = writeType
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            g.writeCharacteristic(c, bytes, writeType)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            g.writeCharacteristic(c, bytes, writeType) == BluetoothGatt.GATT_SUCCESS
         } else {
             @Suppress("DEPRECATION")
             c.value = bytes
