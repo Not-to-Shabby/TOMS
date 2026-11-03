@@ -51,6 +51,7 @@ data class OtaUiState(
     val machineUptimeS: Long = 0,
     val batteryPct: Int = 0xFF,
     val batteryMv: Int = 0,
+    val simulatedVerdict: Int = 1, // 0 = PAID/OK, 1 = UNPAID, 2 = UNKNOWN, 3 = ALREADY_RETURNED
     val lastCardUid: String? = null,
     val lastCardLen: Int = 0,
     val lastCardType: String? = null,
@@ -405,6 +406,18 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                 }
+
+                // Paid Check & Fare Verdict Responder
+                launch {
+                    for (chk in transport.paidCheckEvents) {
+                        val verdict = _state.value.simulatedVerdict
+                        val vNames = listOf("PAID (OK)", "UNPAID", "UNKNOWN", "ALREADY_RETURNED")
+                        val vName = vNames.getOrNull(verdict) ?: "Verdict $verdict"
+                        say("PAID_CHECK: card ${chk.uidHex} (seq ${chk.checkSeq}) -> sending $vName")
+                        val ok = transport.writePaidReply(chk.checkSeq, verdict)
+                        if (!ok) say("PAID_REPLY: failed to send verdict")
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -458,6 +471,13 @@ class OtaViewModel(app: Application) : AndroidViewModel(app) {
             val ok = diagTransport?.writeDiag(0x04) ?: false
             if (!ok) say("diag: NFC command failed (not connected?)")
         }
+    }
+
+    fun setSimulatedVerdict(verdict: Int) {
+        val vNames = listOf("PAID (OK)", "UNPAID", "UNKNOWN", "ALREADY_RETURNED")
+        val vName = vNames.getOrNull(verdict) ?: "Verdict $verdict"
+        say("diag: set card response verdict to $vName")
+        _state.update { it.copy(simulatedVerdict = verdict) }
     }
 
     fun clearLogs() {

@@ -770,6 +770,75 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
+                    // Card Response Verdict Selector (Controls what the phone replies to paid_check)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "FARE VERDICT FOR INSERTED CARD",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                letterSpacing = 1.sp,
+                                color = CupertinoSlate
+                            )
+                            val currentVerdictName = when (s.simulatedVerdict) {
+                                0 -> "PAID (GREEN)"
+                                1 -> "UNPAID (RED)"
+                                2 -> "UNKNOWN"
+                                3 -> "ALREADY RETURNED"
+                                else -> "UNKNOWN"
+                            }
+                            Text(
+                                text = currentVerdictName,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (s.simulatedVerdict) {
+                                    0 -> CupertinoGreen
+                                    1 -> CupertinoRed
+                                    3 -> CupertinoOrange
+                                    else -> CupertinoPurple
+                                }
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            VerdictChip(
+                                label = "UNPAID",
+                                isSelected = s.simulatedVerdict == 1,
+                                activeColor = CupertinoRed,
+                                modifier = Modifier.weight(1.1f),
+                                onClick = { vm.setSimulatedVerdict(1) }
+                            )
+                            VerdictChip(
+                                label = "PAID (OK)",
+                                isSelected = s.simulatedVerdict == 0,
+                                activeColor = CupertinoGreen,
+                                modifier = Modifier.weight(1f),
+                                onClick = { vm.setSimulatedVerdict(0) }
+                            )
+                            VerdictChip(
+                                label = "UNKNOWN",
+                                isSelected = s.simulatedVerdict == 2,
+                                activeColor = CupertinoPurple,
+                                modifier = Modifier.weight(1f),
+                                onClick = { vm.setSimulatedVerdict(2) }
+                            )
+                            VerdictChip(
+                                label = "DUP",
+                                isSelected = s.simulatedVerdict == 3,
+                                activeColor = CupertinoOrange,
+                                modifier = Modifier.weight(0.7f),
+                                onClick = { vm.setSimulatedVerdict(3) }
+                            )
+                        }
+                    }
+
                     // Recent Card Scan History (Collapsible)
                     if (s.cardHistory.isNotEmpty()) {
                         var showHistory by remember { mutableStateOf(false) }
@@ -1762,6 +1831,35 @@ class MainActivity : ComponentActivity() {
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 color = color
+            )
+        }
+    }
+
+    @Composable
+    private fun VerdictChip(
+        label: String,
+        isSelected: Boolean,
+        activeColor: Color,
+        modifier: Modifier = Modifier,
+        onClick: () -> Unit
+    ) {
+        Box(
+            modifier = modifier
+                .height(34.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (isSelected) activeColor.copy(alpha = 0.25f) else CardSubtle)
+                .border(1.dp, if (isSelected) activeColor else CardBorder, RoundedCornerShape(10.dp))
+                .clickable { onClick() }
+                .padding(horizontal = 4.dp, vertical = 4.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                color = if (isSelected) activeColor else CupertinoSlate,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }

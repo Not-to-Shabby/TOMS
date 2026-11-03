@@ -38,6 +38,8 @@ object Ota {
     fun uuid(suffix: Int): UUID = UUID.fromString(BASE_HI + "%02x".format(suffix))
     val SERVICE: UUID = uuid(0x45)
     val CARD_READ: UUID = uuid(0x01)
+    val PAID_CHECK: UUID = uuid(0x03)
+    val PAID_REPLY: UUID = uuid(0x04)
     val HEARTBEAT: UUID = uuid(0x05)
     val SIM_CARD: UUID = uuid(0x0B)
     val CONTROL: UUID = uuid(0x0C)
@@ -66,6 +68,25 @@ object Ota {
         val atype = if (bb.hasRemaining()) bb.get().toInt() and 0xFF else 0
         val hex = uidBytes.joinToString(" ") { "%02X".format(it) }
         return CardReadEvent(hex, uidLen, atype, bootMs)
+    }
+
+    fun parsePaidCheck(b: ByteArray): PaidCheckEvent? {
+        if (b.size < 5) return null
+        val bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN)
+        val checkSeq = bb.int.toLong() and 0xFFFFFFFFL
+        val uidLen = bb.get().toInt() and 0xFF
+        if (uidLen < 1 || uidLen > 10 || b.size < 5 + uidLen) return null
+        val uidBytes = ByteArray(uidLen)
+        bb.get(uidBytes)
+        val hex = uidBytes.joinToString(" ") { "%02X".format(it) }
+        return PaidCheckEvent(checkSeq, hex, uidLen)
+    }
+
+    fun paidReplyFrame(checkSeq: Long, verdict: Int): ByteArray {
+        val bb = ByteBuffer.allocate(5).order(ByteOrder.LITTLE_ENDIAN)
+        bb.putInt(checkSeq.toInt())
+        bb.put(verdict.toByte())
+        return bb.array()
     }
 
     fun parseHeartbeat(b: ByteArray): HeartbeatEvent? {
@@ -193,6 +214,12 @@ data class CardReadEvent(
     val uidLen: Int,
     val atype: Int,
     val bootMs: Long,
+)
+
+data class PaidCheckEvent(
+    val checkSeq: Long,
+    val uidHex: String,
+    val uidLen: Int,
 )
 
 sealed interface DiagEvent {

@@ -55,6 +55,7 @@ class BleTransport private constructor(
     val cardReadEvents = Channel<CardReadEvent>(Channel.UNLIMITED)
     val diagEvents = Channel<DiagEvent>(Channel.UNLIMITED)
     val heartbeatEvents = Channel<HeartbeatEvent>(Channel.UNLIMITED)
+    val paidCheckEvents = Channel<PaidCheckEvent>(Channel.UNLIMITED)
 
     @Volatile
     override var mtu: Int = 23
@@ -73,6 +74,7 @@ class BleTransport private constructor(
     private var diagChar: BluetoothGattCharacteristic? = null
     private var simCardChar: BluetoothGattCharacteristic? = null
     private var cardReadChar: BluetoothGattCharacteristic? = null
+    private var paidReplyChar: BluetoothGattCharacteristic? = null
 
     @Volatile
     private var closed = false
@@ -142,6 +144,7 @@ class BleTransport private constructor(
             Ota.CARD_READ -> Ota.parseCardRead(value)?.let { cardReadEvents.trySend(it) }
             Ota.DIAG -> diagEvents.trySend(Ota.parseDiagEvent(value))
             Ota.HEARTBEAT -> Ota.parseHeartbeat(value)?.let { heartbeatEvents.trySend(it) }
+            Ota.PAID_CHECK -> Ota.parsePaidCheck(value)?.let { paidCheckEvents.trySend(it) }
         }
     }
 
@@ -183,6 +186,7 @@ class BleTransport private constructor(
         diagChar = svc.getCharacteristic(Ota.DIAG)
         simCardChar = svc.getCharacteristic(Ota.SIM_CARD)
         cardReadChar = svc.getCharacteristic(Ota.CARD_READ)
+        paidReplyChar = svc.getCharacteristic(Ota.PAID_REPLY)
 
         val charHexList = svc.characteristics.map {
             "%02X".format(it.uuid.leastSignificantBits and 0xFF)
@@ -198,6 +202,7 @@ class BleTransport private constructor(
         diagChar?.let { runCatching { subscribe(it) } }
         cardReadChar?.let { runCatching { subscribe(it) } }
         svc.getCharacteristic(Ota.HEARTBEAT)?.let { runCatching { subscribe(it) } }
+        svc.getCharacteristic(Ota.PAID_CHECK)?.let { runCatching { subscribe(it) } }
         log("subscribed to channels")
     }
 
@@ -262,6 +267,11 @@ class BleTransport private constructor(
         writeChar(c, Ota.simCardFrame(uid), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
     }
 
+    suspend fun writePaidReply(checkSeq: Long, verdict: Int): Boolean = ops.withLock {
+        val c = paidReplyChar ?: return@withLock false
+        writeChar(c, Ota.paidReplyFrame(checkSeq, verdict), BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+    }
+
     override fun close() {
         if (closed) return
         closed = true
@@ -272,6 +282,7 @@ class BleTransport private constructor(
         cardReadEvents.close()
         diagEvents.close()
         heartbeatEvents.close()
+        paidCheckEvents.close()
     }
 
     companion object {
