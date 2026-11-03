@@ -67,6 +67,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private var charPaidReply: BluetoothGattCharacteristic? = null
     private var charStateUpdate: BluetoothGattCharacteristic? = null
     private var charTimeSync: BluetoothGattCharacteristic? = null
+    private var charDiag: BluetoothGattCharacteristic? = null
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -132,6 +133,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
             charPaidReply = service.getCharacteristic(RmProtocol.CHAR_PAID_REPLY)
             charStateUpdate = service.getCharacteristic(RmProtocol.CHAR_STATE_UPDATE)
             charTimeSync = service.getCharacteristic(RmProtocol.CHAR_TIME_SYNC)
+            charDiag = service.getCharacteristic(RmProtocol.CHAR_DIAG)
 
             // Subscribe to notifications strictly sequentially, awaiting each onDescriptorWrite
             scope.launch {
@@ -260,6 +262,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
         charPaidReply = null
         charStateUpdate = null
         charTimeSync = null
+        charDiag = null
         try {
             gatt?.close()
         } catch (_: Exception) {}
@@ -326,6 +329,15 @@ class AndroidBleReturnMachineLink @Inject constructor(
         val g = gatt ?: return
         val ch = charTimeSync ?: return
         val bytes = RmProtocol.encodeTimeSync(nowMillis)
+        scope.launch {
+            writeCharWithResp(g, ch, bytes)
+        }
+    }
+
+    override fun sendAlarmClear() {
+        val g = gatt ?: return
+        val ch = charDiag ?: return
+        val bytes = RmProtocol.encodeAlarmClear()
         scope.launch {
             writeCharWithResp(g, ch, bytes)
         }

@@ -31,6 +31,7 @@ object RmProtocol {
     val CHAR_TIME_SYNC: UUID = uuid(0x06)
     val CHAR_DEVICE_INFO: UUID = uuid(0x09)
     val CHAR_RM_ACK: UUID = uuid(0x0A)
+    val CHAR_DIAG: UUID = uuid(0x0E)
 
     val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
@@ -41,6 +42,9 @@ object RmProtocol {
     const val VERDICT_UNPAID = 1
     const val VERDICT_UNKNOWN = 2
     const val VERDICT_ALREADY_RETURNED = 3
+
+    // Diagnostic & control command codes (firmware/PROTOCOL.md section 3.7)
+    const val CMD_CLEAR_ALARM = 0x05
 
     // Card status codes for state_update (firmware enum toms_status)
     const val STATUS_AVAILABLE = 0
@@ -206,6 +210,12 @@ object RmProtocol {
         bb.putShort((remainingMs and 0xFFFF).toShort())
         return bb.array()
     }
+
+    /**
+     * Encodes command 0x05 for CHAR_DIAG (0x0E).
+     * Firmware rm_ble_handle_diag executes: buzzer_alarm_stop() and display_clear_alarm().
+     */
+    fun encodeAlarmClear(): ByteArray = byteArrayOf(CMD_CLEAR_ALARM.toByte(), 0x00.toByte())
 
     fun encodeStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<StateEntry>): ByteArray {
         val count = entries.size.coerceAtMost(128)

@@ -25,6 +25,7 @@ class FakeReturnMachineLink : ReturnMachineLink {
     val sentPaidReplies = mutableListOf<SentPaidReply>()
     val sentStateUpdates = mutableListOf<SentStateUpdate>()
     val sentTimeSyncs = mutableListOf<SentTimeSync>()
+    var alarmClearCalls = 0
 
     override fun sendPaidReply(checkSeq: Long, verdict: Int) {
         sentPaidReplies.add(SentPaidReply(checkSeq, verdict))
@@ -36,6 +37,10 @@ class FakeReturnMachineLink : ReturnMachineLink {
 
     override fun sendTimeSync(nowMillis: Long) {
         sentTimeSyncs.add(SentTimeSync(nowMillis))
+    }
+
+    override fun sendAlarmClear() {
+        alarmClearCalls++
     }
 
     override fun startScanning() {

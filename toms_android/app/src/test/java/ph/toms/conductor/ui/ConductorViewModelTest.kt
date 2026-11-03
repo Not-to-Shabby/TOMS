@@ -691,6 +691,31 @@ class ConductorViewModelTest {
     }
 
     @Test
+    fun `clearAlarm resolves card to available and sends remote alarm silence command to RM`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        fakeRmLink.emitPaidCheck(checkSeq = 105L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+        assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
+
+        val tripId = vm.state.value.openTrips.single().trip.id
+        assertEquals(0, fakeRmLink.alarmClearCalls)
+
+        // Conductor taps "Clear alarm" on phone
+        vm.clearAlarm(tripId)
+        advanceUntilIdle()
+
+        // 1. Sends hardware silence command 0x05 to RM via CHAR_DIAG
+        assertEquals(1, fakeRmLink.alarmClearCalls)
+
+        // 2. Card resolves to AVAILABLE and is cleared from open trips
+        assertTrue(vm.state.value.openTrips.isEmpty())
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.AVAILABLE }
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["6FF1AD39"])
+    }
+
+    @Test
     fun `paid_check with unknown card replies UNKNOWN`() = runTest {
         advanceUntilIdle()
         fakeRmLink.emitPaidCheck(checkSeq = 103L, uidHex = "99:88:77:66")

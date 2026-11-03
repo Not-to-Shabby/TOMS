@@ -34,6 +34,7 @@ interface ReturnMachineLink {
     fun sendPaidReply(checkSeq: Long, verdict: Int)
     fun sendStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<RmProtocol.StateEntry>)
     fun sendTimeSync(nowMillis: Long = System.currentTimeMillis())
+    fun sendAlarmClear()
 
     fun startScanning()
     fun stopScanning()
