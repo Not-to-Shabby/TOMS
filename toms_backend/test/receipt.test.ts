@@ -307,6 +307,150 @@ describe('Static Card QR & Public Receipt Flow', () => {
     expect(res.body.ltfrb).not.toHaveProperty('per_km_fare');
   });
 
+  it('GET /r/:card_uuid refuses to leak past receipt once card is RETURNED, while past receipt_token remains viewable', async () => {
+    const cardUuid = randomUUID();
+    const tripId = randomUUID();
+    const now = Date.now();
+
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
+      nfc_uid: 'A1B2C3D4',
+      card_uuid: cardUuid,
+    });
+
+    // 1. Passenger boards and pays: trip is ASSIGNED_PAID
+    await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 1,
+            type: 'trip_created',
+            created_at_millis: now,
+            payload: {
+              tripId,
+              cardUuid,
+              nfcUid: 'A1B2C3D4',
+              boardingStopId: 'Stop A',
+              declaredDestinationStopId: 'Stop B',
+              computedFareCentavos: 2500,
+              fareCentavos: 2500,
+              discountCentavos: 0,
+              fareVersion: 1,
+              passengerCount: 1,
+              passengers: [],
+            },
+          },
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 2,
+            type: 'card_state_changed',
+            created_at_millis: now + 1000,
+            payload: {
+              nfcUid: 'A1B2C3D4',
+              cardUuid,
+              tripId,
+              state: 'ASSIGNED_PAID',
+            },
+          },
+        ],
+      });
+
+    // While passenger is on the bus, scanning card QR successfully redirects to their receipt
+    const activeScan = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(activeScan.status).toBe(200);
+    expect(activeScan.body.active).toBe(true);
+    const passengerReceiptToken = activeScan.body.receipt_token;
+    expect(passengerReceiptToken).toMatch(/^[0-9a-f-]{36}$/);
+
+    // 2. Passenger alights and drops card into Return Machine -> card state becomes RETURNED
+    await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 3,
+            type: 'card_state_changed',
+            created_at_millis: now + 30000,
+            payload: {
+              nfcUid: 'A1B2C3D4',
+              cardUuid,
+              tripId,
+              state: 'RETURNED',
+            },
+          },
+        ],
+      });
+
+    // 3. Someone scans the physical card QR code (or a photo of it) AFTER the card was returned:
+    // It must NOT reveal the passenger's receipt!
+    const returnedJson = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(returnedJson.status).toBe(404);
+    expect(returnedJson.body.active).toBe(false);
+    expect(returnedJson.body.receipt_token).toBeUndefined();
+
+    const returnedHtml = await request(app).get(`/r/${cardUuid}`).set('Accept', 'text/html');
+    expect(returnedHtml.status).toBe(302);
+    expect(returnedHtml.headers.location).toContain('/receipt/inactive');
+
+    // 4. BUT the legitimate passenger who already saved their receipt token can STILL view their receipt:
+    const pastReceipt = await request(app).get(`/api/receipt/${passengerReceiptToken}`);
+    expect(pastReceipt.status).toBe(200);
+    expect(pastReceipt.body.status).toBe('PAID');
+    expect(pastReceipt.body.fare_pesos).toBe('25.00');
+  });
+
+  it('GET /r/:card_uuid treats an open trip older than 24 hours as inactive', async () => {
+    const cardUuid = randomUUID();
+    const tripId = randomUUID();
+    // 25 hours ago
+    const oldTime = Date.now() - 25 * 3600 * 1000;
+
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
+      nfc_uid: 'E5F6A7B8',
+      card_uuid: cardUuid,
+    });
+
+    await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 1,
+            type: 'trip_created',
+            created_at_millis: oldTime,
+            payload: {
+              tripId,
+              cardUuid,
+              nfcUid: 'E5F6A7B8',
+              boardingStopId: 'Stop 1',
+              declaredDestinationStopId: 'Stop 2',
+              computedFareCentavos: 1500,
+              fareCentavos: 1500,
+              discountCentavos: 0,
+              fareVersion: 1,
+              passengerCount: 1,
+              passengers: [],
+            },
+          },
+        ],
+      });
+
+    // Older than 24h open window -> inactive on static card scan
+    const res = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(res.status).toBe(404);
+    expect(res.body.active).toBe(false);
+  });
+
   it('limits how fast one address can look up public card and receipt links', async () => {
     const limited = createApp({ pool, jwtSecret: TEST_JWT_SECRET, publicLimiter: new RateLimiter(3, 60_000) });
     const cardUuid = randomUUID();
