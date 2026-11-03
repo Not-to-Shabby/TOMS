@@ -614,3 +614,74 @@ describe('Static Card QR & Public Receipt Flow', () => {
     expect((await request(limited).get(`/api/receipt/${randomUUID()}`)).status).toBe(429);
   });
 });
+
+describe('Fare recovered after a returned-unpaid trip', () => {
+  it('ingests fare_recovered, marks the trip paid, and the receipt shows how it was settled', async () => {
+    const cardUuid = randomUUID();
+    const tripId = randomUUID();
+    const now = Date.now();
+
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
+      nfc_uid: '14B8498A',
+      card_uuid: cardUuid,
+    });
+
+    const event = (type: string, seq: number, payload: Record<string, unknown>) => ({
+      event_id: randomUUID(),
+      device_id: 'dev-1',
+      local_seq: seq,
+      type,
+      created_at_millis: now + seq,
+      payload,
+    });
+    const send = async (events: unknown[]) =>
+      (await request(app).post('/api/events').set('Authorization', `Bearer ${deviceToken}`).send({ events })).body;
+
+    // Board, then the card comes back unpaid at the Return Machine
+    const first = await send([
+      event('trip_created', 1, {
+        tripId, cardUuid, nfcUid: '14B8498A',
+        boardingStopId: 'Stop 1', declaredDestinationStopId: 'Stop 3',
+        computedFareCentavos: 1500, fareCentavos: 1500, discountCentavos: 0, fareVersion: 1,
+      }),
+      event('card_state_changed', 2, { nfcUid: '14B8498A', cardUuid, tripId, state: 'RETURNED_UNPAID' }),
+    ]);
+    expect(first.accepted).toHaveLength(2);
+
+    const unrecovered = await request(app).get(`/api/receipt/${(await pool.query('SELECT receipt_token FROM trip_status WHERE trip_id = $1', [tripId])).rows[0].receipt_token}`);
+    expect(unrecovered.body.status).toBe('UNPAID');
+
+    // The conductor answers "Passenger paid now": fare_recovered, then the card resolves
+    const second = await send([
+      event('fare_recovered', 3, {
+        shiftId: 'shift-1', tripId, cardUuid, nfcUid: '14B8498A',
+        amountCentavos: 1500, reason: 'paid after returning unpaid',
+        shiftConductor: 'juan', actingConductor: 'juan',
+      }),
+      event('card_state_changed', 4, { nfcUid: '14B8498A', cardUuid, tripId, state: 'AVAILABLE' }),
+    ]);
+    expect(second.accepted).toHaveLength(2);
+
+    const receipt = await request(app).get(`/api/receipt/${(await pool.query('SELECT receipt_token FROM trip_status WHERE trip_id = $1', [tripId])).rows[0].receipt_token}`);
+    expect(receipt.body.status).toBe('PAID');
+    expect(receipt.body.fare_recovered).toBe(true);
+  });
+
+  it('rejects a fare_recovered payload that is missing the trip it belongs to', async () => {
+    const res = await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [{
+          event_id: randomUUID(),
+          device_id: 'dev-1',
+          local_seq: 1,
+          type: 'fare_recovered',
+          created_at_millis: Date.now(),
+          payload: { amountCentavos: 1500, reason: 'no trip id, no recovery' },
+        }],
+      });
+    expect(res.body.accepted).toHaveLength(0);
+    expect(res.body.rejected).toHaveLength(1);
+  });
+});
