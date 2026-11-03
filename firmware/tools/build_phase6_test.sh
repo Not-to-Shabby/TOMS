@@ -54,8 +54,8 @@ build good-release 2.0.0 release-2.0.0 n
 # 2. Upgrade image with MTU 247 high-speed BLE and LCD refusal fix (2.3.0, DEV_MODE=n)
 build test-upgrade 2.3.0 speed-2.3.0 n
 
-# 3. Production release image with interactive PN532 ping, aligned BT buffers, and "INSERT CARD" UI (2.6.0, DEV_MODE=n)
-build release-v2.6.0 2.6.0 TOMS-v2.6.0 n
+# 3. Production release image with interactive PN532 ping, aligned BT buffers, and "INSERT CARD" UI (2.7.0, DEV_MODE=n)
+build release-v2.7.0 2.7.0 TOMS-v2.7.0 n
 
 # Sign images
 echo "=== Signing Phase 6 test images ==="
@@ -72,9 +72,9 @@ sign test-upgrade 2.3.0 "$KEY_DEV" test-upgrade.signed.bin
 # test-wrongkey.signed.bin (version 2.4.0 > 2.3.0; signed with production key so dev bootloader rejects)
 sign test-upgrade 2.4.0 "$KEY_PROD" test-wrongkey.signed.bin
 
-# firmware-v2.6.0.signed.bin (version 2.6.0, high-speed + PN532 ping + battery + INSERT CARD UI)
-sign release-v2.6.0 2.6.0 "$KEY_DEV" firmware-v2.6.0.signed.bin
-sign release-v2.6.0 2.6.0 "$KEY_DEV" firmware-v2.6.0.confirmed.bin --confirm
+# firmware-v2.7.0.signed.bin (version 2.7.0, high-speed + PN532 ping + battery + INSERT CARD UI + Verdict screens)
+sign release-v2.7.0 2.7.0 "$KEY_DEV" firmware-v2.7.0.signed.bin
+sign release-v2.7.0 2.7.0 "$KEY_DEV" firmware-v2.7.0.confirmed.bin --confirm
 
 # test-downgrade.signed.bin (version 1.0.0, to test downgrade rejection on good-release)
 # We can use the good-1 raw binary or build a downgrade 1.0.0 binary

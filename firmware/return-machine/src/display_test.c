@@ -746,7 +746,14 @@ static void display_loop(void *a, void *b, void *c)
 		}
 		if (req & REQ_CARD) {
 			idle_ms = 0;
-			page = diag_mode_active ? PAGE_CARD : PAGE_PASSENGER_VERDICT;
+			k_mutex_lock(&uid_lock, K_FOREVER);
+			uint8_t cv = card_verdict;
+			k_mutex_unlock(&uid_lock);
+			if (cv != 0xFF) {
+				page = PAGE_PASSENGER_VERDICT;
+			} else {
+				page = diag_mode_active ? PAGE_CARD : PAGE_PASSENGER_VERDICT;
+			}
 			redraw = true;
 		}
 	}

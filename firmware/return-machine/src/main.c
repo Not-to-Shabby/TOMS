@@ -115,7 +115,6 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 
 	uint8_t status = rm_ble_state_lookup(uid, uid_len);
 	log_uid("card read", uid, uid_len);
-	display_test_set_uid(uid, uid_len, atype);
 	LOG_INF("type %u, cached state %u", atype, status);
 
 	struct toms_card_read_msg msg = {
