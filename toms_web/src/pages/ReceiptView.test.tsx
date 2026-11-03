@@ -176,3 +176,53 @@ describe('ReceiptView for a card that is out of service', () => {
     expect(await screen.findByText('This card is no longer in use.')).toBeInTheDocument();
   });
 });
+
+describe('ReceiptView grace banner', () => {
+  const bannerText = /already been returned/;
+
+  it('says the receipt is the previous trip when landed with the grace hint in the URL', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: sampleReceipt });
+    render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555?grace=1']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(bannerText)).toBeInTheDocument();
+    expect(screen.getByText('Official Passenger e-Receipt')).toBeInTheDocument();
+  });
+
+  it('says the same when the card link resolved with the server grace flag', async () => {
+    const get = vi
+      .spyOn(axios, 'get')
+      .mockResolvedValueOnce({ data: { receipt_token: sampleReceipt.receipt_token, grace: true } })
+      .mockResolvedValueOnce({ data: sampleReceipt });
+    render(
+      <MemoryRouter initialEntries={['/r/11111111-2222-4333-8444-555555555555']}>
+        <Routes>
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(bannerText)).toBeInTheDocument();
+    expect(screen.getByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows no banner for a plain mid-trip scan', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: sampleReceipt });
+    render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(screen.queryByText(bannerText)).not.toBeInTheDocument();
+  });
+});
