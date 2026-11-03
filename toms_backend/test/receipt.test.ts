@@ -310,7 +310,8 @@ describe('Static Card QR & Public Receipt Flow', () => {
   it('GET /r/:card_uuid refuses to leak past receipt once card is RETURNED, while past receipt_token remains viewable', async () => {
     const cardUuid = randomUUID();
     const tripId = randomUUID();
-    const now = Date.now();
+    // The whole ride is placed 40 minutes back, so the return sits beyond the 30-minute grace window.
+    const boardedAt = Date.now() - 40 * 60 * 1000;
 
     await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
       nfc_uid: 'A1B2C3D4',
@@ -328,7 +329,7 @@ describe('Static Card QR & Public Receipt Flow', () => {
             device_id: 'dev-1',
             local_seq: 1,
             type: 'trip_created',
-            created_at_millis: now,
+            created_at_millis: boardedAt,
             payload: {
               tripId,
               cardUuid,
@@ -348,7 +349,7 @@ describe('Static Card QR & Public Receipt Flow', () => {
             device_id: 'dev-1',
             local_seq: 2,
             type: 'card_state_changed',
-            created_at_millis: now + 1000,
+            created_at_millis: boardedAt + 1000,
             payload: {
               nfcUid: 'A1B2C3D4',
               cardUuid,
@@ -366,7 +367,7 @@ describe('Static Card QR & Public Receipt Flow', () => {
     const passengerReceiptToken = activeScan.body.receipt_token;
     expect(passengerReceiptToken).toMatch(/^[0-9a-f-]{36}$/);
 
-    // 2. Passenger alights and drops card into Return Machine -> card state becomes RETURNED
+    // 2. Passenger alights and drops card into Return Machine -> card state becomes RETURNED, 35 minutes ago
     await request(app)
       .post('/api/events')
       .set('Authorization', `Bearer ${deviceToken}`)
@@ -377,7 +378,7 @@ describe('Static Card QR & Public Receipt Flow', () => {
             device_id: 'dev-1',
             local_seq: 3,
             type: 'card_state_changed',
-            created_at_millis: now + 30000,
+            created_at_millis: Date.now() - 35 * 60 * 1000,
             payload: {
               nfcUid: 'A1B2C3D4',
               cardUuid,
@@ -388,7 +389,7 @@ describe('Static Card QR & Public Receipt Flow', () => {
         ],
       });
 
-    // 3. Someone scans the physical card QR code (or a photo of it) AFTER the card was returned:
+    // 3. Someone scans the physical card QR code (or a photo of it) AFTER the grace window has passed:
     // It must NOT reveal the passenger's receipt!
     const returnedJson = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
     expect(returnedJson.status).toBe(404);
@@ -449,6 +450,156 @@ describe('Static Card QR & Public Receipt Flow', () => {
     const res = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
     expect(res.status).toBe(404);
     expect(res.body.active).toBe(false);
+  });
+
+  it('GET /r/:card_uuid still opens the last receipt within the return grace window, flagged as grace', async () => {
+    const cardUuid = randomUUID();
+    const tripId = randomUUID();
+    // The passenger got off and handed the card back 5 minutes ago: inside RETURN_GRACE_MINUTES.
+    const boardedAt = Date.now() - 7 * 60 * 1000;
+
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
+      nfc_uid: 'B1C2D3E4',
+      card_uuid: cardUuid,
+    });
+
+    await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 1,
+            type: 'trip_created',
+            created_at_millis: boardedAt,
+            payload: {
+              tripId,
+              cardUuid,
+              nfcUid: 'B1C2D3E4',
+              boardingStopId: 'Stop A',
+              declaredDestinationStopId: 'Stop B',
+              computedFareCentavos: 2500,
+              fareCentavos: 2500,
+              discountCentavos: 0,
+              fareVersion: 1,
+              passengerCount: 1,
+              passengers: [],
+            },
+          },
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 2,
+            type: 'card_state_changed',
+            created_at_millis: boardedAt + 1000,
+            payload: { nfcUid: 'B1C2D3E4', cardUuid, tripId, state: 'ASSIGNED_PAID' },
+          },
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 3,
+            type: 'card_state_changed',
+            created_at_millis: Date.now() - 5 * 60 * 1000,
+            payload: { nfcUid: 'B1C2D3E4', cardUuid, tripId, state: 'RETURNED' },
+          },
+        ],
+      });
+
+    const json = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(json.status).toBe(200);
+    expect(json.body.active).toBe(true);
+    expect(json.body.grace).toBe(true);
+    expect(json.body.receipt_token).toMatch(/^[0-9a-f-]{36}$/);
+
+    const html = await request(app).get(`/r/${cardUuid}`).set('Accept', 'text/html');
+    expect(html.status).toBe(302);
+    expect(html.headers.location).toBe(`/receipt/${json.body.receipt_token}?grace=1`);
+
+    // The receipt behind the grace redirect is fully viewable.
+    const receipt = await request(app).get(`/api/receipt/${json.body.receipt_token}`);
+    expect(receipt.status).toBe(200);
+  });
+
+  it('GET /r/:card_uuid shows the next passenger their own receipt, never the previous one, even within the grace window', async () => {
+    const cardUuid = randomUUID();
+    const firstTripId = randomUUID();
+    const secondTripId = randomUUID();
+    // The previous passenger handed the card back 5 minutes ago; a new passenger boards now.
+    const firstBoardedAt = Date.now() - 7 * 60 * 1000;
+
+    await request(app).post('/api/cards').set('Authorization', `Bearer ${admin}`).send({
+      nfc_uid: 'C2D3E4F5',
+      card_uuid: cardUuid,
+    });
+
+    await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 1,
+            type: 'trip_created',
+            created_at_millis: firstBoardedAt,
+            payload: {
+              tripId: firstTripId,
+              cardUuid,
+              nfcUid: 'C2D3E4F5',
+              boardingStopId: 'Stop A',
+              declaredDestinationStopId: 'Stop B',
+              computedFareCentavos: 2500,
+              fareCentavos: 2500,
+              discountCentavos: 0,
+              fareVersion: 1,
+              passengerCount: 1,
+              passengers: [],
+            },
+          },
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 2,
+            type: 'card_state_changed',
+            created_at_millis: firstBoardedAt + 1000,
+            payload: { nfcUid: 'C2D3E4F5', cardUuid, tripId: firstTripId, state: 'RETURNED' },
+          },
+          {
+            event_id: randomUUID(),
+            device_id: 'dev-1',
+            local_seq: 3,
+            type: 'trip_created',
+            created_at_millis: Date.now(),
+            payload: {
+              tripId: secondTripId,
+              cardUuid,
+              nfcUid: 'C2D3E4F5',
+              boardingStopId: 'Stop A',
+              declaredDestinationStopId: 'Stop C',
+              computedFareCentavos: 1800,
+              fareCentavos: 1800,
+              discountCentavos: 0,
+              fareVersion: 1,
+              passengerCount: 1,
+              passengers: [],
+            },
+          },
+        ],
+      });
+
+    const { rows } = await pool.query('SELECT receipt_token FROM trip_status WHERE trip_id = $1', [firstTripId]);
+    const firstReceiptToken = rows[0].receipt_token;
+
+    const res = await request(app).get(`/r/${cardUuid}`).set('Accept', 'application/json');
+    expect(res.status).toBe(200);
+    expect(res.body.active).toBe(true);
+    expect(res.body.grace).toBeUndefined();
+    expect(res.body.current_state).toBe('ASSIGNED_UNPAID');
+    // The scan opens the NEW trip's receipt, and the previous passenger's is not reachable from this card.
+    expect(res.body.receipt_token).not.toBe(firstReceiptToken);
   });
 
   it('limits how fast one address can look up public card and receipt links', async () => {

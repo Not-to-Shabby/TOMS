@@ -2,7 +2,7 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import type { RateLimiter } from './rateLimit';
-import { OPEN_STATES, OPEN_TRIP_WINDOW_HOURS } from './dashboard';
+import { OPEN_STATES, OPEN_TRIP_WINDOW_HOURS, RETURNED_STATES, RETURN_GRACE_MINUTES } from './dashboard';
 
 const uuidSchema = z.string().uuid();
 
@@ -16,6 +16,18 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
       return void res.status(429).json({ error: 'Too many requests. Try again shortly.' });
     }
     next();
+  };
+
+  // The answer for a card with no receipt to show: an inactive page for browsers, a 404 for API callers.
+  const inactiveScan = (req: Request, res: Response, cardUuid: string) => {
+    if (req.accepts('html')) {
+      return void res.redirect(`/receipt/inactive?card=${encodeURIComponent(cardUuid)}`);
+    }
+    return void res.status(404).json({
+      active: false,
+      message: 'No active trip found for this card right now.',
+      card_uuid: cardUuid,
+    });
   };
 
   // Public static QR handler: /r/:card_uuid or /api/r/:card_uuid
@@ -57,18 +69,43 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
       [cardUuid],
     );
 
-    if (rows.length === 0 || !rows[0].is_active_trip) {
-      if (req.accepts('html')) {
-        return void res.redirect(`/receipt/inactive?card=${encodeURIComponent(cardUuid)}`);
-      }
-      return void res.status(404).json({
-        active: false,
-        message: 'No active trip found for this card right now.',
-        card_uuid: cardUuid,
-      });
+    if (rows.length === 0) {
+      return void inactiveScan(req, res, cardUuid);
     }
 
     const trip = rows[0];
+
+    if (!trip.is_active_trip) {
+      // Grace: a passenger who scans only as they get off still gets their receipt for a short while
+      // after the card is handed back. A newer boarding always wins before this does — the trip above
+      // is the card's latest, so once the next rider's card tap reaches the server, scanning shows
+      // their own receipt, never the previous passenger's. The ?grace=1 hint lets the receipt page say
+      // plainly that this is the card's previous trip.
+      const grace = await pool.query(
+        `SELECT 1 FROM events
+         WHERE card_uuid = $1::uuid AND card_state IN ${RETURNED_STATES}
+           AND effective_at > now() - interval '${RETURN_GRACE_MINUTES} minutes'
+         LIMIT 1`,
+        [cardUuid],
+      );
+      if (grace.rowCount) {
+        const graceUrl = `/receipt/${trip.receipt_token}?grace=1`;
+        if (req.accepts('html')) {
+          return void res.redirect(graceUrl);
+        }
+        return void res.json({
+          active: true,
+          card_uuid: cardUuid,
+          receipt_token: trip.receipt_token,
+          current_state: trip.current_state,
+          paid: trip.paid,
+          redirect_url: graceUrl,
+          grace: true,
+        });
+      }
+      return void inactiveScan(req, res, cardUuid);
+    }
+
     const redirectUrl = `/receipt/${trip.receipt_token}`;
 
     if (req.accepts('html')) {

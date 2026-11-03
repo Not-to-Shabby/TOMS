@@ -1,10 +1,30 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import axios from 'axios';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReceiptView from './ReceiptView';
 
 afterEach(() => vi.restoreAllMocks());
+
+/** Renders the live path alongside the routed page, so tests can assert where the passenger actually is. */
+function LocationProbe() {
+  const { pathname, search } = useLocation();
+  return <div data-testid="route">{pathname}{search}</div>;
+}
+
+/** The scan entry renders inside a layout that also reports the current URL. */
+function atCardEntry(entry: string) {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <Routes>
+        <Route element={<><Outlet /><LocationProbe /></>}>
+          <Route path="/r/:cardUuid" element={<ReceiptView />} />
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 const sampleReceipt = {
   receipt_token: '11111111-2222-3333-4444-555555555555',
@@ -174,5 +194,64 @@ describe('ReceiptView for a card that is out of service', () => {
     vi.spyOn(axios, 'get').mockRejectedValue({ response: { status: 410, data: {} } });
     at('/r/11111111-2222-4333-8444-555555555555');
     expect(await screen.findByText('This card is no longer in use.')).toBeInTheDocument();
+  });
+});
+
+describe('ReceiptView grace banner', () => {
+  const bannerText = /already been returned/;
+
+  it('says the receipt is the previous trip when landed with the grace hint in the URL', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: sampleReceipt });
+    render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555?grace=1']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(bannerText)).toBeInTheDocument();
+    expect(screen.getByText('Official Passenger e-Receipt')).toBeInTheDocument();
+  });
+
+  it('says the same when the card link resolved with the server grace flag', async () => {
+    const get = vi
+      .spyOn(axios, 'get')
+      .mockResolvedValueOnce({ data: { receipt_token: sampleReceipt.receipt_token, grace: true } })
+      .mockResolvedValueOnce({ data: sampleReceipt });
+    atCardEntry('/r/11111111-2222-4333-8444-555555555555');
+
+    expect(await screen.findByText(bannerText)).toBeInTheDocument();
+    expect(screen.getByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    // The sticker URL must be gone: the passenger is on the receipt's own permanent link.
+    expect(screen.getByTestId('route')).toHaveTextContent(
+      '/receipt/11111111-2222-3333-4444-555555555555?grace=1',
+    );
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('swaps the sticker URL for the plain receipt link when the card resolves without a grace flag', async () => {
+    vi.spyOn(axios, 'get')
+      .mockResolvedValueOnce({ data: { receipt_token: sampleReceipt.receipt_token } })
+      .mockResolvedValueOnce({ data: sampleReceipt });
+    atCardEntry('/r/11111111-2222-4333-8444-555555555555');
+
+    expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(screen.getByTestId('route')).toHaveTextContent('/receipt/11111111-2222-3333-4444-555555555555');
+    expect(screen.queryByText(/already been returned/)).not.toBeInTheDocument();
+  });
+
+  it('shows no banner for a plain mid-trip scan', async () => {
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: sampleReceipt });
+    render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
+    expect(screen.queryByText(bannerText)).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,11 @@ export const OPEN_TRIP_WINDOW_HOURS = 24;
 export const EXPORT_ROW_LIMIT = 50_000;
 const MAX_PAGE_SIZE = 200;
 export const OPEN_STATES = "('ASSIGNED_UNPAID', 'ASSIGNED_PAID')";
+/** Card states that mean the card is out of a passenger's hands: handed back, or back in circulation. */
+export const RETURNED_STATES = "('RETURNED', 'RETURNED_UNPAID', 'AVAILABLE')";
+/** How long after the card is handed back its QR may still open the last trip's receipt, so a passenger
+ *  who scans only as they get off still gets theirs. A newer boarding always wins before this does. */
+export const RETURN_GRACE_MINUTES = 30;
 
 export async function assertTimezone(pool: Pool, tz: string): Promise<string> {
   const { rowCount } = await pool.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [tz]);

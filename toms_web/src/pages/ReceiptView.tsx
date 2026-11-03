@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ShieldCheck, CheckCircle2, Clock, Bus, MapPin, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '../lib/api';
@@ -47,10 +47,14 @@ interface ReceiptData {
 export default function ReceiptView() {
   const { token, cardUuid } = useParams<{ token?: string; cardUuid?: string }>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showLtfrbDoc, setShowLtfrbDoc] = useState(false);
+  // True when the card QR was resolved during the short post-return grace window, so the receipt shown
+  // belongs to the card's previous trip and the page must say so.
+  const [graceNotice, setGraceNotice] = useState(false);
 
   useEffect(() => {
     resolveAndLoad();
@@ -69,7 +73,14 @@ export default function ReceiptView() {
           headers: { Accept: 'application/json' },
         });
         targetToken = resolveRes.data.receipt_token;
+        // Swap the sticker URL for the receipt's own permanent link right away: whatever the passenger
+        // saves or shares must keep opening THIS trip, not whatever the card holds next. replace keeps
+        // the phone's back button leaving the page instead of returning to the sticker URL.
+        navigate(`/receipt/${targetToken}${resolveRes.data.grace === true ? '?grace=1' : ''}`, { replace: true });
+        return;
       }
+      // Or landed straight on the permanent receipt link with the grace hint in the query string.
+      if (searchParams.get('grace') === '1') setGraceNotice(true);
 
       if (!targetToken) {
         const inactiveCard = searchParams.get('card');
@@ -130,7 +141,16 @@ export default function ReceiptView() {
   return (
     <div style={{ minHeight: '100vh', background: '#0a0d14', color: '#fff', padding: '24px 16px', display: 'flex', justifyContent: 'center' }}>
       <div style={{ width: '100%', maxWidth: '440px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        
+
+        {graceNotice && (
+          <div className="glass-panel" style={{ padding: '12px 16px', borderRadius: '12px', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+            <AlertTriangle size={18} color="var(--warning, #f59e0b)" style={{ flexShrink: 0, marginTop: '2px' }} />
+            <span style={{ fontSize: '13px', lineHeight: 1.5, color: 'var(--text-secondary, #94a3b8)' }}>
+              The card has already been returned — this is the receipt from its most recent trip.
+            </span>
+          </div>
+        )}
+
         {/* Receipt Card */}
         <div style={{
           background: '#ffffff',
