@@ -21,6 +21,8 @@ interface ReceiptData {
   trip_id: string;
   status: 'PAID' | 'UNPAID';
   card_state: string;
+  // Set when the fare was paid after the card came back unpaid, so the page can say how it was settled.
+  fare_recovered?: boolean;
   boarding_stop: string;
   destination_stop: string;
   declared_destination: string;
@@ -219,6 +221,22 @@ export default function ReceiptView() {
               <span>{receipt.status}</span>
             </div>
           </div>
+
+          {/* A fare recovered after the card came back unpaid is settled, just not at boarding. */}
+          {isPaid && receipt.fare_recovered && (
+            <div style={{
+              marginBottom: '16px',
+              padding: '10px 14px',
+              borderRadius: '10px',
+              background: '#ecfdf5',
+              border: '1px solid #a7f3d0',
+              color: '#15803d',
+              fontSize: '12px',
+              fontWeight: 600,
+            }}>
+              This fare was paid after the card was returned unpaid.
+            </div>
+          )}
 
           {/* Route & Vehicle Info */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px', fontSize: '13px' }}>

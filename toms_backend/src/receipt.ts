@@ -150,6 +150,7 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
          t.override_reason,
          t.current_state,
          t.paid,
+         t.recovered,
          t.effective_at,
          t.passenger_count,
          v.id AS vehicle_id,
@@ -191,6 +192,9 @@ export function registerReceiptRoutes(app: Express, { pool, limiter }: { pool: P
       trip_id: r.trip_id,
       status: r.paid ? 'PAID' : 'UNPAID',
       card_state: r.current_state,
+      // Set when the fare was paid after the card came back unpaid (the conductor's fare_recovered),
+      // so the page can say how it was settled instead of implying it was paid at boarding.
+      fare_recovered: !!r.recovered,
       boarding_stop: r.boarding_stop_id,
       destination_stop: destination,
       declared_destination: r.declared_destination_stop_id,

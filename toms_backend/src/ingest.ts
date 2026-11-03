@@ -99,6 +99,18 @@ const cardStatePayload = z.object({
   state: z.enum(['AVAILABLE', 'ASSIGNED_UNPAID', 'ASSIGNED_PAID', 'RETURNED', 'RETURNED_UNPAID', 'LOST']),
 });
 
+// The phone's WriteOffPayload shape, shared by fare_written_off and fare_recovered.
+const fareAdjustmentPayload = z.object({
+  shiftId: z.string().max(64).nullish(),
+  tripId: z.guid(),
+  cardUuid: z.guid(),
+  nfcUid,
+  amountCentavos: money,
+  reason: z.string().max(500),
+  shiftConductor: z.string().max(64).nullish(),
+  actingConductor: z.string().max(64).nullish(),
+});
+
 export interface Rejection {
   index: number;
   event_id: string | null;
@@ -184,6 +196,16 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
       card_uuid: p.data.cardUuid,
       nfc_uid: p.data.nfcUid,
       card_state: p.data.state,
+    });
+  } else if (e.type === 'fare_recovered') {
+    // A returned-unpaid card whose fare was paid late. The trip and card links are set so the
+    // trip_status view can count the fare as collected; the full payload is kept as it arrived.
+    const p = fareAdjustmentPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+    Object.assign(columns, {
+      trip_id: p.data.tripId,
+      card_uuid: p.data.cardUuid,
+      nfc_uid: p.data.nfcUid,
     });
   }
   // Any other type is kept as it arrived in the payload column, so a newer app version
