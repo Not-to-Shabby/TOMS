@@ -45,8 +45,10 @@ import ph.toms.conductor.domain.ApprovedCardList
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigRefresher
 import ph.toms.conductor.sync.EventUploader
+import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.UploadResult
+import ph.toms.conductor.sync.UplinkState
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -102,6 +104,7 @@ class ConductorViewModelTest {
     private val fakeCardSync = FakeCardSync()
     private val configSync = FakeConfigSync()
     private val fakeRmLink = FakeReturnMachineLink()
+    private val fakeUplink = FakeUplinkManager()
 
     @Before
     fun setUp() {
@@ -118,7 +121,7 @@ class ConductorViewModelTest {
             repo, location, feedback, settings, deviceConfig, fakeCardSync,
             ConfigRefresher(repo, configSync), fakeRmLink, InitialConfig(TestConfig.config),
         )
-        syncVm = SyncViewModel(repo, deviceConfig, flusher)
+        syncVm = SyncViewModel(repo, deviceConfig, flusher, fakeUplink)
         // Every trip belongs to a shift, so the tests run inside one.
         vm.startShift("juan", "v1", "r1")
         waitUntil { vm.state.value.shift != null }
@@ -373,6 +376,26 @@ class ConductorViewModelTest {
         assertNotNull(syncVm.state.value.uploadMessage)
         assertTrue(syncVm.state.value.uploadMessage!!.startsWith("Uploaded"))
         assertEquals(0, db.outbox().pendingCountNow())
+    }
+
+    @Test
+    fun `when uplink is restored after dead zone pending outbox events are automatically drained`() = runTest {
+        advanceUntilIdle()
+        fakeUplink.simulateOffline()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        waitUntil { runBlocking { db.outbox().pendingCountNow() } > 0 }
+        assertTrue(db.outbox().pendingCountNow() > 0)
+        assertEquals(UplinkState.Offline, syncVm.state.value.uplinkState)
+
+        // Bus exits dead zone into 4G coverage -> Uplink restored
+        fakeUplink.simulateRestored(isCellular = true)
+        advanceUntilIdle()
+        waitUntil { !syncVm.state.value.isUploading && runBlocking { db.outbox().pendingCountNow() } == 0 }
+
+        assertEquals(0, db.outbox().pendingCountNow())
+        assertEquals(UplinkState.Online(isCellular = true), syncVm.state.value.uplinkState)
+        assertTrue(syncVm.state.value.uploadMessage!!.startsWith("Uploaded"))
     }
 
     @Test
@@ -665,6 +688,31 @@ class ConductorViewModelTest {
         assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
         waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.RETURNED_UNPAID }
         assertEquals(CardState.RETURNED_UNPAID, repo.loadCardStates()["6FF1AD39"])
+    }
+
+    @Test
+    fun `clearAlarm resolves card to available and sends remote alarm silence command to RM`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        fakeRmLink.emitPaidCheck(checkSeq = 105L, uidHex = "6F:F1:AD:39")
+        advanceUntilIdle()
+        assertEquals(CardState.RETURNED_UNPAID, vm.state.value.openTrips.single().state)
+
+        val tripId = vm.state.value.openTrips.single().trip.id
+        assertEquals(0, fakeRmLink.alarmClearCalls)
+
+        // Conductor taps "Clear alarm" on phone
+        vm.clearAlarm(tripId)
+        advanceUntilIdle()
+
+        // 1. Sends hardware silence command 0x05 to RM via CHAR_DIAG
+        assertEquals(1, fakeRmLink.alarmClearCalls)
+
+        // 2. Card resolves to AVAILABLE and is cleared from open trips
+        assertTrue(vm.state.value.openTrips.isEmpty())
+        waitUntil { runBlocking { repo.loadCardStates()["6FF1AD39"] } == CardState.AVAILABLE }
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["6FF1AD39"])
     }
 
     @Test

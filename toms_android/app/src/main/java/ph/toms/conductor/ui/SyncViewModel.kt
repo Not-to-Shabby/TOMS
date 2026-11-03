@@ -14,6 +14,9 @@ import ph.toms.conductor.data.db.ParkedEvent
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.sync.NO_SERVER_MESSAGE
 import ph.toms.conductor.sync.OutboxFlusher
+import ph.toms.conductor.sync.UplinkManager
+import ph.toms.conductor.sync.UplinkState
+import kotlinx.coroutines.flow.SharedFlow
 
 /** Everything about talking to the server: who this phone is, what is waiting to go, and how the last upload went. */
 data class SyncState(
@@ -29,6 +32,8 @@ data class SyncState(
     val uploadMessage: String? = null,
     /** Set when the token could not be stored safely. Null when all is well. */
     val tokenWarning: String? = null,
+    /** Real-time cellular/Wi-Fi uplink connectivity state with anti-flapping hysteresis. */
+    val uplinkState: UplinkState = UplinkState.Offline,
 ) {
     /** A release build starts with no server address. Until one is set nothing is uploaded or synced. */
     val needsServer: Boolean get() = serverUrl.isBlank()
@@ -39,6 +44,7 @@ class SyncViewModel @Inject constructor(
     private val trips: TripRepository,
     private val deviceConfig: DeviceConfigStore,
     private val flusher: OutboxFlusher,
+    private val uplinkManager: UplinkManager,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(
@@ -47,11 +53,16 @@ class SyncViewModel @Inject constructor(
             serverUrl = deviceConfig.serverUrl.value,
             isEnrolled = !deviceConfig.deviceToken.value.isNullOrBlank(),
             tokenWarning = deviceConfig.storageWarning.value,
+            uplinkState = uplinkManager.state.value,
         ),
     )
     val state: StateFlow<SyncState> = _state.asStateFlow()
 
+    val uplinkRestored: SharedFlow<Unit> = uplinkManager.uplinkRestored
+
     init {
+        uplinkManager.startMonitoring()
+
         viewModelScope.launch { trips.pendingCount().collect { n -> _state.update { it.copy(pendingCount = n) } } }
         viewModelScope.launch { trips.parkedCount().collect { n -> _state.update { it.copy(parkedCount = n) } } }
         viewModelScope.launch { trips.parkedEvents().collect { list -> _state.update { it.copy(parked = list) } } }
@@ -60,6 +71,22 @@ class SyncViewModel @Inject constructor(
         viewModelScope.launch {
             deviceConfig.deviceToken.collect { tok -> _state.update { it.copy(isEnrolled = !tok.isNullOrBlank()) } }
         }
+        viewModelScope.launch {
+            uplinkManager.state.collect { u -> _state.update { it.copy(uplinkState = u) } }
+        }
+        viewModelScope.launch {
+            uplinkManager.uplinkRestored.collect {
+                // Auto-drain outbox queue when stable network connection returns from a dead zone
+                if (_state.value.pendingCount > 0 && !_state.value.isUploading && !_state.value.needsServer) {
+                    flushNow()
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        uplinkManager.stopMonitoring()
     }
 
     /** Sends what is waiting. [onFlushed] runs when the upload attempt is over, for work that follows it, such as a card list refresh. */

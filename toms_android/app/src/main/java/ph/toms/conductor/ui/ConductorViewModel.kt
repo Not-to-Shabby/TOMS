@@ -522,7 +522,10 @@ class ConductorViewModel @Inject constructor(
 
     fun markPaid(tripId: String) = apply(tripId, CardEvent.MARK_PAID)
     fun returnCard(tripId: String) = apply(tripId, CardEvent.RETURNED_AT_TERMINAL)
-    fun clearAlarm(tripId: String) = apply(tripId, CardEvent.CONDUCTOR_RESOLVE)
+    fun clearAlarm(tripId: String) {
+        rmLink.sendAlarmClear()
+        apply(tripId, CardEvent.CONDUCTOR_RESOLVE)
+    }
 
     private fun apply(tripId: String, event: CardEvent) {
         val trip = tripByCard.values.firstOrNull { it.id == tripId } ?: return

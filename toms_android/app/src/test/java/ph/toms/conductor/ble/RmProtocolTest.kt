@@ -23,6 +23,15 @@ class RmProtocolTest {
         assertEquals("544f4d53-5245-5455-524e-414348494e06", RmProtocol.CHAR_TIME_SYNC.toString())
         assertEquals("544f4d53-5245-5455-524e-414348494e09", RmProtocol.CHAR_DEVICE_INFO.toString())
         assertEquals("544f4d53-5245-5455-524e-414348494e0a", RmProtocol.CHAR_RM_ACK.toString())
+        assertEquals("544f4d53-5245-5455-524e-414348494e0e", RmProtocol.CHAR_DIAG.toString())
+    }
+
+    @Test
+    fun `encodeAlarmClear produces command 0x05 for CHAR_DIAG`() {
+        val frame = RmProtocol.encodeAlarmClear()
+        assertEquals(2, frame.size)
+        assertEquals(0x05.toByte(), frame[0])
+        assertEquals(0x00.toByte(), frame[1])
     }
 
     @Test
