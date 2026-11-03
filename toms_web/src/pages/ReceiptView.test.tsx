@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import axios from 'axios';
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -253,5 +253,52 @@ describe('ReceiptView grace banner', () => {
 
     expect(await screen.findByText('Official Passenger e-Receipt')).toBeInTheDocument();
     expect(screen.queryByText(bannerText)).not.toBeInTheDocument();
+  });
+});
+
+describe('ReceiptView live updates', () => {
+  const unpaid = { ...sampleReceipt, status: 'UNPAID' as const, card_state: 'ASSIGNED_UNPAID' };
+
+  function atReceipt() {
+    return render(
+      <MemoryRouter initialEntries={['/receipt/11111111-2222-3333-4444-555555555555']}>
+        <Routes>
+          <Route path="/receipt/:token" element={<ReceiptView />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('refreshes while the trip is open, so UNPAID becomes PAID without a reload', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const paid = { ...sampleReceipt, status: 'PAID' as const, card_state: 'ASSIGNED_PAID' };
+    const get = vi.spyOn(axios, 'get').mockResolvedValueOnce({ data: unpaid }).mockResolvedValueOnce({ data: paid });
+    atReceipt();
+
+    expect(await screen.findByText('UNPAID')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(await screen.findByText('PAID')).toBeInTheDocument();
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops refreshing once the card is back, because a returned receipt is final', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const returned = { ...sampleReceipt, status: 'PAID' as const, card_state: 'RETURNED' };
+    const get = vi.spyOn(axios, 'get').mockResolvedValue({ data: returned });
+    atReceipt();
+
+    expect(await screen.findByText('PAID')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(get).toHaveBeenCalledTimes(1);
   });
 });

@@ -5,6 +5,9 @@ import axios from 'axios';
 import { API_BASE } from '../lib/api';
 import { notInUseMessage } from '../lib/notInUse';
 
+/** How often a still-open receipt re-reads the server while a passenger is watching it. */
+const RECEIPT_REFRESH_MILLIS = 5000;
+
 interface PassengerLine {
   categoryId: string | null;
   count: number;
@@ -60,6 +63,41 @@ export default function ReceiptView() {
     resolveAndLoad();
   }, [token, cardUuid]);
 
+  // The trip is live until the card comes back: payment, a destination override or the return itself must
+  // reach a receipt that is still open on someone's screen. Background tabs pause timers, so an extra read
+  // also runs when the passenger comes back to the tab.
+  const tripStillOpen = receipt?.card_state === 'ASSIGNED_UNPAID' || receipt?.card_state === 'ASSIGNED_PAID';
+
+  useEffect(() => {
+    if (!token || !tripStillOpen) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/api/receipt/${token}`);
+        if (!cancelled) setReceipt(res.data);
+      } catch {
+        // Keep the last good receipt on screen; the next tick tries again.
+      }
+    };
+    const wake = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    const timer = setInterval(refresh, RECEIPT_REFRESH_MILLIS);
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('focus', wake);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('focus', wake);
+    };
+  }, [token, tripStillOpen]);
+
+  async function loadReceipt(receiptToken: string) {
+    const res = await axios.get(`${API_BASE}/api/receipt/${receiptToken}`);
+    setReceipt(res.data);
+  }
+
   async function resolveAndLoad() {
     try {
       setLoading(true);
@@ -95,8 +133,7 @@ export default function ReceiptView() {
         return;
       }
 
-      const res = await axios.get(`${API_BASE}/api/receipt/${targetToken}`);
-      setReceipt(res.data);
+      await loadReceipt(targetToken);
     } catch (err: any) {
       if (err.response?.status === 410) {
         setError(notInUseMessage(err.response?.data?.card_status) ?? 'This card is no longer in use.');
