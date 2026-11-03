@@ -39,9 +39,14 @@ class UploadWorker @AssistedInject constructor(
     companion object {
         private const val NAME = "outbox-upload"
 
+        /** Connectivity both drains need: the periodic backstop and the one-time drain a fresh event asks for. */
+        internal val NETWORK_CONSTRAINTS: Constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<UploadWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setConstraints(NETWORK_CONSTRAINTS)
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
             WorkManager.getInstance(context)

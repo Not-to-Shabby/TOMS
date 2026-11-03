@@ -22,13 +22,23 @@ import ph.toms.conductor.data.db.EventEntity
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.domain.Trip
+import ph.toms.conductor.sync.UploadKick
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class ShiftRepositoryTest {
 
+    /** Counts the drains the repository asked for, standing in for the WorkManager kick. */
+    private class CountingKick : UploadKick {
+        var count = 0
+        override fun kick() {
+            count++
+        }
+    }
+
     private lateinit var db: TomsDatabase
     private lateinit var repo: TripRepository
+    private lateinit var kick: CountingKick
     private var now = 1_000_000L
     private var eventSeq = 0
     private var shiftSeq = 0
@@ -37,11 +47,13 @@ class ShiftRepositoryTest {
     @Before fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()
+        kick = CountingKick()
         repo = TripRepository(
             db, deviceId = "dev-1",
             newEventId = { "evt-${eventSeq++}" },
             newShiftId = { "shift-${shiftSeq++}" },
             clock = { now },
+            uploadKick = kick,
         )
     }
 
@@ -317,5 +329,36 @@ class ShiftRepositoryTest {
         assertTrue(tripEvents.isNotEmpty())
         assertTrue(tripEvents.all { it.shiftId == s.id })
         assertEquals(CardState.ASSIGNED_PAID.name, tripEvents.last().cardState)
+    }
+
+    // upload kicks: every committed event asks for an immediate drain, and a write that recorded nothing does not
+    @Test fun `event writes kick an immediate drain and no-op writes do not`() = runBlocking {
+        val s = started(open())
+        assertEquals("shift_started was written, so it kicked", 1, kick.count)
+
+        open() as StartShiftResult.Resumed
+        assertEquals("resuming wrote nothing, so it did not kick", 1, kick.count)
+
+        board(s.id, trip("1"))
+        pay(s.id, trip("1"))
+        assertEquals("boarding and payment each kicked", 3, kick.count)
+
+        assertTrue("a paid trip cannot be written off", !repo.writeOffAndRelease(s.id, "1", "juan"))
+        assertEquals("a refused write-off wrote nothing, so it did not kick", 3, kick.count)
+    }
+
+    @Test fun `ending a shift and a real write-off kick the drain`() = runBlocking {
+        val s = started(open())
+        board(s.id, trip("1"))
+        assertEquals(2, kick.count)
+
+        repo.endShift(s.id, "juan")
+        assertEquals("shift_ended was written, so it kicked", 3, kick.count)
+
+        assertTrue(repo.writeOffAndRelease(s.id, "1", "juan"))
+        assertEquals(4, kick.count)
+
+        repo.endShift("missing", "juan")
+        assertEquals("ending a shift that does not exist wrote nothing, so it did not kick", 4, kick.count)
     }
 }
