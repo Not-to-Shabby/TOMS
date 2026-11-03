@@ -36,6 +36,8 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
 import ph.toms.conductor.sync.UplinkManager
+import ph.toms.conductor.sync.UploadKick
+import ph.toms.conductor.sync.WorkManagerUploadKick
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -69,6 +71,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun uplinkManager(impl: AndroidUplinkManager): UplinkManager
+
+    @Binds
+    abstract fun uploadKick(impl: WorkManagerUploadKick): UploadKick
 }
 
 @Module
@@ -106,7 +111,8 @@ object ProvidersModule {
             .build()
 
     @Provides @Singleton
-    fun tripRepository(db: TomsDatabase, deviceId: String) = TripRepository(db, deviceId)
+    fun tripRepository(db: TomsDatabase, deviceId: String, uploadKick: UploadKick) =
+        TripRepository(db, deviceId, uploadKick = uploadKick)
 
     @Provides @Singleton
     fun flusher(db: TomsDatabase, uploader: EventUploader) = OutboxFlusher(db.outbox(), uploader)

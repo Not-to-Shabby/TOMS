@@ -30,6 +30,7 @@ import ph.toms.conductor.domain.ShiftTrip
 import ph.toms.conductor.domain.Trip
 import ph.toms.conductor.domain.TripEventRecord
 import ph.toms.conductor.domain.TripFact
+import ph.toms.conductor.sync.UploadKick
 
 object EventTypes {
     const val TRIP_CREATED = "trip_created"
@@ -116,6 +117,7 @@ class TripRepository(
     private val newEventId: () -> String = { UUID.randomUUID().toString() },
     private val newShiftId: () -> String = { UUID.randomUUID().toString() },
     private val clock: () -> Long = System::currentTimeMillis,
+    private val uploadKick: UploadKick = UploadKick.None,
 ) {
     private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
@@ -138,8 +140,8 @@ class TripRepository(
      * Starts a shift, or resumes the open one when it is the same conductor on the same vehicle and route.
      * Any other open shift blocks the start: it has to be ended first, so its unpaid trips are always asked about.
      */
-    suspend fun startShift(conductor: String, vehicleId: String, routeId: String): StartShiftResult =
-        db.withTransaction {
+    suspend fun startShift(conductor: String, vehicleId: String, routeId: String): StartShiftResult {
+        val result = db.withTransaction {
             val open = db.shifts().open()?.toDomain()
             when {
                 open != null && open.sameRunAs(conductor, vehicleId, routeId) -> StartShiftResult.Resumed(open)
@@ -158,6 +160,10 @@ class TripRepository(
                 }
             }
         }
+        // Only a genuinely started shift wrote an event; a resumed or blocked one wrote nothing to send.
+        if (result is StartShiftResult.Started) uploadKick.kick()
+        return result
+    }
 
     /** The summary of [shiftId] as it stands now, from the recorded trips and events. */
     suspend fun summaryFor(shiftId: String): ShiftSummary {
@@ -171,8 +177,8 @@ class TripRepository(
      * Ends the shift: closes the row with its frozen summary and writes the shift_ended event, in one transaction.
      * Returns the summary, or null when the shift was already ended or does not exist (nothing is written then).
      */
-    suspend fun endShift(shiftId: String, endedBy: String): ShiftSummary? =
-        db.withTransaction {
+    suspend fun endShift(shiftId: String, endedBy: String): ShiftSummary? {
+        val summary = db.withTransaction {
             val shift = db.shifts().byId(shiftId)?.toDomain() ?: return@withTransaction null
             if (!shift.isOpen) return@withTransaction null
             val now = clock()
@@ -189,6 +195,10 @@ class TripRepository(
             )
             summary
         }
+        // Null means nothing was written (no shift, already ended, or the close lost a race), so there is nothing to send.
+        if (summary != null) uploadKick.kick()
+        return summary
+    }
 
     suspend fun frozenSummary(shiftId: String): ShiftSummary? =
         db.shifts().byId(shiftId)?.summaryJson?.let { runCatching { json.decodeFromString<ShiftSummary>(it) }.getOrNull() }
@@ -211,6 +221,10 @@ class TripRepository(
                 tripId = trip.id,
             )
         }
+        // Kicked only after the commit, so the drain can never read an outbox that does not hold this
+        // event yet — that is the mistake that would leave a boarding invisible to the server until the
+        // periodic drain, and a passenger scanning the card mid-trip would see no active trip.
+        uploadKick.kick()
     }
 
     suspend fun recordCardState(
@@ -232,6 +246,7 @@ class TripRepository(
                 cardState = state.name,
             )
         }
+        uploadKick.kick()
     }
 
     /** The trips of [shiftId] whose card still holds them, with the card's state. A freed card no longer holds its trip. */
@@ -254,8 +269,8 @@ class TripRepository(
      *
      * Any other state is left exactly as it is: a paid card, or one already written off and freed.
      */
-    suspend fun writeOffAndRelease(shiftId: String, tripId: String, actingConductor: String): Boolean =
-        db.withTransaction {
+    suspend fun writeOffAndRelease(shiftId: String, tripId: String, actingConductor: String): Boolean {
+        val wrote = db.withTransaction {
             val shift = db.shifts().byId(shiftId) ?: return@withTransaction false
             val trip = db.trips().byId(tripId) ?: return@withTransaction false
             val card = db.cards().byTrip(tripId) ?: return@withTransaction false
@@ -285,6 +300,10 @@ class TripRepository(
             )
             true
         }
+        // False means the write-off was refused and no event was written, so there is nothing to send.
+        if (wrote) uploadKick.kick()
+        return wrote
+    }
 
     suspend fun loadCardStates(): Map<String, CardState> =
         db.cards().all().associate { it.nfcUid to CardState.valueOf(it.state) }
