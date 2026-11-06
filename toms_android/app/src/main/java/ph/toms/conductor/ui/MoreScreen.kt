@@ -51,6 +51,7 @@ fun MoreScreen(
     onUploadNow: () -> Unit = {},
     onRetryRefused: () -> Unit = {},
     onShiftSummary: () -> Unit = {},
+    onSignOut: () -> Unit = {},
 ) {
     var editUrl by remember { mutableStateOf<String?>(null) }
     var editToken by remember { mutableStateOf<String?>(null) }
@@ -109,6 +110,7 @@ fun MoreScreen(
         if (state.shift != null) {
             BigButton("Shift summary and end shift", onShiftSummary)
         }
+        BigButton("Sign out (the shift stays open)", onSignOut)
 
         Text("Settings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(top = 8.dp))
 

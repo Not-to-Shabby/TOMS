@@ -70,6 +70,7 @@ class SessionViewModel @Inject constructor(
     private val cardStates = HashMap<String, CardState>()
 
     init {
+        restoreSession()
         viewModelScope.launch {
             cardStates.putAll(trips.loadCardStates())
             val restored = trips.loadTrips().map { TripRow(it, cardStates[it.nfcUid] ?: CardState.AVAILABLE) }
@@ -124,6 +125,43 @@ class SessionViewModel @Inject constructor(
                 }
                 .onFailure { e -> _state.update { it.copy(busy = false, loginError = e.message) } }
         }
+    }
+
+    /**
+     * After a restart: the conductor who was signed in (until the server's token expires) and, if their shift is
+     * still open, straight back to it. A shift that belongs to someone else is left for the usual resume-or-end rules.
+     */
+    private fun restoreSession() {
+        viewModelScope.launch {
+            val name = repo.restore(System.currentTimeMillis()) ?: return@launch
+            val serverConfig = trips.loadServerConfig()
+            val vehicles = if (serverConfig != null && serverConfig.vehicleId.isNotBlank()) {
+                listOf(Vehicle(serverConfig.vehicleId, serverConfig.vehiclePlate))
+            } else {
+                repo.vehicles()
+            }
+            val routes = if (serverConfig != null && serverConfig.routeId.isNotBlank()) {
+                listOf(RouteInfo(serverConfig.routeId, serverConfig.routeName))
+            } else {
+                repo.routes()
+            }
+            val open = trips.openShift()?.takeIf { it.conductor.trim().equals(name.trim(), ignoreCase = true) }
+            val assignment = open?.let {
+                Assignment(
+                    name,
+                    vehicles.firstOrNull { v -> v.id == it.vehicleId } ?: Vehicle(it.vehicleId, it.vehicleId),
+                    routes.firstOrNull { r -> r.id == it.routeId } ?: RouteInfo(it.routeId, it.routeId),
+                )
+            }
+            _state.update { it.copy(conductor = name, vehicles = vehicles, routes = routes, assignment = assignment) }
+        }
+    }
+
+    /** Ends the sign-in only. The shift stays open in the database, and the same conductor can resume it. */
+    fun signOut() {
+        repo.signOut()
+        stopLocation()
+        _state.update { it.copy(conductor = null, assignment = null, loginError = null) }
     }
 
     fun assign(vehicle: Vehicle, route: RouteInfo) {
