@@ -19,7 +19,7 @@ Work that is deliberately not being done now. Each item says where it came from,
 | Heading or direction check | Stops on opposite sides of a road are close but different. A radius cannot separate them. |
 | Update-distance tuning (5 m now, Flutter used 20 m) | Decide from the 1.7 battery measurements, not by guessing. |
 | Stale fix while stopped | A bus waiting at a stop gets no new fix, and after 30 s the fix is dropped from trips. Consider a one-shot fresh fix at tap time or a longer allowance when stationary. Worth doing before field tests. |
-| Cutoff of 300 m for "nearest stop" | Arbitrary until real routes are measured. |
+| Radius for "nearest stop" | The matcher uses each stop's own radius (default 100 m, `DEFAULT_STOP_RADIUS_METERS`, same as the server). There is no 300 m cutoff any more. Check the radii against real routes. |
 
 ## Other items added during the build
 

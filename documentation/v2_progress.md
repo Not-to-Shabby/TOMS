@@ -14,8 +14,8 @@ Status of the Kotlin conductor app (`toms_android/`) against the phased plan. De
 | GPS logging and stop matching | Partly verified | Live fix on the phone (±3 m, 21 satellites). Nearest-stop matching and GPS-on-trip covered by tests. |
 | Shift summary and End Shift | Done | Room schema 3 with tested migration; shift rules, write-off and release in the domain, repository and view model; summary screen, End Shift prompt and shift ended confirmation checked on the Tecno Pova 4 (a fresh shift with nothing in it; a shift with trips and unpaid cards was exercised in tests only). Backend accepts the new events unchanged. Rules in `v2_decisions.md`. |
 | 1.4 Backend, dashboard, receipt | Done | Complete end-to-end: PostgreSQL schema and migrations (001–006), group trips, idempotent ingest, argon2 auth, device credentials, dashboard endpoints, web sign-in, Retrofit Android uploader, card registry with Web NFC, dynamic approved cards sync, static QR redirect, passenger receipt page, verified fare matrix with LTFRB document upload, and GitHub Actions CI. |
-| 1.5 Simulated Return Terminal, BLE | Not started | |
-| 1.6 Uplink manager, fare settings | Not started | |
+| 1.5 Return Machine BLE client | Merged (PR #11), not run on hardware | `ble/` (client, protocol, fake link for tests); byte-level tests in `RmProtocolTest`. No recorded run of the app against a real Return Machine; see `android_field_test_checklist.md`. |
+| 1.6 Uplink manager, fare settings | Merged (PR #12, #14), not observed on the phone | `sync/UplinkManager.kt` with hysteresis and auto-drain; upload kick; fares fetched from the server config. Unit tests only. |
 | 1.7 MDM spike, health, CI | Not started | |
 
 Tests: Android 208 debug and 201 release (`./gradlew test`), backend 164 (`npm test`, against a real embedded PostgreSQL 18), web 44 (`npm test`), web build clean. CI pipeline configured in `.github/workflows/ci.yml`.
