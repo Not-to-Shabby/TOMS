@@ -161,6 +161,26 @@ the card refusal messages (branch `v2/android-card-status`). Do not run a trip o
 - **Enrol a phone**: `node scripts/setup-pilot.mjs --server https://toms.perchbuilds.me enrol-device <device-id> <vehicle-id>`.
   It prints the device token once. Copy it into the app at More > Server Sync > Set Token and save it nowhere else.
 
+## Hardening
+
+The stack runs with extra container isolation (see `deploy/docker-compose.prod.yml`):
+
+- **No privilege escalation** (`no-new-privileges:true`) on every container: a compromised process can never gain more rights than it started with.
+- **No capabilities**: the API drops all Linux capabilities (`cap_drop: [ALL]`); Caddy drops all except `NET_BIND_SERVICE`, which it needs for ports 80/443. The database and web keep their capabilities on purpose — Postgres needs a few on a fresh volume and nginx's entrypoint writes its config at start.
+- **Read-only API**: the API's root filesystem is read-only. It only ever writes to `/app/uploads` (the uploads volume — multer writes the LTFRB scans straight to `uploads/fares`) and logs to stdout, so nothing else is needed; `/tmp` is a 64 MB tmpfs with `noexec`.
+- **Network split**: `front` (Caddy ↔ web) faces the ports; `back` (web ↔ API ↔ database) is `internal: true`, so the database and API have no route to the internet at all. The API never calls out (no SMTP, no fetches) — this was checked before wiring it.
+- **Docker log limit — already applied on the server.** `/etc/docker/daemon.json` sets the `json-file` driver with `max-size 50m` and `max-file 5`, so container logs can never fill the 40 GB disk. It is already in place; no action is needed. (If it ever has to be re-applied: write that file, then `sudo systemctl restart docker`, which restarts the stack.)
+
+**Rolling back the compose hardening:** the change touches only container runtime settings, not images, so no rebuild is needed:
+
+```bash
+cd ~/toms/src
+git checkout <previous-main-sha> -- deploy/docker-compose.prod.yml
+cd deploy && docker compose -f docker-compose.prod.yml up -d
+```
+
+If the daemon log limit also has to go back: remove the `log-driver` block from `/etc/docker/daemon.json` and `sudo systemctl restart docker`.
+
 ## Day-to-day
 - Logs: `docker compose -f docker-compose.prod.yml logs -f api`
 - Update: `cd ~/toms/src && git pull && cd deploy && docker compose -f docker-compose.prod.yml up -d --build`
