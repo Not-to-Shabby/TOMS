@@ -31,6 +31,8 @@ class OutboxFlusher(
     private val uploader: EventUploader,
     private val batchSize: Int = 50,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** Upload counters for the device_status telemetry; null keeps the flusher standalone (tests). */
+    private val stats: UploadStats? = null,
 ) {
     /**
      * Sends pending events oldest first. Only IDs the server acknowledges are marked delivered,
@@ -42,22 +44,29 @@ class OutboxFlusher(
         var attempted = 0
         var delivered = 0
         var parked = 0
+        var failed = 0
+        fun report(failure: String?): FlushReport {
+            stats?.record(attempted, failed)
+            return FlushReport(attempted, delivered, failure, parked)
+        }
         while (true) {
             val batch = outbox.pending(batchSize)
-            if (batch.isEmpty()) return FlushReport(attempted, delivered, null, parked)
+            if (batch.isEmpty()) return report(null)
             val ids = batch.map { it.eventId }
             attempted += ids.size
             when (val r = uploader.upload(batch)) {
                 is UploadResult.Failed -> {
                     outbox.markAttempt(ids, clock())
-                    return FlushReport(attempted, delivered, r.reason, parked)
+                    failed = attempted - delivered
+                    return report(r.reason)
                 }
                 is UploadResult.Acked -> {
                     val acked = ids.filter { it in r.eventIds }
                     val refused = ids.filter { it in r.rejected && it !in acked }
                     if (acked.isEmpty() && refused.isEmpty()) {
                         outbox.markAttempt(ids, clock())
-                        return FlushReport(attempted, delivered, "server acked none of the batch", parked)
+                        failed = attempted - delivered
+                        return report("server acked none of the batch")
                     }
                     if (acked.isNotEmpty()) {
                         outbox.markDelivered(acked, uploader.channel, clock())
@@ -68,7 +77,8 @@ class OutboxFlusher(
                     val unhandled = ids - acked.toSet() - refused.toSet()
                     if (unhandled.isNotEmpty()) {
                         outbox.markAttempt(unhandled, clock())
-                        return FlushReport(attempted, delivered, "partial ack", parked)
+                        failed = unhandled.size
+                        return report("partial ack")
                     }
                 }
             }

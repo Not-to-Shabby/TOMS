@@ -66,6 +66,9 @@ interface EventDao {
 
     @Query("SELECT * FROM events WHERE type = :type ORDER BY seq ASC")
     suspend fun ofType(type: String): List<EventEntity>
+
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM events")
+    suspend fun maxSeq(): Long
 }
 
 @Dao
@@ -140,6 +143,9 @@ interface OutboxDao {
     /** Puts every parked event back in the queue, for when a rejection turns out to have been the server's fault. */
     @Query("UPDATE outbox SET parkedAtMillis = NULL, parkedReason = NULL WHERE parkedAtMillis IS NOT NULL AND deliveredAtMillis IS NULL")
     suspend fun unparkAll(): Int
+
+    @Query("SELECT MAX(deliveredAtMillis) FROM outbox WHERE deliveredAtMillis IS NOT NULL")
+    suspend fun lastDeliveredAtMillis(): Long?
 }
 
 @Dao
