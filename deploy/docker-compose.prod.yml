@@ -1,11 +1,17 @@
 # TOMS production stack for the OVH VPS. Run from this folder:  docker compose up -d --build
-# Only Caddy publishes ports (80 and 443). The web, API and database are reachable only inside the stack.
+# Only Caddy publishes ports (80 and 443) and sits alone on the front network. Everything else talks on the
+# internal back network (web, API, database), which has no route to the internet, and every container runs
+# with no-new-privileges.
 name: toms
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # No cap_drop here on purpose: Postgres needs a few capabilities on first start of a fresh volume.
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      - back
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?set in deploy/.env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/.env}
@@ -21,6 +27,15 @@ services:
   api:
     build: ../toms_backend
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    # The image never writes outside /app/uploads (the volume) — multer writes the LTFRB scans straight to
+    # uploads/fares and logs go to stdout — so the root filesystem is read-only and /tmp is a small,
+    # executable-less scratch space for anything an npm dependency might need one day.
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,nodev,size=64m"]
+    networks:
+      - back
     environment:
       PORT: 3000
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
@@ -40,6 +55,10 @@ services:
   web:
     build: ../toms_web
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    networks:
+      - front
+      - back
     environment:
       TLS_MODE: "off"
       PORT: 8080
@@ -50,6 +69,12 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    # Caddy only ever binds 80/443 and serves from its volumes, so it needs nothing beyond NET_BIND_SERVICE.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    networks:
+      - front
     ports:
       - "80:80"
       - "443:443"
@@ -65,3 +90,8 @@ volumes:
   uploads:
   caddy_data:
   caddy_config:
+
+networks:
+  front:
+  back:
+    internal: true
