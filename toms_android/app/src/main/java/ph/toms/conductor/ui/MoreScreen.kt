@@ -46,6 +46,7 @@ fun MoreScreen(
     state: ConductorState,
     sync: SyncState,
     onHand: (Handedness) -> Unit,
+    onKeepScreenOn: (Boolean) -> Unit = {},
     onServerUrl: (String) -> Unit = {},
     onDeviceToken: (String?) -> Unit = {},
     onUploadNow: () -> Unit = {},
@@ -121,6 +122,17 @@ fun MoreScreen(
         }
         Text(
             "Every button is full width, so both hands reach everything. This only swaps the keypad corners.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TomsColors.InkSoft,
+        )
+
+        Text("Keep the screen on during a shift?", style = MaterialTheme.typography.titleMedium, color = TomsColors.InkSoft)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            HandChoice("Keep on", state.keepScreenOn) { onKeepScreenOn(true) }
+            HandChoice("Allow dimming", !state.keepScreenOn) { onKeepScreenOn(false) }
+        }
+        Text(
+            "Keeping the screen on makes reading easier and keeps GPS strong, but uses more battery.",
             style = MaterialTheme.typography.bodyMedium,
             color = TomsColors.InkSoft,
         )

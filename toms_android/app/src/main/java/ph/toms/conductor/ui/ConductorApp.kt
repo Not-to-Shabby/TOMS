@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -20,11 +21,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -39,8 +44,12 @@ import ph.toms.conductor.domain.CalcMode
 import ph.toms.conductor.domain.StopMatcher
 import ph.toms.conductor.nfc.NfcAvailability
 import ph.toms.conductor.nfc.NfcReader
+import ph.toms.conductor.service.BatteryOptimization
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.sync.UplinkState
+import ph.toms.conductor.ui.theme.BigButton
+import ph.toms.conductor.ui.theme.Gap
+import ph.toms.conductor.ui.theme.QuietButton
 import ph.toms.conductor.ui.theme.Status
 import ph.toms.conductor.ui.theme.StatusChip
 import ph.toms.conductor.ui.theme.TomsColors
@@ -59,6 +68,7 @@ fun ConductorApp(
     val activity = LocalContext.current as Activity
     val lifecycleOwner = LocalLifecycleOwner.current
     val availability = remember { nfcReader.availability(activity) }
+    val shiftOpen = state.shift != null
 
     // Read cards only while the screen is in use: reader mode is switched off in the background.
     if (availability == NfcAvailability.Ready) {
@@ -76,7 +86,7 @@ fun ConductorApp(
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             val granted = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             if (granted) vm.startLocation() else permission.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-            try { awaitCancellation() } finally { vm.stopLocation() }
+            try { awaitCancellation() } finally { if (!shiftOpen) vm.stopLocation() }
         }
     }
 
@@ -96,8 +106,64 @@ fun ConductorApp(
             } else {
                 vm.startBleScanning()
             }
-            try { awaitCancellation() } finally { vm.stopBleScanning() }
+            try { awaitCancellation() } finally { if (!shiftOpen) vm.stopBleScanning() }
         }
+    }
+
+    // While a shift is open the foreground service holds the process, so GPS and the Return Machine
+    // link keep running with the screen off; stopping them here would kill every fix and scan.
+    // Without a shift the app behaves like before: everything stops when the screen is left.
+
+    // Android 13+ needs the notification permission for the shift's foreground-service notification.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(shiftOpen) {
+        if (shiftOpen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // Keep the screen on while the shift runs, unless the conductor allowed dimming in the settings.
+    val keepScreenOn = state.keepScreenOn
+    LaunchedEffect(shiftOpen, keepScreenOn) {
+        if (shiftOpen && keepScreenOn) {
+            activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    // The system's battery-optimization exemption: asked once, in plain words first, and a refusal
+    // simply carries on (the periodic upload worker still runs, just with less Doze protection).
+    var askBattery by remember { mutableStateOf(shiftOpen && BatteryOptimization.shouldAsk(activity)) }
+    if (askBattery) {
+        AlertDialog(
+            onDismissRequest = { askBattery = false },
+            title = { Text("Allow background running?") },
+            text = {
+                Text(
+                    "Android stops apps to save battery. Allowing TOMS to run in the background keeps GPS " +
+                        "and the Return Machine link working during the whole shift, even with the screen off. " +
+                        "You can change this later in Android settings.",
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            },
+            confirmButton = {
+                BigButton("Allow", {
+                    BatteryOptimization.markAsked(activity)
+                    askBattery = false
+                    activity.startActivity(BatteryOptimization.requestIntent(activity))
+                })
+            },
+            dismissButton = {
+                QuietButton("Not now", {
+                    // Refusal is handled by carrying on; the prompt is not shown again.
+                    BatteryOptimization.markAsked(activity)
+                    askBattery = false
+                })
+            },
+        )
     }
 
     LaunchedEffect(lifecycleOwner) {
@@ -167,6 +233,7 @@ fun ConductorApp(
                     state = state,
                     sync = sync,
                     onHand = vm::setHandedness,
+                    onKeepScreenOn = vm::setKeepScreenOn,
                     onServerUrl = syncVm::updateServerUrl,
                     onDeviceToken = syncVm::updateDeviceToken,
                     // A finished upload is followed by a refresh of the approved card list.

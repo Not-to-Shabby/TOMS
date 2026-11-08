@@ -16,6 +16,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -38,6 +39,7 @@ import ph.toms.conductor.feedback.Cue
 import ph.toms.conductor.feedback.RecordingFeedback
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
+import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
@@ -105,6 +107,21 @@ class ConductorViewModelTest {
     private val configSync = FakeConfigSync()
     private val fakeRmLink = FakeReturnMachineLink()
     private val fakeUplink = FakeUplinkManager()
+    private val fakeShiftService = RecordingShiftService()
+
+    /** Counts the foreground-service starts and stops the view model asks for. */
+    private class RecordingShiftService : ShiftServiceController {
+        var starts = 0
+        var stops = 0
+        val startedFor = mutableListOf<Pair<String, String>>()
+        override fun startForShift(vehicleId: String, routeId: String) {
+            starts++
+            startedFor.add(vehicleId to routeId)
+        }
+        override fun stop() {
+            stops++
+        }
+    }
 
     @Before
     fun setUp() {
@@ -119,7 +136,7 @@ class ConductorViewModelTest {
         flusher = OutboxFlusher(db.outbox(), uploader)
         vm = ConductorViewModel(
             repo, location, feedback, settings, deviceConfig, fakeCardSync,
-            ConfigRefresher(repo, configSync), fakeRmLink, InitialConfig(TestConfig.config),
+            ConfigRefresher(repo, configSync), fakeRmLink, fakeShiftService, InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, deviceConfig, flusher, fakeUplink)
         // Every trip belongs to a shift, so the tests run inside one.
@@ -770,5 +787,61 @@ class ConductorViewModelTest {
 
         assertEquals(hb, vm.state.value.rmHeartbeat)
         assertEquals(92, vm.state.value.rmHeartbeat?.batteryPct)
+    }
+
+    // ---- foreground service follows the shift
+
+    @Test
+    fun `the foreground service starts with the shift and stops at End Shift`() = runTest {
+        advanceUntilIdle()
+        assertEquals(1, fakeShiftService.starts)
+        assertEquals(listOf("v1" to "r1"), fakeShiftService.startedFor)
+        assertEquals(0, fakeShiftService.stops)
+
+        vm.requestEndShift()
+        waitUntil { vm.state.value.endPrompt != null }
+        vm.confirmEndShift(writeOff = false)
+        // The stop happens after the endShift transaction commits on Room's real IO thread.
+        waitUntil { fakeShiftService.stops == 1 }
+        assertNull(vm.state.value.shift)
+    }
+
+    @Test
+    fun `a resumed shift starts the service once, and the blocked path never stops it twice`() = runTest {
+        advanceUntilIdle()
+        vm.requestEndShift()
+        waitUntil { vm.state.value.endPrompt != null }
+        vm.confirmEndShift(writeOff = true)
+        waitUntil { fakeShiftService.stops == 1 }
+
+        // A new start opens the service again: two starts total.
+        vm.startShift("maria", "v1", "r1")
+        waitUntil { vm.state.value.shift != null }
+        assertEquals(2, fakeShiftService.starts)
+        assertEquals(1, fakeShiftService.stops)
+    }
+
+    @Test
+    fun `a blocked start leaves the earlier service running`() = runTest {
+        advanceUntilIdle()
+        val firstStarts = fakeShiftService.starts
+        assertEquals(1, firstStarts)
+
+        // Another conductor tries to start: the shift is blocked, nothing is started or stopped.
+        vm.startShift("maria", "v1", "r1")
+        waitUntil { vm.state.value.blockedBy != null }
+        advanceUntilIdle()
+
+        assertEquals(firstStarts, fakeShiftService.starts)
+        assertEquals(0, fakeShiftService.stops)
+    }
+
+    @Test
+    fun `keep screen on follows the setting`() = runTest {
+        advanceUntilIdle()
+        assertTrue(vm.state.value.keepScreenOn)
+        vm.setKeepScreenOn(false)
+        advanceUntilIdle()
+        assertFalse(vm.state.value.keepScreenOn)
     }
 }

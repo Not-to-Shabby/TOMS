@@ -48,6 +48,7 @@ import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.ble.RmEvent
+import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.ble.RmProtocol
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigRefresh
@@ -105,6 +106,8 @@ data class ConductorState(
     /** Fare shown in the calculator, in centavos. Set from a trip when the conductor opens Calc from Collect. */
     val calcDueCentavos: Int = 0,
     val handedness: Handedness = Handedness.Right,
+    /** Keep the screen on while a shift is open; the conductor can allow dimming in the settings. */
+    val keepScreenOn: Boolean = true,
     val recentReads: List<CardRead> = emptyList(),
     /** On Collect, the trip of the card that was just tapped, so its row can be highlighted. */
     val focusTripId: String? = null,
@@ -144,6 +147,7 @@ class ConductorViewModel @Inject constructor(
     private val cardSync: CardRegistrySync,
     private val configRefresher: ConfigRefresher,
     private val rmLink: ReturnMachineLink,
+    private val shiftService: ShiftServiceController = ShiftServiceController.None,
     initial: InitialConfig,
 ) : ViewModel() {
 
@@ -178,6 +182,7 @@ class ConductorViewModel @Inject constructor(
         }
         viewModelScope.launch { reloadCards() }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
+        viewModelScope.launch { settings.keepScreenOn.collect { on -> _state.update { it.copy(keepScreenOn = on) } } }
         // The saved fares: what is on the phone now, and any copy a sync saves later, even one made by the background worker.
         viewModelScope.launch { trips.observeServerConfig().collect { saved -> if (saved != null) applyServerConfig(saved) } }
         // Enrolling a phone (a token appears), and starting the app with one, fetches the card list and the fares.
@@ -330,10 +335,12 @@ class ConductorViewModel @Inject constructor(
     private suspend fun applyStart(result: StartShiftResult) {
         when (result) {
             is StartShiftResult.Started -> {
+                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
             is StartShiftResult.Resumed -> {
+                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
@@ -402,6 +409,7 @@ class ConductorViewModel @Inject constructor(
             if (wasBlocked) {
                 pendingStart?.let { (c, v, r) -> applyStart(trips.startShift(c, v, r)) }
             } else {
+                shiftService.stop()
                 rmLink.stopScanning()
                 rmLink.disconnect()
             }
@@ -433,6 +441,9 @@ class ConductorViewModel @Inject constructor(
     fun dismissResult() = _state.update { it.copy(result = null) }
 
     fun setHandedness(value: Handedness) = settings.setHandedness(value)
+
+    /** Keep the screen on while a shift is open; off lets it dim normally. */
+    fun setKeepScreenOn(value: Boolean) = settings.setKeepScreenOn(value)
 
     // ---- the tap
 

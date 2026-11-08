@@ -22,6 +22,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import ph.toms.conductor.ble.FakeReturnMachineLink
+import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.data.DiscountDto
 import ph.toms.conductor.data.EventTypes
 import ph.toms.conductor.data.FakeConfigSync
@@ -97,7 +98,7 @@ class FaresLoadingTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Device(token), Cards(), ConfigRefresher(repo, configSync), FakeReturnMachineLink(), InitialConfig(initial),
+            Device(token), Cards(), ConfigRefresher(repo, configSync), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(initial),
         )
         vm.startShift("juan", "v1", "r1")
         settle { vm.state.value.shift != null }

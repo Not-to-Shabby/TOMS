@@ -17,6 +17,10 @@ enum class Handedness { Right, Left }
 interface SettingsStore {
     val handedness: StateFlow<Handedness>
     fun setHandedness(value: Handedness)
+
+    /** Keep the screen on while a shift is open. Off lets the screen dim normally. Default: on. */
+    val keepScreenOn: StateFlow<Boolean>
+    fun setKeepScreenOn(value: Boolean)
 }
 
 /** Keeps the value in memory. Used by tests. */
@@ -25,6 +29,12 @@ class MemorySettings(initial: Handedness = Handedness.Right) : SettingsStore {
     override val handedness: StateFlow<Handedness> = state.asStateFlow()
     override fun setHandedness(value: Handedness) {
         state.value = value
+    }
+
+    private val screen = MutableStateFlow(true)
+    override val keepScreenOn: StateFlow<Boolean> = screen.asStateFlow()
+    override fun setKeepScreenOn(value: Boolean) {
+        screen.value = value
     }
 }
 
@@ -42,11 +52,20 @@ class PrefsSettings @Inject constructor(
         state.value = value
     }
 
+    private val screen = MutableStateFlow(prefs.getBoolean(KEY_SCREEN_ON, true))
+    override val keepScreenOn: StateFlow<Boolean> = screen.asStateFlow()
+
+    override fun setKeepScreenOn(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SCREEN_ON, value).apply()
+        screen.value = value
+    }
+
     private fun read(): Handedness =
         // An unknown or missing value (an older version, a corrupted file) falls back to the default.
         runCatching { Handedness.valueOf(prefs.getString(KEY_HAND, null) ?: "") }.getOrDefault(Handedness.Right)
 
     private companion object {
         const val KEY_HAND = "handedness"
+        const val KEY_SCREEN_ON = "keep_screen_on"
     }
 }
