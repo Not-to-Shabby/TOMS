@@ -111,6 +111,28 @@ const fareAdjustmentPayload = z.object({
   actingConductor: z.string().max(64).nullish(),
 });
 
+// The phone's periodic shift telemetry (DeviceStatusReporter). Strict: unknown fields are rejected,
+// so a typo on the phone can never silently produce rows the researcher misreads. No personal data
+// and no passenger card UIDs are part of it.
+const deviceStatusPayload = z
+  .object({
+    outboxPending: z.number().int().min(0).max(1_000_000),
+    outboxParked: z.number().int().min(0).max(1_000_000),
+    uploadAttempts: z.number().int().min(0).max(1_000_000),
+    uploadFailures: z.number().int().min(0).max(1_000_000),
+    lastUploadAtMillis: millis.nullish(),
+    batteryPct: z.number().int().min(0).max(100).nullish(),
+    charging: z.boolean(),
+    gpsFixAgeSeconds: z.number().int().min(0).max(86_400).nullish(),
+    gpsAccuracyMeters: z.number().min(0).max(100_000).nullish(),
+    network: z.enum(['none', 'wifi', 'mobile']),
+    rmLinkState: z.enum(['disconnected', 'scanning', 'connecting', 'connected']),
+    appVersion: z.string().trim().min(1).max(32),
+    shiftId: z.string().max(64).nullish(),
+    localSeq: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
 export interface Rejection {
   index: number;
   event_id: string | null;
@@ -207,6 +229,11 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
       card_uuid: p.data.cardUuid,
       nfc_uid: p.data.nfcUid,
     });
+  } else if (e.type === 'device_status') {
+    // Validated and stored with its payload; the device_status view (migration 012) extracts the
+    // fields for querying. It links to no trip and carries no passenger data.
+    const p = deviceStatusPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
   }
   // Any other type is kept as it arrived in the payload column, so a newer app version
   // never loses data against an older server.
