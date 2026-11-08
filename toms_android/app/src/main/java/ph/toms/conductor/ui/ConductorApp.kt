@@ -54,6 +54,7 @@ fun ConductorApp(
     header: String,
     state: ConductorState,
     sync: SyncState,
+    onSignOut: () -> Unit = {},
 ) {
     val activity = LocalContext.current as Activity
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -177,6 +178,7 @@ fun ConductorApp(
                     },
                     onRetryRefused = { syncVm.retryRefused(onFlushed = vm::syncApprovedCards) },
                     onShiftSummary = vm::openSummary,
+                    onSignOut = onSignOut,
                 )
             }
         }

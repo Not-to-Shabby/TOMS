@@ -108,8 +108,11 @@ data class ConductorLoginResponse(
     val user: ConductorUserDto,
 )
 
+/** What a successful conductor sign-in gives back. The password is never part of it. */
+data class ConductorLogin(val displayName: String, val token: String)
+
 interface ConductorAuthService {
-    suspend fun login(username: String, password: String): Result<String>
+    suspend fun login(username: String, password: String): Result<ConductorLogin>
 }
 
 interface CardRegistrySync {
@@ -226,14 +229,14 @@ class RetrofitEventUploader @Inject constructor(
         }
     }
 
-    override suspend fun login(username: String, password: String): Result<String> {
+    override suspend fun login(username: String, password: String): Result<ConductorLogin> {
         val api = createApi() ?: return Result.failure(
             IllegalStateException(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "invalid server URL"),
         )
         return try {
             val res = api.loginConductor(ConductorLoginRequest(username, password))
             val displayName = res.user.name?.takeIf { it.isNotBlank() } ?: res.user.username
-            Result.success(displayName)
+            Result.success(ConductorLogin(displayName, res.token))
         } catch (e: HttpException) {
             val errorMsg = serverReason(e) ?: when (e.code()) {
                 401 -> "Invalid username or password"

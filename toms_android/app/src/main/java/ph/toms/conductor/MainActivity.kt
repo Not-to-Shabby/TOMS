@@ -23,7 +23,7 @@ import ph.toms.conductor.ui.theme.TomsTheme
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    /** Sign-in and the choice of vehicle and route. The stub accepts any name until real sign-in (Phase 1.4). */
+    /** Sign-in and the choice of vehicle and route. The server checks the password; the token is kept encrypted so a restart returns to the open shift. */
     private val session: SessionViewModel by viewModels()
     private val conductor: ConductorViewModel by viewModels()
     private val sync: SyncViewModel by viewModels()
@@ -87,6 +87,7 @@ class MainActivity : ComponentActivity() {
                             header = "$vehicleDisplay  ·  ${assignment.route.name}",
                             state = c,
                             sync = sy,
+                            onSignOut = session::signOut,
                         )
                     }
                 }

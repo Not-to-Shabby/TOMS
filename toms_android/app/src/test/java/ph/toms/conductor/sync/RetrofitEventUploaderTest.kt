@@ -271,7 +271,8 @@ class RetrofitEventUploaderTest {
         val res = uploader.login("juan", "password123")
 
         assertTrue(res.isSuccess)
-        assertEquals("Juan Dela Cruz", res.getOrThrow())
+        assertEquals("Juan Dela Cruz", res.getOrThrow().displayName)
+        assertEquals("jwt-123", res.getOrThrow().token)
 
         val req = server.takeRequest()
         assertEquals("/api/conductors/login", req.path)

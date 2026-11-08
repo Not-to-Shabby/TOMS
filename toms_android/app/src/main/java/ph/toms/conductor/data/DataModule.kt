@@ -46,6 +46,9 @@ abstract class DataModule {
     abstract fun sessionRepository(impl: ServerSessionRepository): SessionRepository
 
     @Binds
+    abstract fun conductorSessionStore(impl: PrefsSessionStore): ConductorSessionStore
+
+    @Binds
     abstract fun conductorAuthService(impl: RetrofitEventUploader): ConductorAuthService
 
     @Binds
