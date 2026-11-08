@@ -39,7 +39,9 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.sync.ConfigRefresher
+import ph.toms.conductor.sync.UploadStats
 import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.UploadResult
 import ph.toms.conductor.data.FakeConfigSync
@@ -80,6 +82,8 @@ class ShiftFlowTest {
         override suspend fun fetchApprovedCards(): Result<ApprovedCardList> = Result.failure(java.io.IOException("not used in this test"))
     }
 
+
+
     @Before fun setUp() {
         Dispatchers.setMain(dispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -87,7 +91,7 @@ class ShiftFlowTest {
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, FakeDeviceStatusReporter(), InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader), FakeUplinkManager())
     }
@@ -165,7 +169,7 @@ class ShiftFlowTest {
     @Test fun `the prompt shows how many are unpaid and how much, and going back changes nothing`() {
         startShift()
         tap(cardA, 10_000); tap(cardB, 20_000)
-        val before = events().size
+        val before = events().count { it.type != "device_status" }
 
         openPrompt()
         val prompt = vm.state.value.endPrompt!!
@@ -177,7 +181,7 @@ class ShiftFlowTest {
         assertNull(vm.state.value.endPrompt)
         assertEquals(Tab.Collect, vm.state.value.tab)
         assertNotNull("the shift is still open", vm.state.value.shift)
-        assertEquals("nothing was written", before, events().size)
+        assertEquals("nothing was written", before, events().count { it.type != "device_status" })
         assertEquals(2, vm.state.value.openTrips.size)
     }
 
@@ -283,7 +287,7 @@ class ShiftFlowTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, FakeDeviceStatusReporter(), InitialConfig(TestConfig.config),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }

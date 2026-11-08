@@ -57,7 +57,7 @@ class OutboxTest {
         }
     }
 
-    private fun flusher(u: EventUploader, batch: Int = 50) = OutboxFlusher(db.outbox(), u, batch) { 5000 }
+    private fun flusher(u: EventUploader, batch: Int = 50) = OutboxFlusher(db.outbox(), u, batch, clock = { 5000 })
 
     @Test fun `recording a trip writes trip card event and outbox row`() = runBlocking {
         repo.recordTrip(trip("t1"), CardState.ASSIGNED_UNPAID, 1000)

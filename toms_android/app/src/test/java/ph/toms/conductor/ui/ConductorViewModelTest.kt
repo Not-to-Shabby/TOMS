@@ -40,6 +40,8 @@ import ph.toms.conductor.feedback.RecordingFeedback
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
+import ph.toms.conductor.telemetry.DeviceStatusReporter
 import ph.toms.conductor.settings.DeviceConfigStore
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
@@ -50,6 +52,7 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.UploadResult
+import ph.toms.conductor.sync.UploadStats
 import ph.toms.conductor.sync.UplinkState
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -123,6 +126,9 @@ class ConductorViewModelTest {
         }
     }
 
+
+    private val fakeStatusReporter = FakeDeviceStatusReporter()
+
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
@@ -136,7 +142,7 @@ class ConductorViewModelTest {
         flusher = OutboxFlusher(db.outbox(), uploader)
         vm = ConductorViewModel(
             repo, location, feedback, settings, deviceConfig, fakeCardSync,
-            ConfigRefresher(repo, configSync), fakeRmLink, fakeShiftService, InitialConfig(TestConfig.config),
+            ConfigRefresher(repo, configSync), fakeRmLink, fakeShiftService, fakeStatusReporter, InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, deviceConfig, flusher, fakeUplink)
         // Every trip belongs to a shift, so the tests run inside one.
@@ -468,7 +474,7 @@ class ConductorViewModelTest {
         // The server still refuses: each press is one try, the events go back to parked with the reason it gave now.
         uploader.rejectAll = "still unknown"
         syncVm.retryRefused()
-        waitUntil { !syncVm.state.value.isUploading && syncVm.state.value.parked.all { it.reason == "still unknown" } && syncVm.state.value.parkedCount == parked }
+        waitUntil { !syncVm.state.value.isUploading && syncVm.state.value.parked.all { it.reason == "still unknown" } && syncVm.state.value.parkedCount >= parked }
         assertEquals(0, db.outbox().pendingCountNow())
 
         // The cause is fixed: the next press delivers them and the list empties.

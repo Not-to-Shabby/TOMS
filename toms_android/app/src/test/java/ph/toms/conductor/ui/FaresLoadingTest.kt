@@ -23,6 +23,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.data.DiscountDto
 import ph.toms.conductor.data.EventTypes
 import ph.toms.conductor.data.FakeConfigSync
@@ -42,6 +43,8 @@ import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.settings.MemorySettings
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigFetch
+import ph.toms.conductor.sync.UploadStats
+import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.ConfigRefresher
 
 /** The phone as a release build starts: with no fares in it, until the server's have been downloaded. */
@@ -73,6 +76,8 @@ class FaresLoadingTest {
         )
     }
 
+
+
     @Before fun setUp() {
         Dispatchers.setMain(dispatcher)
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -98,7 +103,7 @@ class FaresLoadingTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Device(token), Cards(), ConfigRefresher(repo, configSync), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(initial),
+            Device(token), Cards(), ConfigRefresher(repo, configSync), FakeReturnMachineLink(), ShiftServiceController.None, FakeDeviceStatusReporter(), InitialConfig(initial),
         )
         vm.startShift("juan", "v1", "r1")
         settle { vm.state.value.shift != null }

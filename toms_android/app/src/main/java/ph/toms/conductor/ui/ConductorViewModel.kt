@@ -49,6 +49,7 @@ import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.ble.RmEvent
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.telemetry.DeviceStatusReporter
 import ph.toms.conductor.ble.RmProtocol
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigRefresh
@@ -148,6 +149,7 @@ class ConductorViewModel @Inject constructor(
     private val configRefresher: ConfigRefresher,
     private val rmLink: ReturnMachineLink,
     private val shiftService: ShiftServiceController = ShiftServiceController.None,
+    private val statusReporter: DeviceStatusReporter,
     initial: InitialConfig,
 ) : ViewModel() {
 
@@ -336,11 +338,13 @@ class ConductorViewModel @Inject constructor(
         when (result) {
             is StartShiftResult.Started -> {
                 shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                statusReporter.start(viewModelScope, result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
             is StartShiftResult.Resumed -> {
                 shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                statusReporter.start(viewModelScope, result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
@@ -409,6 +413,7 @@ class ConductorViewModel @Inject constructor(
             if (wasBlocked) {
                 pendingStart?.let { (c, v, r) -> applyStart(trips.startShift(c, v, r)) }
             } else {
+                statusReporter.stop(prompt.shiftId)
                 shiftService.stop()
                 rmLink.stopScanning()
                 rmLink.disconnect()

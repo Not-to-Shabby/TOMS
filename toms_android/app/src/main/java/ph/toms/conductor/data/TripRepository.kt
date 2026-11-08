@@ -39,6 +39,7 @@ object EventTypes {
     const val SHIFT_ENDED = "shift_ended"
     const val FARE_WRITTEN_OFF = "fare_written_off"
     const val CONDUCTOR_RELEASED_UNPAID = "conductor_released_unpaid"
+    const val DEVICE_STATUS = "device_status"
 }
 
 @Serializable
@@ -309,6 +310,16 @@ class TripRepository(
         db.cards().all().associate { it.nfcUid to CardState.valueOf(it.state) }
 
     suspend fun loadTrips(): List<Trip> = db.trips().all().map { it.toDomain() }
+
+    /**
+     * Appends a [ph.toms.conductor.telemetry.DeviceStatusPayload] telemetry event ([EventTypes.DEVICE_STATUS]).
+     * The payload is built by the telemetry reporter; this only records it and asks for a drain, exactly
+     * like every other event. Never carries passenger card data.
+     */
+    suspend fun recordDeviceStatus(payloadJson: String, shiftId: String?) {
+        appendEvent(EventTypes.DEVICE_STATUS, payloadJson, clock(), shiftId = shiftId)
+        uploadKick.kick()
+    }
 
     /** Trips that have been written off, by trip id. Used to keep them off the Collect list and the owed total. */
     suspend fun writtenOffTripIds(): Set<String> =

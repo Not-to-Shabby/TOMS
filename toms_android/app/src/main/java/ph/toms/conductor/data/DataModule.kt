@@ -39,7 +39,10 @@ import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.sync.RetrofitEventUploader
 import ph.toms.conductor.sync.UplinkManager
 import ph.toms.conductor.sync.UploadKick
+import ph.toms.conductor.sync.UploadStats
 import ph.toms.conductor.sync.WorkManagerUploadKick
+import ph.toms.conductor.telemetry.DeviceStatusReporter
+import ph.toms.conductor.telemetry.RealDeviceStatusReporter
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -123,5 +126,22 @@ object ProvidersModule {
         TripRepository(db, deviceId, uploadKick = uploadKick)
 
     @Provides @Singleton
-    fun flusher(db: TomsDatabase, uploader: EventUploader) = OutboxFlusher(db.outbox(), uploader)
+    fun uploadStats() = UploadStats()
+
+    @Provides @Singleton
+    fun flusher(db: TomsDatabase, uploader: EventUploader, stats: UploadStats) =
+        OutboxFlusher(db.outbox(), uploader, stats = stats)
+
+    @Provides @Singleton
+    fun deviceStatusReporter(
+        tripRepository: TripRepository,
+        db: TomsDatabase,
+        uplink: UplinkManager,
+        rmLink: ReturnMachineLink,
+        stats: UploadStats,
+        @ApplicationContext context: Context,
+    ): DeviceStatusReporter = RealDeviceStatusReporter(
+        trips = tripRepository, outbox = db.outbox(), events = db.events(),
+        uplink = uplink, rmLink = rmLink, stats = stats, context = context,
+    )
 }
