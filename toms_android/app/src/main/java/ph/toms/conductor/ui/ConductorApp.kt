@@ -296,6 +296,7 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
         ) {
             StatusChip(reader.first, reader.second)
             StatusChip(gps.first, gps.second)
+            state.serviceNote?.let { StatusChip("BG off", Status.Warn) }
             StatusChip(rm.first, rm.second)
             StatusChip(uplink.first, uplink.second)
             if (sync.pendingCount > 0) StatusChip("${sync.pendingCount} unsent", Status.Neutral)

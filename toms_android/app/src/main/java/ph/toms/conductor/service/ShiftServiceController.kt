@@ -15,15 +15,19 @@ import javax.inject.Singleton
  * notification and holds the process foreground; it never changes how shifts work.
  */
 interface ShiftServiceController {
-    /** Called when a shift opens (fresh or resumed). [vehicleId] and [routeId] only label the notification. */
-    fun startForShift(vehicleId: String, routeId: String)
+    /**
+     * Called when a shift opens (fresh or resumed). [vehicleId] and [routeId] only label the notification.
+     * Returns false when the service was skipped because neither the location nor the Bluetooth permission
+     * is granted (Android 14+ would throw on startForeground); the caller shows a note on screen.
+     */
+    fun startForShift(vehicleId: String, routeId: String): Boolean
 
     /** Called when the shift ends. The service is stopped; nothing else is touched. */
     fun stop()
 
     /** Stands in where no service is wanted (unit tests). */
     object None : ShiftServiceController {
-        override fun startForShift(vehicleId: String, routeId: String) {}
+        override fun startForShift(vehicleId: String, routeId: String) = true
         override fun stop() {}
     }
 }
@@ -33,19 +37,27 @@ class AndroidShiftServiceController @Inject constructor(
     @ApplicationContext private val context: Context,
 ) : ShiftServiceController {
 
-    override fun startForShift(vehicleId: String, routeId: String) {
+    override fun startForShift(vehicleId: String, routeId: String): Boolean {
+        val types = ShiftForegroundService.allowedTypes(context)
+        if (types == 0) return false
         val intent = Intent(context, ShiftForegroundService::class.java)
             .putExtra(ShiftForegroundService.EXTRA_VEHICLE, vehicleId)
             .putExtra(ShiftForegroundService.EXTRA_ROUTE, routeId)
+            .putExtra(ShiftForegroundService.EXTRA_TYPES, types)
         // Shift start always comes from a tap on the screen, so this is a foreground start and the
         // Android background-start limits never apply.
         ContextCompat.startForegroundService(context, intent)
+        return true
     }
 
+    /**
+     * plain stopService, never startForegroundService: an ACTION_STOP branch inside the service would
+     * have to call startForeground to satisfy the 5-second contract, and crashes on Android 12+ when
+     * the service was not running (End Shift after a restart, or a skipped start). stopService is a
+     * harmless no-op then, and removes the notification when the service is running.
+     */
     override fun stop() {
-        val intent = Intent(context, ShiftForegroundService::class.java)
-            .setAction(ShiftForegroundService.ACTION_STOP)
-        ContextCompat.startForegroundService(context, intent)
+        context.stopService(Intent(context, ShiftForegroundService::class.java))
     }
 }
 

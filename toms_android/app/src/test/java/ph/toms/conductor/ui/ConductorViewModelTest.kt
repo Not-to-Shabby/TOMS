@@ -114,9 +114,12 @@ class ConductorViewModelTest {
         var starts = 0
         var stops = 0
         val startedFor = mutableListOf<Pair<String, String>>()
-        override fun startForShift(vehicleId: String, routeId: String) {
+        /** When false, startForShift models the skipped service (both permissions off). */
+        var allowed = true
+        override fun startForShift(vehicleId: String, routeId: String): Boolean {
             starts++
             startedFor.add(vehicleId to routeId)
+            return allowed
         }
         override fun stop() {
             stops++
@@ -834,6 +837,19 @@ class ConductorViewModelTest {
 
         assertEquals(firstStarts, fakeShiftService.starts)
         assertEquals(0, fakeShiftService.stops)
+    }
+
+    @Test
+    fun `a skipped service (both permissions off) sets a note on screen`() = runTest {
+        fakeShiftService.allowed = false
+        vm.startShift("juan", "v1", "r1")
+        // The second start runs applyStart again, which sets the note when the controller skips.
+        waitUntil { vm.state.value.serviceNote != null }
+
+        assertEquals(SERVICE_NOTE, vm.state.value.serviceNote)
+        // The shift still works; only the background protection is missing.
+        assertEquals(2, fakeShiftService.starts)
+        fakeShiftService.allowed = true
     }
 
     @Test

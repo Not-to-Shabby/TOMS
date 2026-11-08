@@ -213,6 +213,7 @@ fun MoreScreen(
             Fact("Fares synced", info.fetchedAtMillis?.let { DateFormat.format("d MMM yyyy, HH:mm", Date(it)).toString() } ?: "test data")
         }
         state.configMessage?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad) }
+        state.serviceNote?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Warn) }
         Fact("Approved cards", state.config.approvedCards.size.toString())
         Fact("Trips open", state.openTrips.size.toString())
         val fix = state.fix

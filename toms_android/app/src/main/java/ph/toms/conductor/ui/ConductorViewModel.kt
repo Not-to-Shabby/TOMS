@@ -108,6 +108,8 @@ data class ConductorState(
     val handedness: Handedness = Handedness.Right,
     /** Keep the screen on while a shift is open; the conductor can allow dimming in the settings. */
     val keepScreenOn: Boolean = true,
+    /** Set when the foreground service was skipped (location and Bluetooth permissions both off). */
+    val serviceNote: String? = null,
     val recentReads: List<CardRead> = emptyList(),
     /** On Collect, the trip of the card that was just tapped, so its row can be highlighted. */
     val focusTripId: String? = null,
@@ -129,6 +131,10 @@ data class ConductorState(
 
 /** What the Board says, and the tap shows, when no fares have been downloaded. A paid trip is not started. */
 const val NO_FARES_MESSAGE = "No fares loaded. Connect and sync."
+
+/** Shown when the shift foreground service was skipped: both permissions were off at shift start. */
+const val SERVICE_NOTE =
+    "Background protection is off. Allow location and Bluetooth in Android settings, then restart the shift."
 
 /** Keeps the chosen stops when the new config still has them; otherwise the first stop, and the second as the destination. */
 private fun TomsConfig.pickStops(boarding: String, destination: String): Pair<String, String> {
@@ -335,14 +341,14 @@ class ConductorViewModel @Inject constructor(
     private suspend fun applyStart(result: StartShiftResult) {
         when (result) {
             is StartShiftResult.Started -> {
-                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                val note = if (shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)) null else SERVICE_NOTE
                 rmLink.startScanning()
-                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null, serviceNote = note) }
             }
             is StartShiftResult.Resumed -> {
-                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                val note = if (shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)) null else SERVICE_NOTE
                 rmLink.startScanning()
-                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null, serviceNote = note) }
             }
             is StartShiftResult.NeedsEnding -> {
                 val prompt = promptFor(result.open)

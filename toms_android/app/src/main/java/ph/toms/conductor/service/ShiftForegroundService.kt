@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import dagger.hilt.android.qualifiers.ApplicationContext
 import ph.toms.conductor.MainActivity
@@ -41,35 +42,49 @@ class ShiftForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            else -> {
-                val vehicle = intent?.getStringExtra(EXTRA_VEHICLE).orEmpty()
-                val route = intent?.getStringExtra(EXTRA_ROUTE).orEmpty()
-                val notification = notificationFactory.shiftNotification(vehicle, route)
-                // Both types are declared in the manifest; passing them here is required on Android 14+.
-                val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                } else {
-                    0
-                }
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types)
-            }
+        val vehicle = intent?.getStringExtra(EXTRA_VEHICLE).orEmpty()
+        val route = intent?.getStringExtra(EXTRA_ROUTE).orEmpty()
+        val notification = notificationFactory.shiftNotification(vehicle, route)
+        // Only the types whose permission is granted right now (Android 14+ throws on the others). The
+        // controller already skips the service when none qualify; the fallback is the manifest types.
+        val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            intent?.getIntExtra(EXTRA_TYPES, 0) ?: 0
+        } else {
+            0
         }
-        return START_STICKY
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            notification,
+            if (types != 0) types else ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST,
+        )
+        // START_NOT_STICKY: a process kill must not resurrect the notification without an open shift.
+        // The next shift start (a restart lands on the open shift) starts the service again.
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?) = null
 
     companion object {
-        const val ACTION_STOP = "ph.toms.conductor.service.STOP"
         const val EXTRA_VEHICLE = "vehicle"
         const val EXTRA_ROUTE = "route"
+
+        /** The foreground-service types whose prerequisite permission is granted right now. */
+        fun allowedTypes(context: Context): Int {
+            var types = 0
+            val locationOk = ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACCESS_FINE_LOCATION,
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val deviceOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                ContextCompat.checkSelfPermission(
+                    context, android.Manifest.permission.BLUETOOTH_CONNECT,
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (locationOk) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            if (deviceOk) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            return types
+        }
+
+        const val EXTRA_TYPES = "types"
         const val CHANNEL_ID = "shift"
         const val NOTIFICATION_ID = 41
     }
