@@ -28,6 +28,8 @@ import ph.toms.conductor.BuildConfig
 import ph.toms.conductor.ble.AndroidBleReturnMachineLink
 import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.domain.TomsConfig
+import ph.toms.conductor.service.AndroidShiftServiceController
+import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.sync.AndroidUplinkManager
 import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.ConfigSync
@@ -74,6 +76,9 @@ abstract class DataModule {
 
     @Binds
     abstract fun uplinkManager(impl: AndroidUplinkManager): UplinkManager
+
+    @Binds
+    abstract fun shiftServiceController(impl: AndroidShiftServiceController): ShiftServiceController
 
     @Binds
     abstract fun uploadKick(impl: WorkManagerUploadKick): UploadKick

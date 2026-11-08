@@ -34,6 +34,22 @@ Headwind's kiosk mode is an Enterprise feature, so the Community server does not
 
 Only one DPC can be device owner, so Headwind's agent and a TOMS-owned kiosk may conflict. The Phase 1.7 spike tests Headwind Community enrollment and silent update only, and TOMS lock-task is built and tested separately on an adb-provisioned device. Record the outcome here and close this item.
 
+## Foreground service and kiosk hook (Phase 1.6 background work)
+
+`ShiftForegroundService` (types `location|connectedDevice`) runs only while a shift is open: started at
+shift start, stopped at End Shift. It holds the process foreground so GPS, the Return Machine BLE link
+and the upload kick keep working with the screen off; it reads the shift state but never changes it.
+
+**Kiosk hook (not built, MDM route still OPEN):** if lock-task is ever added, the place to start it is the
+same shift boundary — `Activity.startLockTask()` after `startForShift` in `ConductorViewModel.applyStart`,
+and `stopLockTask()` where the service is stopped in `confirmEndShift` — gated on the device being a
+device owner (adb-provisioned or the Phase 1.7 MDM spike outcome). Nothing about lock-task exists in the
+code today.
+
+**Card reading stays foreground-only by design:** passenger cards are read with NFC reader mode
+(`NfcReader`), which needs the activity in the foreground and dies when it is left. The foreground
+service keeps GPS, the Return Machine link and uploads alive with the screen off; it cannot read cards.
+
 ## Phase 2 note
 
 `archive/shared_lib/pn532` is an ESP-IDF I2C driver. It is reusable as is only if ESP-IDF is chosen. Under Zephyr it needs a port, as do the protocol and crypto helpers.

@@ -38,6 +38,7 @@ import ph.toms.conductor.sync.CardRegistrySync
 import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.ble.FakeReturnMachineLink
+import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.sync.ConfigRefresher
 import ph.toms.conductor.sync.FakeUplinkManager
 import ph.toms.conductor.sync.UploadResult
@@ -86,7 +87,7 @@ class ShiftFlowTest {
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader), FakeUplinkManager())
     }
@@ -282,7 +283,7 @@ class ShiftFlowTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, InitialConfig(TestConfig.config),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }

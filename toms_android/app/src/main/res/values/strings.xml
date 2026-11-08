@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notification_channel_shift">Shift in progress</string>
+    <string name="notification_channel_shift_description">Shown while a shift is open, so GPS, the Return Machine link and uploads keep working with the screen off.</string>
+    <string name="notification_shift_title">Shift in progress</string>
+    <string name="notification_shift_text">Return Machine link and GPS are active</string>
+</resources>
