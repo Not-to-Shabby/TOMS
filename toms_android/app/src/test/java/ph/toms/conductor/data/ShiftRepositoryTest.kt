@@ -361,4 +361,35 @@ class ShiftRepositoryTest {
         repo.endShift("missing", "juan")
         assertEquals("ending a shift that does not exist wrote nothing, so it did not kick", 4, kick.count)
     }
+
+    // ---- shift history
+
+    @Test fun `the shift history reads ended shifts with write-offs and their reasons`() = runBlocking {
+        val a = started(open("juan"))
+        val t1 = trip("1", 1500); board(a.id, t1); pay(a.id, t1)
+        now += 1
+        val t2 = trip("2", 800); board(a.id, t2)
+        repo.writeOffAndRelease(a.id, t2.id, "juan")
+        now += 60_000
+        repo.endShift(a.id, "juan")
+
+        val ended = repo.endedShifts()
+        assertEquals(1, ended.size)
+        assertEquals("juan", ended.single().conductor)
+        assertNotNull("the frozen summary is there", repo.frozenSummary(a.id))
+
+        val written = repo.writtenOffTripsOf(a.id)
+        assertEquals(1, written.size)
+        assertEquals("2", written.single().trip.id)
+        assertEquals("uncollected at end of shift", written.single().reason)
+        assertEquals(800, written.single().amountCentavos)
+
+        assertEquals("boarding order", listOf("1", "2"), repo.tripsOfShift(a.id).map { it.id })
+
+        val b = started(open("maria"))
+        assertEquals("shift b has no write-offs of its own", 0, repo.writtenOffTripsOf(b.id).size)
+        now += 1
+        repo.endShift(b.id, "maria")
+        assertEquals("newest first", listOf(b.id, a.id), repo.endedShifts().map { it.id })
+    }
 }

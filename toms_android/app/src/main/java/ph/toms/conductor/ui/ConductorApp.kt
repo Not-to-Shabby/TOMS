@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -59,6 +60,7 @@ import ph.toms.conductor.ui.theme.TouchTarget
 fun ConductorApp(
     vm: ConductorViewModel,
     syncVm: SyncViewModel,
+    historyVm: ShiftHistoryViewModel,
     nfcReader: NfcReader,
     header: String,
     state: ConductorState,
@@ -69,6 +71,7 @@ fun ConductorApp(
     val lifecycleOwner = LocalLifecycleOwner.current
     val availability = remember { nfcReader.availability(activity) }
     val shiftOpen = state.shift != null
+    val historyState by historyVm.state.collectAsState()
 
     // Read cards only while the screen is in use: reader mode is switched off in the background.
     if (availability == NfcAvailability.Ready) {
@@ -193,6 +196,11 @@ fun ConductorApp(
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         StatusStrip(header, availability, state, sync)
         Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
+            // Shift history replaces the tab content while it is open; Back or its own Back button closes it.
+            if (historyState.visible) {
+                ShiftHistoryScreen(historyVm)
+                return@Box
+            }
             val summary = state.summary
             val shift = state.shift
             if (state.showSummary && summary != null && shift != null) {
@@ -217,6 +225,7 @@ fun ConductorApp(
                     onCalc = vm::openCalcFor,
                     onReturn = { vm.returnCard(it.id) },
                     onClearAlarm = { vm.clearAlarm(it.id) },
+                    onLost = { vm.markLost(it.id) },
                     onUseNearest = vm::useNearestAsBoarding,
                     onCalcPreview = vm::openCalcForBoard,
                     onRetry = vm::refreshConfig,
@@ -227,6 +236,7 @@ fun ConductorApp(
                     onCalc = vm::openCalcFor,
                     onReturn = { vm.returnCard(it.id) },
                     onClearAlarm = { vm.clearAlarm(it.id) },
+                    onLost = { vm.markLost(it.id) },
                 )
                 Tab.Calc -> CalcScreen(state = state, onMode = vm::setCalcMode)
                 Tab.More -> MoreScreen(
@@ -245,6 +255,7 @@ fun ConductorApp(
                     },
                     onRetryRefused = { syncVm.retryRefused(onFlushed = vm::syncApprovedCards) },
                     onShiftSummary = vm::openSummary,
+                    onShiftHistory = historyVm::open,
                     onSignOut = onSignOut,
                 )
             }

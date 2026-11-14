@@ -104,6 +104,9 @@ data class ShiftEndedPayload(
 
 data class SavedTrip(val trip: Trip, val cardState: CardState)
 
+/** A trip whose fare was written off, with the write-off's reason and amount, for the shift history screen. */
+data class WrittenOffTrip(val trip: Trip, val reason: String, val amountCentavos: Int)
+
 sealed interface StartShiftResult {
     data class Started(val shift: Shift) : StartShiftResult
     data class Resumed(val shift: Shift) : StartShiftResult
@@ -324,6 +327,35 @@ class TripRepository(
     /** Trips that have been written off, by trip id. Used to keep them off the Collect list and the owed total. */
     suspend fun writtenOffTripIds(): Set<String> =
         db.events().ofType(EventTypes.FARE_WRITTEN_OFF).mapNotNull { it.tripId }.toSet()
+
+    // ---- shift history and lost cards
+
+    /** Every ended shift, newest first. The frozen summary is what End Shift wrote; null when it predates it. */
+    suspend fun endedShifts(): List<Shift> =
+        db.shifts().ended().map { it.toDomain() }
+
+    /** The trips recorded during [shiftId], in boarding order. */
+    suspend fun tripsOfShift(shiftId: String): List<Trip> =
+        db.trips().forShift(shiftId).map { it.toDomain() }
+
+    /**
+     * The trips whose fare was written off during [shiftId], with the reason the conductor gave.
+     * Read from the fare_written_off events, so a trip written off twice in one shift appears once
+     * with its latest reason.
+     */
+    suspend fun writtenOffTripsOf(shiftId: String): List<WrittenOffTrip> {
+        val writtenOff = db.events().ofTypeInShift(EventTypes.FARE_WRITTEN_OFF, shiftId)
+        val byTrip = LinkedHashMap<String, WrittenOffInfo>()
+        for (event in writtenOff) {
+            val payload = runCatching { json.decodeFromString<WriteOffPayload>(event.payload) }.getOrNull() ?: continue
+            byTrip[payload.tripId] = WrittenOffInfo(payload.tripId, payload.reason, payload.amountCentavos)
+        }
+        return byTrip.entries.mapNotNull { (tripId, info) ->
+            db.trips().byId(tripId)?.toDomain()?.let { WrittenOffTrip(it, info.reason, info.amountCentavos) }
+        }
+    }
+
+    private data class WrittenOffInfo(val tripId: String, val reason: String, val amountCentavos: Int)
 
     /**
      * The saved card list, or null if there is none yet. The statuses live under their own key, so a phone that
