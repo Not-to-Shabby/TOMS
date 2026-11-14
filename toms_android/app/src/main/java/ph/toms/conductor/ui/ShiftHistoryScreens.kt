@@ -17,17 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,7 +63,7 @@ private fun shareJson(context: Context, export: ShiftExport) {
     context.startActivity(Intent.createChooser(send, "Share shift record"))
 }
 
-/** Shift history: the ended shifts, newest first. Read-only except for recording a late payment. */
+/** Shift history: the ended shifts, newest first. Read-only: the frozen summaries are never rewritten. */
 @Composable
 fun ShiftHistoryScreen(vm: ShiftHistoryViewModel) {
     val state by vm.state.collectAsState()
@@ -83,12 +77,8 @@ fun ShiftHistoryScreen(vm: ShiftHistoryViewModel) {
         ShiftDetailContent(
             detail = detail,
             message = state.message,
-            recovering = state.recovering,
             onBack = vm::closeDetail,
             onShare = { scope.launch { vm.exportJson()?.let { shareJson(context, it) } } },
-            onRecover = vm::beginRecovery,
-            onCancelRecovery = vm::cancelRecovery,
-            onConfirmRecovery = vm::confirmRecovery,
         )
         return
     }
@@ -147,12 +137,8 @@ fun ShiftHistoryScreen(vm: ShiftHistoryViewModel) {
 private fun ShiftDetailContent(
     detail: ShiftDetail,
     message: String?,
-    recovering: RecoveryDraft?,
     onBack: () -> Unit,
     onShare: () -> Unit,
-    onRecover: (ph.toms.conductor.data.WrittenOffTrip) -> Unit,
-    onCancelRecovery: () -> Unit,
-    onConfirmRecovery: (String) -> Unit,
 ) {
     val summary = detail.summary
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(Gap)) {
@@ -187,7 +173,6 @@ private fun ShiftDetailContent(
 
         if (detail.writtenOff.isNotEmpty()) {
             Text("Written off in this shift", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
-            val recovered = detail.recoveredTripIds
             detail.writtenOff.forEach { w ->
                 Column(
                     Modifier.fillMaxWidth().background(TomsColors.Surface, RoundedCornerShape(12.dp)).padding(16.dp),
@@ -195,19 +180,9 @@ private fun ShiftDetailContent(
                 ) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(peso(w.amountCentavos.toLong()), style = MaterialTheme.typography.titleMedium)
-                        if (w.trip.id in recovered) StatusChip("Recovered", Status.Good) else StatusChip("Written off", Status.Bad)
+                        StatusChip("Written off", Status.Bad)
                     }
                     Text(w.reason, style = MaterialTheme.typography.bodyMedium, color = TomsColors.InkSoft)
-                    val paid = detail.recoveries.firstOrNull { it.tripId == w.trip.id }
-                    if (paid != null) {
-                        Text(
-                            "Payment recorded ${whenIt(paid.atMillis)} by ${paid.actingConductor}: ${paid.reason}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TomsColors.Good,
-                        )
-                    } else {
-                        QuietButton("Record payment", { onRecover(w) }, Modifier.fillMaxWidth())
-                    }
                 }
             }
         }
@@ -233,47 +208,6 @@ private fun ShiftDetailContent(
         if (summary != null) BigButton("Share as JSON", onShare, Modifier.padding(top = 8.dp))
         QuietButton("Back", onBack, Modifier.fillMaxWidth().padding(bottom = 16.dp))
     }
-
-    recovering?.let { draft ->
-        ConfirmRecoveryDialog(
-            draft = draft,
-            onConfirm = onConfirmRecovery,
-            onCancel = onCancelRecovery,
-        )
-    }
-}
-
-/** Asks for the reason before a late payment is recorded. The payment is attributed to [RecoveryDraft.actor]. */
-@Composable
-private fun ConfirmRecoveryDialog(draft: RecoveryDraft, onConfirm: (String) -> Unit, onCancel: () -> Unit) {
-    var reason by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onCancel,
-        title = { Text("Record late payment?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "The fare of this trip was written off. Record that the money was paid late. The trip " +
-                        "and the frozen summary stay as they are; this is an audit record only.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    "${peso(draft.target.amountCentavos.toLong())}  ·  recorded as ${draft.actor}",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                OutlinedTextField(
-                    value = reason,
-                    onValueChange = { reason = it },
-                    label = { Text("Reason (who paid, where the money is)") },
-                    singleLine = true,
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = reason.isNotBlank(), onClick = { onConfirm(reason) }) { Text("Record") }
-        },
-        dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } },
-    )
 }
 
 @Composable

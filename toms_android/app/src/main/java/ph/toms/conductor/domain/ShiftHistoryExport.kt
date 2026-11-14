@@ -4,24 +4,14 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/** A late payment recorded after the shift, against a written-off trip. */
-data class RecoveredFare(
-    val tripId: String,
-    val atMillis: Long,
-    val amountCentavos: Int,
-    val reason: String,
-    val actingConductor: String,
-)
-
 /**
  * Builds the shareable JSON for one ended shift: the frozen summary plus the shift's trip lines.
  *
- * What may appear here is fixed by what [build] accepts: the shift header, the frozen summary, the
- * trips made during the shift (each carrying its own card UID, because it is part of that trip line),
- * and the late payments recorded against the shift. A device token, the database key, the approved
- * card list and any card UID that is not part of a trip line are never passed in, so they cannot be
- * in the export. There is deliberately no GPS and no card UUIDs: the export is the conductor's money
- * record, not a device log.
+ * What may appear here is fixed by what [build] accepts: the shift header, the frozen summary, and
+ * the trips made during the shift (each carrying its own card UID, because it is part of that trip
+ * line). A device token, the database key, the approved card list and any card UID that is not part
+ * of a trip line are never passed in, so they cannot be in the export. There is deliberately no GPS
+ * and no card UUIDs: the export is the conductor's money record, not a device log.
  */
 object ShiftHistoryExport {
 
@@ -47,15 +37,6 @@ object ShiftHistoryExport {
     )
 
     @Serializable
-    private data class Recovery(
-        val tripId: String,
-        val atMillis: Long,
-        val amountCentavos: Int,
-        val reason: String,
-        val actingConductor: String,
-    )
-
-    @Serializable
     private data class ShiftHeader(
         val shiftId: String,
         val conductor: String,
@@ -73,7 +54,6 @@ object ShiftHistoryExport {
         val shift: ShiftHeader,
         val summary: ShiftSummary,
         val trips: List<TripLine>,
-        val recoveries: List<Recovery>,
     )
 
     private val json = Json {
@@ -84,9 +64,11 @@ object ShiftHistoryExport {
 
     /**
      * The JSON for [shift]. [summary] must be the frozen summary the shift was ended with, and [trips]
-     * the trips recorded during the shift, in boarding order.
+     * the trips recorded during the shift, in boarding order. The shift must be ended: an export is a
+     * record of what a shift came to, never a snapshot of one still running.
      */
-    fun build(shift: Shift, summary: ShiftSummary, trips: List<Trip>, recoveries: List<RecoveredFare>): String {
+    fun build(shift: Shift, summary: ShiftSummary, trips: List<Trip>): String {
+        val endedAtMillis = requireNotNull(shift.endedAtMillis) { "The export is for ended shifts only" }
         val writtenOff = summary.writtenOffTripIds.toSet()
         val outstanding = summary.outstandingTripIds.toSet()
         val unknown = summary.unknownTripIds.toSet()
@@ -119,14 +101,11 @@ object ShiftHistoryExport {
                     vehicleId = shift.vehicleId,
                     routeId = shift.routeId,
                     startedAtMillis = shift.startedAtMillis,
-                    endedAtMillis = shift.endedAtMillis ?: 0,
+                    endedAtMillis = endedAtMillis,
                     endedBy = shift.endedBy,
                 ),
                 summary = summary,
                 trips = lines,
-                recoveries = recoveries.map {
-                    Recovery(it.tripId, it.atMillis, it.amountCentavos, it.reason, it.actingConductor)
-                },
             ),
         )
     }

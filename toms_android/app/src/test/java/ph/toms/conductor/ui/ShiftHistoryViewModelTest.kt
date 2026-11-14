@@ -19,12 +19,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import ph.toms.conductor.data.EventTypes
-import ph.toms.conductor.data.RouteInfo
-import ph.toms.conductor.data.SessionRepository
 import ph.toms.conductor.data.StartShiftResult
 import ph.toms.conductor.data.TripRepository
-import ph.toms.conductor.data.Vehicle
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.domain.CardState
 import ph.toms.conductor.domain.Trip
@@ -38,17 +34,8 @@ class ShiftHistoryViewModelTest {
     private lateinit var db: TomsDatabase
     private lateinit var repo: TripRepository
     private lateinit var vm: ShiftHistoryViewModel
-    private val sessions = FakeSessions()
     private var eventSeq = 0
     private var shiftSeq = 0
-
-    /** Stands in for the sign-in store: whoever it says is signed in, a recorded payment is attributed to. */
-    private class FakeSessions(var signedIn: String? = "juan") : SessionRepository {
-        override suspend fun login(username: String, password: String) = Result.failure<String>(java.io.IOException("not used"))
-        override suspend fun vehicles(): List<Vehicle> = emptyList()
-        override suspend fun routes(): List<RouteInfo> = emptyList()
-        override suspend fun restore(nowMillis: Long): String? = signedIn
-    }
 
     @Before
     fun setUp() {
@@ -56,7 +43,7 @@ class ShiftHistoryViewModelTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
-        vm = ShiftHistoryViewModel(repo, sessions)
+        vm = ShiftHistoryViewModel(repo)
         dispatcher.scheduler.advanceUntilIdle()
     }
 
@@ -107,70 +94,11 @@ class ShiftHistoryViewModelTest {
         assertEquals(listOf("t-1"), detail.trips.map { it.id })
         assertEquals("uncollected at end of shift", detail.writtenOff.single().reason)
         assertEquals(1500, detail.writtenOff.single().amountCentavos)
-        assertTrue("nothing is recovered yet", detail.recoveries.isEmpty())
-    }
 
-    @Test
-    fun `recording a late payment attributes it to the signed-in conductor and reloads the detail`() {
-        val (shiftId, _) = runBlocking { writtenOffTrip() }
-        vm.open()
-        settle { vm.state.value.rows.isNotEmpty() }
-        vm.openDetail(shiftId)
-        settle { vm.state.value.detail != null }
-
-        vm.beginRecovery(vm.state.value.detail!!.writtenOff.single())
-        settle { vm.state.value.recovering != null }
-        assertEquals("juan", vm.state.value.recovering!!.actor)
-
-        vm.confirmRecovery("  paid late at the terminal  ")
-        settle { vm.state.value.recovering == null && vm.state.value.detail!!.recoveries.size == 1 }
-
-        val rec = vm.state.value.detail!!.recoveries.single()
-        assertEquals("juan", rec.actingConductor)
-        assertEquals("the reason is kept as it was typed, trimmed", "paid late at the terminal", rec.reason)
-        assertEquals(1500, rec.amountCentavos)
-
-        runBlocking {
-            val events = db.events().ofType(EventTypes.FARE_RECOVERED)
-            assertEquals(1, events.size)
-            assertEquals("tagged to the shift the trip belongs to", shiftId, events.single().shiftId)
-        }
-    }
-
-    @Test
-    fun `recording a late payment needs a conductor to attribute it to`() {
-        val (shiftId, _) = runBlocking { writtenOffTrip() }
-        sessions.signedIn = null
-
-        vm.open()
-        settle { vm.state.value.rows.isNotEmpty() }
-        vm.openDetail(shiftId)
-        settle { vm.state.value.detail != null }
-
-        vm.beginRecovery(vm.state.value.detail!!.writtenOff.single())
-        settle { vm.state.value.message != null }
-
-        assertEquals(ShiftHistoryViewModel.NO_SIGNED_IN_MESSAGE, vm.state.value.message)
-        assertNull(vm.state.value.recovering)
-        runBlocking { assertTrue(db.events().ofType(EventTypes.FARE_RECOVERED).isEmpty()) }
-    }
-
-    @Test
-    fun `a blank reason is refused and nothing is recorded`() {
-        val (shiftId, _) = runBlocking { writtenOffTrip() }
-        vm.open()
-        settle { vm.state.value.rows.isNotEmpty() }
-        vm.openDetail(shiftId)
-        settle { vm.state.value.detail != null }
-
-        vm.beginRecovery(vm.state.value.detail!!.writtenOff.single())
-        settle { vm.state.value.recovering != null }
-
-        vm.confirmRecovery("   ")
-        settle { vm.state.value.message != null }
-
-        assertNotNull("the dialog stays open for a correction", vm.state.value.recovering)
-        runBlocking { assertTrue(db.events().ofType(EventTypes.FARE_RECOVERED).isEmpty()) }
+        vm.closeDetail()
+        settle { vm.state.value.detail == null }
+        vm.close()
+        settle { !vm.state.value.visible }
     }
 
     @Test
@@ -187,5 +115,13 @@ class ShiftHistoryViewModelTest {
         assertTrue("the kind marks what the file is", export.json.contains("\"kind\": \"toms-shift-export\""))
         assertTrue("the written-off trip is marked", export.json.contains("\"written_off\""))
         assertTrue("the frozen summary rides along", export.json.contains("\"faresChargedCentavos\""))
+    }
+
+    @Test
+    fun `exporting without an open detail returns nothing`() {
+        runBlocking { writtenOffTrip() }
+        vm.open()
+        settle { vm.state.value.rows.isNotEmpty() }
+        assertNull("nothing is exported before a shift is opened", runBlocking { vm.exportJson() })
     }
 }

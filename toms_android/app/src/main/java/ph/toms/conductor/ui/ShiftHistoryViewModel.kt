@@ -9,10 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ph.toms.conductor.data.SessionRepository
 import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.data.WrittenOffTrip
-import ph.toms.conductor.domain.RecoveredFare
 import ph.toms.conductor.domain.Shift
 import ph.toms.conductor.domain.ShiftHistoryExport
 import ph.toms.conductor.domain.ShiftSummary
@@ -30,27 +28,20 @@ data class ShiftDetail(
     val summary: ShiftSummary?,
     val trips: List<Trip>,
     val writtenOff: List<WrittenOffTrip>,
-    val recoveries: List<RecoveredFare>,
-) {
-    /** Trips with a recorded late payment. A trip can only be recovered once. */
-    val recoveredTripIds: Set<String> get() = recoveries.map { it.tripId }.toSet()
-}
-
-/** The written-off trip a payment is being recorded for, and who the payment will be attributed to. */
-data class RecoveryDraft(val target: WrittenOffTrip, val actor: String)
+)
 
 /** What the share sheet is handed, or null when there is nothing to share right now. */
 data class ShiftExport(val fileName: String, val json: String)
 
 /**
- * Behind the Shift history screen: the list of ended shifts, one shift's detail, the recording of a
- * late payment ([ph.toms.conductor.data.TripRepository.recordFareRecovered]), and the JSON export.
- * The history is read-only except for recoveries: the frozen summaries are never rewritten.
+ * Behind the Shift history screen: the list of ended shifts, one shift's detail, and the JSON export.
+ * The history is read-only: the frozen summaries are never rewritten, and nothing on it changes card
+ * states or money. (Recording a late payment against a written-off trip was considered and deferred —
+ * see documentation/v2_later.md.)
  */
 @HiltViewModel
 class ShiftHistoryViewModel @Inject constructor(
     private val trips: TripRepository,
-    private val sessions: SessionRepository,
 ) : ViewModel() {
 
     data class State(
@@ -60,7 +51,6 @@ class ShiftHistoryViewModel @Inject constructor(
         val visible: Boolean = false,
         val detail: ShiftDetail? = null,
         val detailLoading: Boolean = false,
-        val recovering: RecoveryDraft? = null,
         /** A short line shown under the list or detail when something needs saying. */
         val message: String? = null,
     )
@@ -75,7 +65,7 @@ class ShiftHistoryViewModel @Inject constructor(
     }
 
     /** Closes the history screen and whatever was open on it. Nothing recorded is changed. */
-    fun close() = _state.update { it.copy(visible = false, detail = null, recovering = null, message = null) }
+    fun close() = _state.update { it.copy(visible = false, detail = null, message = null) }
 
     init {
         refresh()
@@ -107,46 +97,8 @@ class ShiftHistoryViewModel @Inject constructor(
             summary = trips.frozenSummary(shiftId),
             trips = trips.tripsOfShift(shiftId),
             writtenOff = trips.writtenOffTripsOf(shiftId),
-            recoveries = trips.recoveriesOf(shiftId),
         )
     }
-
-    /** Opens the payment dialog when someone is signed in to attribute the payment to. */
-    fun beginRecovery(target: WrittenOffTrip) {
-        viewModelScope.launch {
-            val actor = actingConductor()
-            _state.update {
-                if (actor == null) it.copy(recovering = null, message = NO_SIGNED_IN_MESSAGE)
-                else it.copy(recovering = RecoveryDraft(target, actor), message = null)
-            }
-        }
-    }
-
-    fun cancelRecovery() = _state.update { it.copy(recovering = null) }
-
-    /** Records the late payment. The reason is required: a recovery without why is not an audit record. */
-    fun confirmRecovery(reason: String) {
-        val draft = _state.value.recovering ?: return
-        val clean = reason.trim()
-        if (clean.isEmpty()) {
-            _state.update { it.copy(message = "Write a short reason: who paid, and where the money is.") }
-            return
-        }
-        viewModelScope.launch {
-            val recorded = trips.recordFareRecovered(draft.target.trip.id, draft.actor, clean)
-            if (!recorded) {
-                _state.update { it.copy(recovering = null, message = "The payment was not recorded. It may already have a recovery.") }
-                return@launch
-            }
-            // The detail is reloaded so the trip immediately shows as recovered.
-            val reopened = _state.value.detail?.shift?.id?.let { loadDetail(it) }
-            _state.update { it.copy(recovering = null, detail = reopened ?: it.detail, message = null) }
-        }
-    }
-
-    /** Who a recorded payment is attributed to: the conductor signed in, or the one whose shift is open. */
-    private suspend fun actingConductor(): String? =
-        sessions.restore(System.currentTimeMillis()) ?: trips.openShift()?.conductor
 
     /**
      * Builds the shareable JSON for the open shift. Null (with a message) when the shift predates frozen
@@ -158,7 +110,7 @@ class ShiftHistoryViewModel @Inject constructor(
             _state.update { it.copy(message = "This shift has no frozen summary, so there is nothing to export.") }
             return null
         }
-        val json = ShiftHistoryExport.build(detail.shift, summary, detail.trips, detail.recoveries)
+        val json = ShiftHistoryExport.build(detail.shift, summary, detail.trips)
         return ShiftExport(exportFileName(detail.shift), json)
     }
 
@@ -167,10 +119,5 @@ class ShiftHistoryViewModel @Inject constructor(
         val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(shift.startedAtMillis))
         val short = shift.id.take(6).lowercase(Locale.US)
         return "toms-shift-$day-$short.json"
-    }
-
-    companion object {
-        const val NO_SIGNED_IN_MESSAGE =
-            "No conductor is signed in, so the payment could not be attributed. Sign in first, then record it."
     }
 }

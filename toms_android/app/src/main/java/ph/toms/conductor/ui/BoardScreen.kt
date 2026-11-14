@@ -257,10 +257,9 @@ private fun TripCard(
                     QuietButton("Calc", { onCalc(trip) }, Modifier.weight(1f))
                     QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
                 }
-                CardState.ASSIGNED_PAID -> {
-                    BigButton("Return card", { onReturn(trip) }, Modifier.weight(1f))
-                    QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
-                }
+                // Not offered on a paid card: the money is already collected, the only step left is the
+                // physical return, and losing a paid card is an office matter, not a shift action.
+                CardState.ASSIGNED_PAID -> BigButton("Return card", { onReturn(trip) }, Modifier.weight(1f))
                 CardState.RETURNED_UNPAID -> BigButton("Clear alarm", { onClearAlarm(trip) }, Modifier.weight(1f))
                 else -> Unit
             }

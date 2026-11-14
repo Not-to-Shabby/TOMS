@@ -6,6 +6,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -23,9 +24,12 @@ class ShiftHistoryExportTest {
     private fun summaryOf(shiftId: String, trips: List<Trip>, events: List<TripEventRecord>): ShiftSummary =
         ShiftSummary.of(shiftId, trips.map { ShiftTrip(it, shiftId) }, events, emptyMap())
 
+    private fun endedShift(endedAt: Long = 3_600_000L) =
+        Shift("shift-1", "juan", "v1", "r1", startedAtMillis = 1_000L, endedAtMillis = endedAt, endedBy = "juan")
+
     @Test
-    fun `the export carries the shift header the frozen summary the trip lines and the recoveries`() {
-        val shift = Shift("shift-1", "juan", "v1", "r1", startedAtMillis = 1_000L, endedAtMillis = 3_600_000L, endedBy = "juan")
+    fun `the export carries the shift header the frozen summary and the trip lines`() {
+        val shift = endedShift()
         val paid = trip("t1", 1500, "UID1")
         val off = trip("t2", 800, "UID2")
         val trips = listOf(paid, off)
@@ -34,9 +38,8 @@ class ShiftHistoryExportTest {
             TripEventRecord("t2", "shift-1", TripFact.WRITTEN_OFF),
         )
         val summary = summaryOf("shift-1", trips, events)
-        val recoveries = listOf(RecoveredFare("t2", 4_000_000L, 800, "paid at the office", "maria"))
 
-        val json = Json.parseToJsonElement(ShiftHistoryExport.build(shift, summary, trips, recoveries)).jsonObject
+        val json = Json.parseToJsonElement(ShiftHistoryExport.build(shift, summary, trips)).jsonObject
 
         assertEquals("toms-shift-export", json["kind"]!!.jsonPrimitive.content)
         assertEquals(1, json["version"]!!.jsonPrimitive.int)
@@ -46,6 +49,7 @@ class ShiftHistoryExportTest {
         assertEquals("v1", header["vehicleId"]!!.jsonPrimitive.content)
         assertEquals("r1", header["routeId"]!!.jsonPrimitive.content)
         assertEquals("juan", header["endedBy"]!!.jsonPrimitive.content)
+        assertEquals("the exact end time the shift was closed with", 3_600_000L, header["endedAtMillis"]!!.jsonPrimitive.long)
 
         // The frozen summary rides along exactly as End Shift wrote it.
         val exportedSummary = json["summary"]!!.jsonObject
@@ -63,21 +67,33 @@ class ShiftHistoryExportTest {
         assertEquals("written_off", offLine["settlement"]!!.jsonPrimitive.content)
         assertEquals("collected", lines.single { it["tripId"]!!.jsonPrimitive.content == "t1" }["settlement"]!!.jsonPrimitive.content)
 
-        val recs = json["recoveries"]!!.jsonArray.map { it.jsonObject }
-        assertEquals(1, recs.size)
-        assertEquals("t2", recs.single()["tripId"]!!.jsonPrimitive.content)
-        assertEquals("paid at the office", recs.single()["reason"]!!.jsonPrimitive.content)
-        assertEquals("maria", recs.single()["actingConductor"]!!.jsonPrimitive.content)
+        // Late payments were considered and deferred (see documentation/v2_later.md); nothing records them.
+        assertFalse("no recoveries are in the export", json.containsKey("recoveries"))
+    }
+
+    @Test
+    fun `the export refuses a shift that is still open`() {
+        val trips = listOf(trip("t1", 1500, "UID1"))
+        val events = listOf(TripEventRecord("t1", "shift-1", TripFact.PAID))
+        val summary = summaryOf("shift-1", trips, events)
+        val open = Shift("shift-1", "juan", "v1", "r1", startedAtMillis = 1_000L, endedAtMillis = null, endedBy = null)
+
+        try {
+            ShiftHistoryExport.build(open, summary, trips)
+            throw AssertionError("an open shift must not export")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message!!.contains("ended"))
+        }
     }
 
     @Test
     fun `the export holds only the card uids that are part of trip lines`() {
-        val shift = Shift("shift-1", "juan", "v1", "r1", 1_000L, 3_600_000L, "juan")
+        val shift = endedShift()
         val trips = listOf(trip("t1", 1500, "UID1"))
         val events = listOf(TripEventRecord("t1", "shift-1", TripFact.PAID))
         val summary = summaryOf("shift-1", trips, events)
 
-        val text = ShiftHistoryExport.build(shift, summary, trips, emptyList())
+        val text = ShiftHistoryExport.build(shift, summary, trips)
 
         // The card UID of the trip line is there; a UID from anywhere else (the approved card list,
         // the cards table) never is, because the builder is never given one.
@@ -92,12 +108,12 @@ class ShiftHistoryExportTest {
 
     @Test
     fun `a trip exports where the passenger went when the conductor recorded it`() {
-        val shift = Shift("shift-1", "juan", "v1", "r1", 1_000L, 3_600_000L, "juan")
+        val shift = endedShift()
         val trips = listOf(trip("t1", 1500, "UID1", actualStop = "s9"))
         val events = listOf(TripEventRecord("t1", "shift-1", TripFact.PAID))
         val summary = summaryOf("shift-1", trips, events)
 
-        val json = Json.parseToJsonElement(ShiftHistoryExport.build(shift, summary, trips, emptyList())).jsonObject
+        val json = Json.parseToJsonElement(ShiftHistoryExport.build(shift, summary, trips)).jsonObject
         val line = json["trips"]!!.jsonArray.single().jsonObject
         assertEquals("s9", line["destinationStopId"]!!.jsonPrimitive.content)
     }

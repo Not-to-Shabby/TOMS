@@ -23,7 +23,6 @@ import ph.toms.conductor.data.db.PassengerJson
 import ph.toms.conductor.data.db.PassengerLineRecord
 import ph.toms.conductor.domain.GeoFix
 import ph.toms.conductor.domain.LineQuote
-import ph.toms.conductor.domain.RecoveredFare
 import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.domain.Shift
 import ph.toms.conductor.domain.ShiftSummary
@@ -39,7 +38,6 @@ object EventTypes {
     const val SHIFT_STARTED = "shift_started"
     const val SHIFT_ENDED = "shift_ended"
     const val FARE_WRITTEN_OFF = "fare_written_off"
-    const val FARE_RECOVERED = "fare_recovered"
     const val CONDUCTOR_RELEASED_UNPAID = "conductor_released_unpaid"
     const val DEVICE_STATUS = "device_status"
 }
@@ -330,7 +328,7 @@ class TripRepository(
     suspend fun writtenOffTripIds(): Set<String> =
         db.events().ofType(EventTypes.FARE_WRITTEN_OFF).mapNotNull { it.tripId }.toSet()
 
-    // ---- shift history, late payments and lost cards
+    // ---- shift history and lost cards
 
     /** Every ended shift, newest first. The frozen summary is what End Shift wrote; null when it predates it. */
     suspend fun endedShifts(): List<Shift> =
@@ -356,50 +354,6 @@ class TripRepository(
             db.trips().byId(tripId)?.toDomain()?.let { WrittenOffTrip(it, info.reason, info.amountCentavos) }
         }
     }
-
-    /** Trips whose fare has already been recorded as recovered (a late payment already exists). */
-    suspend fun recoveredTripIds(): Set<String> =
-        db.events().ofType(EventTypes.FARE_RECOVERED).mapNotNull { it.tripId }.toSet()
-
-    /**
-     * Records the fare of a written-off trip being paid late, as a fare_recovered audit event. Release is
-     * final, so no card state changes and no summary is rewritten; the event only records that the money
-     * came in after the shift. The payload mirrors the write-off it settles (same amount, card, and shift
-     * conductor), with the caller's reason and whoever took the payment. Refused when the trip was never
-     * written off, already has a recovery recorded, or the reason or the actor is blank.
-     */
-    suspend fun recordFareRecovered(tripId: String, actingConductor: String, reason: String): Boolean {
-        val wrote = db.withTransaction {
-            val writeOff = db.events().ofType(EventTypes.FARE_WRITTEN_OFF).lastOrNull { it.tripId == tripId }
-                ?: return@withTransaction false
-            val settled = runCatching { json.decodeFromString<WriteOffPayload>(writeOff.payload) }.getOrNull()
-                ?: return@withTransaction false
-            if (tripId in recoveredTripIds()) return@withTransaction false
-            val cleanReason = reason.trim()
-            val cleanActor = actingConductor.trim()
-            if (cleanReason.isBlank() || cleanActor.isBlank()) return@withTransaction false
-            appendEvent(
-                EventTypes.FARE_RECOVERED,
-                json.encodeToString(settled.copy(reason = cleanReason, actingConductor = cleanActor)),
-                clock(),
-                shiftId = settled.shiftId,
-                tripId = tripId,
-            )
-            true
-        }
-        // False means the recovery was refused and no event was written, so there is nothing to send.
-        if (wrote) uploadKick.kick()
-        return wrote
-    }
-
-    /** The late payments recorded against this shift's written-off trips, in the order recorded. */
-    suspend fun recoveriesOf(shiftId: String): List<RecoveredFare> =
-        db.events().ofType(EventTypes.FARE_RECOVERED).mapNotNull { event ->
-            val payload = runCatching { json.decodeFromString<WriteOffPayload>(event.payload) }.getOrNull() ?: return@mapNotNull null
-            payload.takeIf { it.shiftId == shiftId }?.let {
-                RecoveredFare(payload.tripId, event.createdAtMillis, payload.amountCentavos, payload.reason, payload.actingConductor)
-            }
-        }
 
     private data class WrittenOffInfo(val tripId: String, val reason: String, val amountCentavos: Int)
 
