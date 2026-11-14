@@ -16,7 +16,7 @@ Setup: phone enrolled with a device token, a shift open, at least one approved t
 | 8 | Low battery | Run the phone below 15% and then 5% with the shift open (battery saver on). | Taps still work; note whether GPS, BLE and uploads continue. | [ ] | |
 | 9 | GPS lost in a building | Go indoors with no sky view and tap a card. | The trip is recorded without GPS, and the app does not freeze. After going outside a fix returns. | [ ] | |
 | 10 | Long shift battery | Full charge, shift open with the screen on for 4 hours, note the battery percent every hour. | Record the drain per hour. (Input for the update-distance decision.) | [ ] | |
-| 11 | Boarding after a long wait | Open a shift outdoors, then wait at a stop for more than a minute with the app on the Board (the StatusStrip shows "GPS old"). Tap a card for a trip. | The trip still carries GPS (the StatusStrip may have said "GPS old" at the moment of the tap; the app takes one fresh fix at tap time). Indoors, the same tap is allowed to record without GPS. | [ ] | |
+| 11 | Boarding after a long wait | Open a shift outdoors, then wait at a stop for more than a minute with the app on the Board (the StatusStrip shows "GPS old"). Tap a card for a trip; while the Board says "Getting location…", tap the same card again. | The trip still carries GPS (the StatusStrip may have said "GPS old" at the moment of the tap; the app takes one fresh fix at tap time). The second tap starts nothing — exactly one trip appears. Indoors, the same tap is allowed to record without GPS. | [ ] | |
 
 ## Reading results
 

@@ -435,6 +435,71 @@ class ConductorViewModelTest {
     }
 
     @Test
+    fun `the board says getting location while the fresh fix is on its way`() = runTest {
+        lmShadow.setProviderEnabled(android.location.LocationManager.GPS_PROVIDER, true)
+        lmShadow.setLastKnownLocation(android.location.LocationManager.GPS_PROVIDER, gnssFixAt(1_000L))
+        vm.startLocation()
+        waitUntil { vm.state.value.fix != null }
+
+        vm.onCardRead(read("6F:F1:AD:39", 41_000L))
+        testDispatcher.scheduler.runCurrent()
+        assertTrue(vm.state.value.result is BoardResult.GettingLocation)
+
+        lmShadow.simulateLocation(gnssFixAt(40_000L, lat = 8.20))
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        advanceUntilIdle()
+        waitUntil { runBlocking { repo.loadTrips().isNotEmpty() } }
+        assertTrue("the wait ended in a started trip", vm.state.value.result is BoardResult.Started)
+    }
+
+    @Test
+    fun `two taps of the same card inside the fresh-fix wait start exactly one trip`() = runTest {
+        lmShadow.setProviderEnabled(android.location.LocationManager.GPS_PROVIDER, true)
+        lmShadow.setLastKnownLocation(android.location.LocationManager.GPS_PROVIDER, gnssFixAt(1_000L))
+        vm.startLocation()
+        waitUntil { vm.state.value.fix != null }
+
+        // Tap 1 goes into the fresh-fix wait.
+        vm.onCardRead(read("6F:F1:AD:39", 41_000L))
+        testDispatcher.scheduler.runCurrent()
+        assertTrue(vm.state.value.result is BoardResult.GettingLocation)
+
+        // Tap 2 two seconds later: outside the 1.5 s debounce window, but the first tap is still
+        // waiting for its fix and its trip is not recorded yet. It must start nothing.
+        vm.onCardRead(read("6F:F1:AD:39", 43_000L))
+        advanceUntilIdle()
+
+        waitUntil { runBlocking { repo.loadTrips().isNotEmpty() } }
+        assertEquals("one tap, one trip", 1, runBlocking { repo.loadTrips().size })
+        assertEquals(
+            "exactly one trip_created event reached the outbox",
+            1,
+            runBlocking { db.events().ofType(ph.toms.conductor.data.EventTypes.TRIP_CREATED).size },
+        )
+        assertTrue(vm.state.value.result is BoardResult.Started)
+    }
+
+    @Test
+    fun `a cold start with no fix at all still takes the one-shot and the trip gets gps`() = runTest {
+        lmShadow.setProviderEnabled(android.location.LocationManager.GPS_PROVIDER, true)
+        // No last known location at all, so the screen has never had a fix (fresh app, indoors start).
+        vm.startLocation()
+        assertTrue("no fix yet", vm.state.value.fix == null)
+
+        vm.onCardRead(read("6F:F1:AD:39", 41_000L))
+        testDispatcher.scheduler.runCurrent()
+        assertTrue(vm.state.value.result is BoardResult.GettingLocation)
+
+        lmShadow.simulateLocation(gnssFixAt(40_500L, lat = 8.30))
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        advanceUntilIdle()
+        waitUntil { runBlocking { repo.loadTrips().isNotEmpty() } }
+        val trip = runBlocking { repo.loadTrips().single() }
+        assertNotNull("the one-shot rescue gave the trip its location", trip.gps)
+        assertEquals(8.30, trip.gps!!.lat, 0.0)
+    }
+
+    @Test
     fun `openCalcFor pre-populates calculator with trip fare and switches to Calc tab`() = runTest {
         advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))
