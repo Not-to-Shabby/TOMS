@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ShiftTime
 import ph.toms.conductor.domain.formatCentavos
+import ph.toms.conductor.domain.unaccountedWarningText
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
 import ph.toms.conductor.ui.theme.QuietButton
@@ -162,7 +163,12 @@ private fun ShiftDetailContent(
             Line("Collected", peso(summary.collectedCashCentavos))
             if (summary.writtenOffCentavos > 0) Line("Written off", peso(summary.writtenOffCentavos), TomsColors.Bad)
             if (summary.outstandingCentavos > 0) Line("Still to collect", peso(summary.outstandingCentavos), TomsColors.Bad)
-            if (summary.unknownCentavos > 0) Line("Not accounted for", peso(summary.unknownCentavos), TomsColors.Bad)
+            unaccountedWarningText(summary.unknownCentavos)?.let { warning ->
+                Column(Modifier.fillMaxWidth().background(TomsColors.BadBg, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                    Line("Not accounted for", peso(summary.unknownCentavos), TomsColors.Bad)
+                    Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                }
+            }
         } else {
             Text(
                 "This shift has no frozen summary; it predates it. Its trips are listed below.",

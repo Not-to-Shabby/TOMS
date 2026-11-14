@@ -89,7 +89,7 @@ const pesos = (centavos: unknown) => (centavos == null ? '' : (Number(centavos) 
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : '');
 
 const AUDIT_SEARCH_FIELDS = [
-  'vehicle_id', 'device_id', 'event_type', 'nfc_uid', 'card_uuid::text',
+  'vehicle_id', 'device_id', 'event_type', 'nfc_uid', 'card_uuid::text', 'trip_id::text',
   'boarding_stop_id', 'declared_destination_stop_id', 'discount_category_id', 'override_reason',
 ];
 
@@ -329,5 +329,91 @@ export function registerDashboardRoutes(
         clock_suspect_events: Number(r.clock_suspect_events),
       })),
     });
+  });
+
+  // Unaccounted fares per shift — the money a dishonest conductor could hide by marking an unpaid
+  // card lost (or clearing an unpaid-return alarm without a write-off), so it must be impossible to
+  // miss on the dashboard. The rule mirrors the phone's ShiftSummary.of: a trip counts as
+  // unaccounted when it has no recorded payment (any shift), no write-off and no recovery, and its
+  // card is no longer out (the last card state is neither assigned nor alarming). Only shifts that
+  // actually have unaccounted money are returned; trips carries the ids behind the amount, each
+  // searchable in the audit log by trip_id. Reads only existing events — the shift tag rides in the
+  // payload exactly as the phone sends it — so no migration was needed.
+  app.get('/api/shifts/unaccounted', admin, async (_req, res) => {
+    const { rows } = await pool.query(
+      `WITH trips AS (
+         SELECT e.trip_id::text AS trip_id, e.payload->>'shiftId' AS shift_id, e.nfc_uid, e.occurred_at,
+                (e.payload->>'fareCentavos')::bigint AS fare_cents
+         FROM events e
+         WHERE e.event_type = 'trip_created' AND e.payload->>'shiftId' IS NOT NULL AND e.trip_id IS NOT NULL
+       ),
+       paid AS (
+         SELECT DISTINCT s.trip_id::text AS trip_id FROM events s
+         WHERE s.event_type = 'card_state_changed' AND s.card_state IN ('ASSIGNED_PAID', 'RETURNED')
+       ),
+       recovered AS (
+         SELECT DISTINCT COALESCE(s.trip_id::text, s.payload->>'tripId') AS trip_id FROM events s
+         WHERE s.event_type = 'fare_recovered'
+       ),
+       written_off AS (
+         SELECT DISTINCT COALESCE(s.trip_id::text, s.payload->>'tripId') AS trip_id FROM events s
+         WHERE s.event_type = 'fare_written_off'
+       ),
+       last_state AS (
+         SELECT DISTINCT ON (s.trip_id::text) s.trip_id::text AS trip_id, s.card_state
+         FROM events s
+         WHERE s.event_type = 'card_state_changed' AND s.trip_id IS NOT NULL AND s.card_state IS NOT NULL
+         ORDER BY s.trip_id::text, s.occurred_at DESC, s.id DESC
+       ),
+       unaccounted AS (
+         SELECT t.*, COALESCE(ls.card_state, 'ASSIGNED_UNPAID') AS final_state
+         FROM trips t
+         LEFT JOIN paid p ON p.trip_id = t.trip_id
+         LEFT JOIN recovered r ON r.trip_id = t.trip_id
+         LEFT JOIN written_off w ON w.trip_id = t.trip_id
+         LEFT JOIN last_state ls ON ls.trip_id = t.trip_id
+         WHERE p.trip_id IS NULL AND r.trip_id IS NULL AND w.trip_id IS NULL
+           AND COALESCE(ls.card_state, 'ASSIGNED_UNPAID') NOT IN ('ASSIGNED_UNPAID', 'RETURNED_UNPAID')
+       )
+       SELECT u.shift_id,
+              ss.payload->>'conductor' AS conductor,
+              ss.payload->>'vehicleId' AS vehicle_id,
+              ss.payload->>'routeId' AS route_id,
+              ss.occurred_at AS started_at,
+              se.occurred_at AS ended_at,
+              se.payload->>'endedBy' AS ended_by,
+              count(*) AS unknown_trips,
+              COALESCE(sum(u.fare_cents), 0) AS unknown_cents,
+              json_agg(json_build_object(
+                'trip_id', u.trip_id, 'fare_cents', u.fare_cents, 'nfc_uid', u.nfc_uid,
+                'card_state', u.final_state, 'occurred_at', u.occurred_at
+              ) ORDER BY u.occurred_at) AS trips
+       FROM unaccounted u
+       LEFT JOIN events ss ON ss.event_type = 'shift_started' AND ss.payload->>'shiftId' = u.shift_id
+       LEFT JOIN events se ON se.event_type = 'shift_ended' AND se.payload->>'shiftId' = u.shift_id
+       GROUP BY u.shift_id, ss.payload->>'conductor', ss.payload->>'vehicleId', ss.payload->>'routeId',
+                ss.occurred_at, se.occurred_at, se.payload->>'endedBy'
+       ORDER BY COALESCE(se.occurred_at, ss.occurred_at) DESC`,
+    );
+    res.json(
+      rows.map((r) => ({
+        shift_id: r.shift_id,
+        conductor: r.conductor,
+        vehicle_id: r.vehicle_id,
+        route_id: r.route_id,
+        started_at: r.started_at,
+        ended_at: r.ended_at,
+        ended_by: r.ended_by,
+        unknown_trips: Number(r.unknown_trips),
+        unknown_cents: Number(r.unknown_cents),
+        trips: (r.trips ?? []).map((t: Record<string, unknown>) => ({
+          trip_id: t.trip_id,
+          fare_cents: Number(t.fare_cents),
+          nfc_uid: t.nfc_uid,
+          card_state: t.card_state,
+          occurred_at: t.occurred_at,
+        })),
+      })),
+    );
   });
 }

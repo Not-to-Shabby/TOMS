@@ -208,6 +208,15 @@ data class ShiftSummary(
     }
 }
 
+/**
+ * The plain-language warning for a shift's unaccounted money — fares with no recorded payment, no
+ * write-off, and no card still out. A lost card is the usual cause, but a cleared unpaid-return alarm
+ * lands here too, so the line says both. Null when the shift has nothing unaccounted, so zero stays
+ * quiet everywhere the amount is shown.
+ */
+fun unaccountedWarningText(unknownCentavos: Long): String? =
+    if (unknownCentavos > 0) "Fares not collected and not written off, with the card no longer out. Often a lost card." else null
+
 object ShiftTime {
     /** "2 h 05 min", "45 min", "under 1 min". A clock that went backwards reads as zero, never negative. */
     fun formatDuration(startMillis: Long, endMillis: Long): String {

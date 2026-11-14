@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { TrendingUp, Users, Award, Calendar } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { TrendingUp, Users, Award, Calendar, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import { api, downloadFile } from '../lib/api';
 import LoadError from '../components/LoadError';
 import { loadErrorMessage } from '../lib/loadError';
@@ -19,6 +20,27 @@ interface DailyRevenue {
   passengers_by_category: Record<string, number>;
 }
 
+interface UnaccountedTrip {
+  trip_id: string;
+  fare_cents: number;
+  nfc_uid: string | null;
+  card_state: string | null;
+  occurred_at: string;
+}
+
+interface UnaccountedShift {
+  shift_id: string;
+  conductor: string | null;
+  vehicle_id: string | null;
+  route_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  ended_by: string | null;
+  unknown_trips: number;
+  unknown_cents: number;
+  trips: UnaccountedTrip[];
+}
+
 const BAR_COLORS = ['var(--accent)', 'var(--success)', 'var(--warning)', 'var(--danger)'];
 
 export default function AnalyticsHome() {
@@ -28,6 +50,7 @@ export default function AnalyticsHome() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const [unaccounted, setUnaccounted] = useState<UnaccountedShift[]>([]);
 
   useEffect(() => {
     setLoading(true);
@@ -42,6 +65,12 @@ export default function AnalyticsHome() {
         setLoading(false);
       });
   }, [days, reloadKey]);
+
+  useEffect(() => {
+    api.get('/shifts/unaccounted')
+      .then(res => setUnaccounted(res.data))
+      .catch(err => console.error('Failed to fetch unaccounted fares', err));
+  }, [reloadKey]);
 
   // Aggregate stats
   const shares = categoryShares(data);
@@ -115,6 +144,11 @@ export default function AnalyticsHome() {
         </div>
       </header>
       <LoadError message={loadError} onRetry={() => setReloadKey((k) => k + 1)} />
+
+      {/* Unaccounted fares: what a lost card (or a cleared alarm without a write-off) leaves behind.
+          Money that never reached a payment, a write-off or a receipt, so it is warned in colour and
+          every trip behind it is one click away. Zero stays quiet — no panel at all. */}
+      <UnaccountedPanel shifts={unaccounted} />
 
       {/* Summary KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '24px' }}>
@@ -317,6 +351,78 @@ export default function AnalyticsHome() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** One shift's unaccounted fares, warned in colour, with the trips behind the amount one click away. */
+function UnaccountedPanel({ shifts }: { shifts: UnaccountedShift[] }) {
+  const [openShiftId, setOpenShiftId] = useState<string | null>(null);
+  if (shifts.length === 0) return null;
+
+  return (
+    <div className="glass-panel" style={{ padding: '24px', border: '1px solid var(--danger)' }}>
+      <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--danger)' }}>
+        <AlertTriangle size={18} /> Unaccounted fares
+      </h3>
+      <div style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>
+        Fares not collected and not written off, with the card no longer out. Often a lost card.
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {shifts.map(shift => {
+          const open = openShiftId === shift.shift_id;
+          const when = shift.started_at ? new Date(shift.started_at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'unknown date';
+          return (
+            <div key={shift.shift_id} style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                <div style={{ cursor: 'pointer' }} onClick={() => setOpenShiftId(open ? null : shift.shift_id)}>
+                  <div style={{ fontWeight: 700 }}>
+                    {shift.conductor || 'Unknown conductor'}{shift.vehicle_id ? ` · vehicle ${shift.vehicle_id}` : ''}
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '2px' }}>
+                    {when}{shift.ended_at ? ` · ended by ${shift.ended_by || 'unknown'}` : ' · still open'}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--danger)' }}>
+                    ₱{(shift.unknown_cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                  <div
+                    style={{ color: 'var(--text-secondary)', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', cursor: 'pointer' }}
+                    onClick={() => setOpenShiftId(open ? null : shift.shift_id)}
+                  >
+                    {shift.unknown_trips} {shift.unknown_trips === 1 ? 'trip' : 'trips'}
+                    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              {open && (
+                <div style={{ marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {shift.trips.map(trip => (
+                    <div key={trip.trip_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '13px' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {new Date(trip.occurred_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}
+                        {trip.card_state ? ` · ${trip.card_state.replace(/_/g, ' ').toLowerCase()}` : ''}
+                        {trip.nfc_uid ? ` · ${trip.nfc_uid}` : ''}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <span style={{ fontWeight: 700, color: 'var(--danger)' }}>
+                          ₱{(trip.fare_cents / 100).toFixed(2)}
+                        </span>
+                        <Link to={`/audit?search=${trip.trip_id}`} style={{ color: 'var(--accent)' }}>
+                          audit →
+                        </Link>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
