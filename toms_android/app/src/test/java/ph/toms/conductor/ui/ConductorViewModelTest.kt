@@ -1,6 +1,7 @@
 package ph.toms.conductor.ui
 
 import android.content.Context
+import android.os.Looper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +25,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows
 import org.robolectric.annotation.Config
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.ble.RmProtocol
@@ -358,8 +360,7 @@ class ConductorViewModelTest {
     }
 
     @Test
-    fun `marking a card lost keeps the trip open and records the lost state`() = runTest {
-        advanceUntilIdle()
+    fun `marking a card lost keeps the trip open and records the lost state`() = runTest {        advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))
         advanceUntilIdle()
         val tripId = (vm.state.value.result as BoardResult.Started).trip.id
@@ -380,6 +381,57 @@ class ConductorViewModelTest {
         vm.onCardRead(read("6F:F1:AD:39", 20_000L))
         advanceUntilIdle()
         assertTrue(vm.state.value.result is BoardResult.Refused)
+    }
+
+    /** Feeds the shadowed LocationManager a fix from [atMillis], like the receiver would. */
+    private fun gnssFixAt(atMillis: Long, lat: Double = 8.10): android.location.Location =
+        android.location.Location("gps").apply {
+            latitude = lat
+            longitude = 124.0
+            accuracy = 5f
+            time = atMillis
+        }
+
+    private val lmShadow
+        get() = Shadows.shadowOf(
+            ApplicationProvider.getApplicationContext<Context>().getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager,
+        )
+
+    @Test
+    fun `a stale fix at a stop is refreshed at tap time and lands on the trip`() = runTest {
+        lmShadow.setProviderEnabled(android.location.LocationManager.GPS_PROVIDER, true)
+        // The vehicle has been waiting at the stop for almost a minute: the last fix is old.
+        lmShadow.setLastKnownLocation(android.location.LocationManager.GPS_PROVIDER, gnssFixAt(1_000L))
+        vm.startLocation()
+        waitUntil { vm.state.value.fix != null }
+
+        // The tap happens 40 s later, so the on-screen fix is stale and TripFactory would drop it.
+        vm.onCardRead(read("6F:F1:AD:39", 41_000L))
+        // Run the tap as far as its one-shot fresh-fix request, then answer it with a fresh fix.
+        testDispatcher.scheduler.runCurrent()
+        lmShadow.simulateLocation(gnssFixAt(40_000L, lat = 8.20))
+        Shadows.shadowOf(Looper.getMainLooper()).idle()
+        advanceUntilIdle()
+
+        waitUntil { runBlocking { repo.loadTrips().isNotEmpty() } }
+        val trip = runBlocking { repo.loadTrips().single() }
+        assertNotNull("the trip kept its location", trip.gps)
+        assertEquals(8.20, trip.gps!!.lat, 0.0)
+    }
+
+    @Test
+    fun `when no fresh fix comes in time the trip is still recorded without gps`() = runTest {
+        lmShadow.setProviderEnabled(android.location.LocationManager.GPS_PROVIDER, true)
+        lmShadow.setLastKnownLocation(android.location.LocationManager.GPS_PROVIDER, gnssFixAt(1_000L))
+        vm.startLocation()
+        waitUntil { vm.state.value.fix != null }
+
+        vm.onCardRead(read("6F:F1:AD:39", 41_000L))
+        // No fix is delivered; the one-shot request times out and the trip goes out without GPS.
+        advanceUntilIdle()
+        waitUntil { runBlocking { repo.loadTrips().isNotEmpty() } }
+        val trip = runBlocking { repo.loadTrips().single() }
+        assertNull(trip.gps)
     }
 
     @Test

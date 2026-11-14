@@ -480,6 +480,24 @@ class ConductorViewModel @Inject constructor(
         // A card that is already out still shows its trip, because that charges nobody.
         if (!s0.faresLoaded && (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE) return refuse(s0.noFaresMessage)
 
+        // TripFactory drops a stale fix from the trip, and while the vehicle waits at a stop no new fix
+        // arrives (the 5 m update distance never triggers), so boarding there would lose the location.
+        // When the fix is stale, take one fresh fix at tap time, briefly; if none comes in time, the
+        // trip is still recorded — just without GPS, as before.
+        val fixNow = s0.fix
+        if (fixNow != null && StopMatcher.isStale(fixNow, read.readAtMillis)) {
+            viewModelScope.launch {
+                val fresh = location.freshFix(nowMillis = read.readAtMillis)
+                startTap(read, s0, key, shiftId, fresh ?: fixNow)
+            }
+        } else {
+            viewModelScope.launch { startTap(read, s0, key, shiftId, fixNow) }
+        }
+    }
+
+    /** Prices and records the tap, with the freshest fix the phone had for it. The conductor's choices
+     *  are the ones on screen when the card was read, not whatever changed during the fix wait. */
+    private suspend fun startTap(read: CardRead, s0: ConductorState, key: String, shiftId: String, fix: GeoFix?) {
         val result = BoardFlow.handleTap(
             nfcUid = read.uidHex,
             passengers = s0.tally,
@@ -490,7 +508,7 @@ class ConductorViewModel @Inject constructor(
             tripFor = { tripByCard[it] },
             newTripId = { UUID.randomUUID().toString() },
             nowMillis = read.readAtMillis,
-            fix = s0.fix,
+            fix = fix,
         )
         when (result) {
             is TapResult.Started -> {
