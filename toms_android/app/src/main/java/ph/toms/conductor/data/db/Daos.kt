@@ -18,6 +18,9 @@ interface TripDao {
 
     @Query("SELECT * FROM trips WHERE id = :id")
     suspend fun byId(id: String): TripEntity?
+
+    @Query("SELECT * FROM trips WHERE shiftId = :shiftId ORDER BY createdAtMillis ASC")
+    suspend fun forShift(shiftId: String): List<TripEntity>
 }
 
 @Dao
@@ -34,6 +37,9 @@ interface ShiftDao {
     /** Closes the shift only if it is still open, so ending twice changes nothing the second time. */
     @Query("UPDATE shifts SET endedAtMillis = :at, endedBy = :by, summaryJson = :summary WHERE id = :id AND endedAtMillis IS NULL")
     suspend fun close(id: String, at: Long, by: String, summary: String): Int
+
+    @Query("SELECT * FROM shifts WHERE endedAtMillis IS NOT NULL ORDER BY endedAtMillis DESC")
+    suspend fun ended(): List<ShiftEntity>
 }
 
 @Dao
@@ -66,6 +72,9 @@ interface EventDao {
 
     @Query("SELECT * FROM events WHERE type = :type ORDER BY seq ASC")
     suspend fun ofType(type: String): List<EventEntity>
+
+    @Query("SELECT * FROM events WHERE type = :type AND shiftId = :shiftId ORDER BY seq ASC")
+    suspend fun ofTypeInShift(type: String, shiftId: String): List<EventEntity>
 
     @Query("SELECT COALESCE(MAX(seq), 0) FROM events")
     suspend fun maxSeq(): Long

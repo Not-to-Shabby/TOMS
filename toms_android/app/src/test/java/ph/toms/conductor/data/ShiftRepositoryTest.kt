@@ -361,4 +361,94 @@ class ShiftRepositoryTest {
         repo.endShift("missing", "juan")
         assertEquals("ending a shift that does not exist wrote nothing, so it did not kick", 4, kick.count)
     }
+
+    // ---- late payments (fare_recovered) and the shift history
+
+    @Test fun `fare recovered records the late payment against the write-off it settles`() = runBlocking {
+        val s = started(open("juan"))
+        val t = trip("1", 1500)
+        board(s.id, t)
+        assertTrue(repo.writeOffAndRelease(s.id, t.id, "juan"))
+        val tripEventsBefore = events().filter { it.tripId == t.id }.map { it.type }
+        val kicksBefore = kick.count
+
+        assertTrue(repo.recordFareRecovered(t.id, actingConductor = "maria", reason = "paid late at the terminal"))
+
+        val recovered = events().filter { it.type == EventTypes.FARE_RECOVERED }
+        assertEquals(1, recovered.size)
+        assertEquals("tagged to the shift the trip belongs to", s.id, recovered.single().shiftId)
+        assertEquals(t.id, recovered.single().tripId)
+        val p = json.parseToJsonElement(recovered.single().payload).jsonObject
+        assertEquals("1", p["tripId"]!!.jsonPrimitive.content)
+        assertEquals("card-UID1", p["cardUuid"]!!.jsonPrimitive.content)
+        assertEquals("UID1", p["nfcUid"]!!.jsonPrimitive.content)
+        assertEquals("1500", p["amountCentavos"]!!.jsonPrimitive.content)
+        assertEquals("paid late at the terminal", p["reason"]!!.jsonPrimitive.content)
+        assertEquals("juan", p["shiftConductor"]!!.jsonPrimitive.content)
+        assertEquals("maria", p["actingConductor"]!!.jsonPrimitive.content)
+
+        // A recovery is an audit record only: no card state changed, no new terminal anything.
+        assertEquals(CardState.AVAILABLE, repo.loadCardStates()["UID1"])
+        assertEquals(
+            "only the recovery was added to the trip's history",
+            tripEventsBefore + EventTypes.FARE_RECOVERED,
+            events().filter { it.tripId == t.id }.map { it.type },
+        )
+        assertEquals("the recovery asked for a drain", kicksBefore + 1, kick.count)
+    }
+
+    @Test fun `fare recovered is refused for a trip never written off a second recovery or a blank reason`() = runBlocking {
+        val s = started(open("juan"))
+        val paid = trip("p"); board(s.id, paid); pay(s.id, paid)
+        assertFalse(repo.recordFareRecovered(paid.id, "juan", "this one was never written off"))
+
+        val unpaid = trip("u"); board(s.id, unpaid)
+        assertTrue(repo.writeOffAndRelease(s.id, unpaid.id, "juan"))
+        assertTrue(repo.recordFareRecovered(unpaid.id, "juan", "paid at the office"))
+        val count = events().size
+
+        assertFalse("a second recovery writes nothing", repo.recordFareRecovered(unpaid.id, "juan", "paid twice"))
+        assertFalse("a blank reason records nothing", repo.recordFareRecovered(unpaid.id, "juan", "   "))
+        assertFalse("a blank actor records nothing", repo.recordFareRecovered(unpaid.id, "  ", "paid again"))
+        assertFalse(repo.recordFareRecovered("missing", "juan", "no such trip"))
+        assertEquals(count, events().size)
+    }
+
+    @Test fun `the shift history reads ended shifts write-offs with reasons and recoveries per shift`() = runBlocking {
+        val a = started(open("juan"))
+        val t1 = trip("1", 1500); board(a.id, t1); pay(a.id, t1)
+        now += 1
+        val t2 = trip("2", 800); board(a.id, t2)
+        repo.writeOffAndRelease(a.id, t2.id, "juan")
+        now += 60_000
+        repo.endShift(a.id, "juan")
+        assertTrue(repo.recordFareRecovered(t2.id, "maria", "paid the next day"))
+
+        val ended = repo.endedShifts()
+        assertEquals(1, ended.size)
+        assertEquals("juan", ended.single().conductor)
+        assertNotNull("the frozen summary is there", repo.frozenSummary(a.id))
+
+        val written = repo.writtenOffTripsOf(a.id)
+        assertEquals(1, written.size)
+        assertEquals("2", written.single().trip.id)
+        assertEquals("uncollected at end of shift", written.single().reason)
+        assertEquals(800, written.single().amountCentavos)
+
+        val recoveries = repo.recoveriesOf(a.id)
+        assertEquals(1, recoveries.size)
+        assertEquals("2", recoveries.single().tripId)
+        assertEquals(800, recoveries.single().amountCentavos)
+        assertEquals("maria", recoveries.single().actingConductor)
+        assertEquals("paid the next day", recoveries.single().reason)
+        assertEquals("another shift reads nothing of this one", 0, repo.recoveriesOf("other").size)
+
+        assertEquals("boarding order", listOf("1", "2"), repo.tripsOfShift(a.id).map { it.id })
+
+        val b = started(open("maria"))
+        assertEquals("shift b has no write-offs of its own", 0, repo.writtenOffTripsOf(b.id).size)
+        now += 1
+        repo.endShift(b.id, "maria")
+        assertEquals("newest first", listOf(b.id, a.id), repo.endedShifts().map { it.id })
+    }
 }

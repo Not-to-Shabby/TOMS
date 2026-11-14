@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,7 @@ fun BoardScreen(
     onCalc: (Trip) -> Unit,
     onReturn: (Trip) -> Unit,
     onClearAlarm: (Trip) -> Unit,
+    onLost: (Trip) -> Unit,
     onUseNearest: () -> Unit,
     onCalcPreview: () -> Unit,
     onRetry: () -> Unit = {},
@@ -122,7 +125,7 @@ fun BoardScreen(
 
         QuietButton("Clear", onClear, Modifier.fillMaxWidth())
 
-        ResultArea(state, nameOf, onPaid, onCalc, onReturn, onClearAlarm, Modifier.weight(1f))
+        ResultArea(state, nameOf, onPaid, onCalc, onReturn, onClearAlarm, onLost, Modifier.weight(1f))
     }
 }
 
@@ -196,6 +199,7 @@ private fun ResultArea(
     onCalc: (Trip) -> Unit,
     onReturn: (Trip) -> Unit,
     onClearAlarm: (Trip) -> Unit,
+    onLost: (Trip) -> Unit,
     modifier: Modifier,
 ) {
     when (val r = state.result) {
@@ -213,8 +217,8 @@ private fun ResultArea(
             Text(r.message, style = MaterialTheme.typography.titleLarge, color = TomsColors.Bad, textAlign = TextAlign.Center)
         }
 
-        is BoardResult.Started -> TripCard(r.trip, r.state, "Started", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm)
-        is BoardResult.Existing -> TripCard(r.trip, r.state, "Already on a trip", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm)
+        is BoardResult.Started -> TripCard(r.trip, r.state, "Started", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm, onLost)
+        is BoardResult.Existing -> TripCard(r.trip, r.state, "Already on a trip", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm, onLost)
     }
 }
 
@@ -229,6 +233,7 @@ private fun TripCard(
     onCalc: (Trip) -> Unit,
     onReturn: (Trip) -> Unit,
     onClearAlarm: (Trip) -> Unit,
+    onLost: (Trip) -> Unit,
 ) {
     val (words, status) = stateWords(state)
     val bg = when (status) {
@@ -237,6 +242,8 @@ private fun TripCard(
         Status.Warn -> TomsColors.WarnBg
         Status.Neutral -> TomsColors.Surface
     }
+    var confirmLost by remember { mutableStateOf(false) }
+    if (confirmLost) ConfirmMarkLostDialog(onConfirm = { confirmLost = false; onLost(trip) }, onDismiss = { confirmLost = false })
     Column(modifier.fillMaxWidth().background(bg, RoundedCornerShape(16.dp)).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatusChip(words, status)
@@ -248,13 +255,36 @@ private fun TripCard(
                 CardState.ASSIGNED_UNPAID -> {
                     BigButton("Paid", { onPaid(trip) }, Modifier.weight(1f))
                     QuietButton("Calc", { onCalc(trip) }, Modifier.weight(1f))
+                    QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
                 }
-                CardState.ASSIGNED_PAID -> BigButton("Return card", { onReturn(trip) }, Modifier.weight(1f))
+                CardState.ASSIGNED_PAID -> {
+                    BigButton("Return card", { onReturn(trip) }, Modifier.weight(1f))
+                    QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
+                }
                 CardState.RETURNED_UNPAID -> BigButton("Clear alarm", { onClearAlarm(trip) }, Modifier.weight(1f))
                 else -> Unit
             }
         }
     }
+}
+
+/** Asks before a card is marked lost. A lost card is not a write-off: the trip stays open, and the
+ *  card stays unusable until reconciliation. The trip is still settled when the shift ends. */
+@Composable
+fun ConfirmMarkLostDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Mark this card lost?") },
+        text = {
+            Text(
+                "The card stays lost until it is reconciled, so it cannot be used again. Its trip stays " +
+                    "open and is still collected or written off when the shift ends. A lost card is not a write-off.",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("Mark lost") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable

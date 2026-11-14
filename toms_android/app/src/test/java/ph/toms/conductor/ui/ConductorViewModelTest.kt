@@ -358,6 +358,31 @@ class ConductorViewModelTest {
     }
 
     @Test
+    fun `marking a card lost keeps the trip open and records the lost state`() = runTest {
+        advanceUntilIdle()
+        vm.onCardRead(read("6F:F1:AD:39", 10_000L))
+        advanceUntilIdle()
+        val tripId = (vm.state.value.result as BoardResult.Started).trip.id
+
+        vm.markLost(tripId)
+        advanceUntilIdle()
+
+        // The Board card follows the state, and a lost card is not a write-off: nothing is settled.
+        assertEquals(CardState.LOST, (vm.state.value.result as BoardResult.Started).state)
+        assertEquals(Cue.Done, feedback.cues.last())
+        // A lost card leaves the Collect list (its fare is settled and reconciled later, not collected here).
+        assertTrue("the lost card is not on Collect", vm.state.value.openTrips.isEmpty())
+        // The state on screen is synchronous; the recorded event lands on Room's own thread.
+        waitUntil { runBlocking { db.events().all().any { it.cardState == CardState.LOST.name } } }
+        assertTrue("nothing was written off", runBlocking { repo.writtenOffTripIds().isEmpty() })
+
+        // The lost card cannot start another trip; it is refused with where to look.
+        vm.onCardRead(read("6F:F1:AD:39", 20_000L))
+        advanceUntilIdle()
+        assertTrue(vm.state.value.result is BoardResult.Refused)
+    }
+
+    @Test
     fun `openCalcFor pre-populates calculator with trip fare and switches to Calc tab`() = runTest {
         advanceUntilIdle()
         vm.onCardRead(read("6F:F1:AD:39", 10_000L))

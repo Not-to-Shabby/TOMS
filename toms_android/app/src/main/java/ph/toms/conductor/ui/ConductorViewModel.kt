@@ -538,6 +538,11 @@ class ConductorViewModel @Inject constructor(
 
     fun markPaid(tripId: String) = apply(tripId, CardEvent.MARK_PAID)
     fun returnCard(tripId: String) = apply(tripId, CardEvent.RETURNED_AT_TERMINAL)
+
+    /** Marks the trip's card lost after the confirm step. The trip stays open and the card stays lost
+     *  until reconciliation; the state machine refuses to mark anything but a card still on a trip. */
+    fun markLost(tripId: String) = apply(tripId, CardEvent.MARK_LOST)
+
     fun clearAlarm(tripId: String) {
         rmLink.sendAlarmClear()
         apply(tripId, CardEvent.CONDUCTOR_RESOLVE)
