@@ -2,7 +2,6 @@ package ph.toms.conductor.telemetry
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.coroutines.CoroutineScope
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.domain.GeoFix
 import ph.toms.conductor.sync.FakeUplinkManager
@@ -12,10 +11,11 @@ import ph.toms.conductor.sync.UploadStats
 class FakeDeviceStatusReporter : DeviceStatusReporter {
     var starts = 0
     var stops = 0
+    var pauses = 0
     val startedFor = mutableListOf<String>()
     val stoppedFor = mutableListOf<String>()
 
-    override fun start(scope: CoroutineScope, openShiftId: String, fixProvider: () -> GeoFix?) {
+    override fun start(openShiftId: String, fixProvider: () -> GeoFix?) {
         starts++
         startedFor.add(openShiftId)
     }
@@ -25,9 +25,14 @@ class FakeDeviceStatusReporter : DeviceStatusReporter {
         stoppedFor.add(endedShiftId)
     }
 
+    override fun pause() {
+        pauses++
+    }
+
     fun reset() {
         starts = 0
         stops = 0
+        pauses = 0
         startedFor.clear()
         stoppedFor.clear()
     }
@@ -45,4 +50,3 @@ fun testDeviceStatusReporter(
     trips = repo, outbox = db.outbox(), events = db.events(),
     uplink = uplink, rmLink = rmLink, stats = stats, context = context,
 )
-

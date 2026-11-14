@@ -27,6 +27,7 @@ import ph.toms.conductor.data.TripRepository
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.fakeJwt
 import ph.toms.conductor.location.LocationTracker
+import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.sync.ConductorAuthService
 import ph.toms.conductor.sync.ConductorLogin
 
@@ -69,7 +70,7 @@ class SessionRestoreTest {
 
     /** Starts the view model the way the app does on launch and lets its startup work finish. */
     private fun launch(): SessionViewModel {
-        val vm = SessionViewModel(repo(), trips, location)
+        val vm = SessionViewModel(repo(), trips, location, FakeDeviceStatusReporter())
         val end = System.currentTimeMillis() + 300
         while (System.currentTimeMillis() < end) {
             dispatcher.scheduler.advanceUntilIdle()
