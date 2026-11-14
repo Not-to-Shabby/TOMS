@@ -55,6 +55,7 @@ fun CollectScreen(
     onCalc: (Trip) -> Unit,
     onReturn: (Trip) -> Unit,
     onClearAlarm: (Trip) -> Unit,
+    onLost: (Trip) -> Unit,
 ) {
     val nameOf = { id: String? -> if (id == null) "Regular" else state.config.category(id)?.name ?: id }
     val owed = CollectList.owedCentavos(state.openTrips)
@@ -71,7 +72,7 @@ fun CollectScreen(
         } else {
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Gap)) {
                 items(state.openTrips, key = { it.trip.id }) { open ->
-                    CollectRow(open, focused = open.trip.id == state.focusTripId, nameOf, onPaid, onCalc, onReturn, onClearAlarm)
+                    CollectRow(open, focused = open.trip.id == state.focusTripId, nameOf, onPaid, onCalc, onReturn, onClearAlarm, onLost)
                 }
             }
         }
@@ -87,8 +88,11 @@ private fun CollectRow(
     onCalc: (Trip) -> Unit,
     onReturn: (Trip) -> Unit,
     onClearAlarm: (Trip) -> Unit,
+    onLost: (Trip) -> Unit,
 ) {
     val (words, status) = stateWords(open.state)
+    var confirmLost by remember { mutableStateOf(false) }
+    if (confirmLost) ConfirmMarkLostDialog(onConfirm = { confirmLost = false; onLost(open.trip) }, onDismiss = { confirmLost = false })
     Column(
         Modifier.fillMaxWidth()
             .background(TomsColors.Surface, RoundedCornerShape(12.dp))
@@ -106,8 +110,12 @@ private fun CollectRow(
                 CardState.ASSIGNED_UNPAID -> {
                     BigButton("Paid", { onPaid(open.trip) }, Modifier.weight(1f))
                     QuietButton("Calc", { onCalc(open.trip) }, Modifier.weight(1f))
+                    QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
                 }
-                CardState.ASSIGNED_PAID -> BigButton("Card returned", { onReturn(open.trip) }, Modifier.weight(1f))
+                CardState.ASSIGNED_PAID -> {
+                    BigButton("Card returned", { onReturn(open.trip) }, Modifier.weight(1f))
+                    QuietButton("Lost", { confirmLost = true }, Modifier.weight(1f))
+                }
                 CardState.RETURNED_UNPAID -> BigButton("Clear alarm", { onClearAlarm(open.trip) }, Modifier.weight(1f))
                 else -> Unit
             }

@@ -17,6 +17,7 @@ import ph.toms.conductor.ui.EndShiftDialog
 import ph.toms.conductor.ui.LoginScreen
 import ph.toms.conductor.ui.SessionViewModel
 import ph.toms.conductor.ui.ShiftEndedDialog
+import ph.toms.conductor.ui.ShiftHistoryViewModel
 import ph.toms.conductor.ui.SyncViewModel
 import ph.toms.conductor.ui.theme.TomsTheme
 
@@ -27,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private val session: SessionViewModel by viewModels()
     private val conductor: ConductorViewModel by viewModels()
     private val sync: SyncViewModel by viewModels()
+    private val history: ShiftHistoryViewModel by viewModels()
 
     @Inject lateinit var nfcReader: NfcReader
 
@@ -83,6 +85,7 @@ class MainActivity : ComponentActivity() {
                         ConductorApp(
                             vm = conductor,
                             syncVm = sync,
+                            historyVm = history,
                             nfcReader = nfcReader,
                             header = "$vehicleDisplay  ·  ${assignment.route.name}",
                             state = c,
