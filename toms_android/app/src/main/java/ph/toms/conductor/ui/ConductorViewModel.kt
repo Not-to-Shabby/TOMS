@@ -64,6 +64,11 @@ sealed interface BoardResult {
     data class Started(val trip: Trip, val state: CardState = CardState.ASSIGNED_UNPAID) : BoardResult
     data class Existing(val trip: Trip, val state: CardState) : BoardResult
     data class Refused(val message: String) : BoardResult
+
+    /** The tap was accepted and is waiting for one fresh fix (the vehicle has been waiting at a stop,
+     *  or there was no fix at all). Shown for a few seconds at most; the tap then completes as Started,
+     *  or records without GPS on timeout. */
+    object GettingLocation : BoardResult
 }
 
 /** What End Shift has to ask before it can close a shift. Built from the shift's own open trips. */
@@ -169,6 +174,11 @@ class ConductorViewModel @Inject constructor(
     private val debouncer = TapDebouncer()
     private val cardStates = HashMap<String, CardState>()
     private val tripByCard = HashMap<String, Trip>()
+
+    /** Cards whose tap is still waiting for its tap-time fresh fix. A second tap of the same card
+     *  inside that wait returns quietly: the first tap's result is about to appear, and without this
+     *  guard both taps would pass the not-yet-updated card checks and start two trips. */
+    private val pendingFreshFix = HashSet<String>()
     private var locationJob: Job? = null
 
     init {
@@ -459,6 +469,10 @@ class ConductorViewModel @Inject constructor(
 
         val key = ApprovedCards.normalizeUid(read.uidHex)
 
+        // A tap of this card is already being processed (waiting for its fresh fix); the first tap
+        // will show its result on the Board shortly.
+        if (key in pendingFreshFix) return
+
         // A trip is only ever started from the Board. Elsewhere a tap finds the card's trip, or says why not,
         // so a stray tap while collecting cannot create a trip for whatever group was left on the Board.
         if (s0.tab != Tab.Board) {
@@ -480,6 +494,32 @@ class ConductorViewModel @Inject constructor(
         // A card that is already out still shows its trip, because that charges nobody.
         if (!s0.faresLoaded && (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE) return refuse(s0.noFaresMessage)
 
+        // Only a trip about to START needs a location; a card already on a trip just shows its trip.
+        // TripFactory drops a stale fix from the trip, and while the vehicle waits at a stop no new fix
+        // arrives (the 5 m update distance never triggers) — after a cold start there may be none at
+        // all. Either way, take one fresh fix at tap time, briefly; if none comes in time, the trip is
+        // still recorded — just without GPS, as before.
+        val fixUsable = s0.fix != null && !StopMatcher.isStale(s0.fix, read.readAtMillis)
+        val cardAvailable = (cardStates[key] ?: CardState.AVAILABLE) == CardState.AVAILABLE
+        if (cardAvailable && !fixUsable) {
+            pendingFreshFix.add(key)
+            _state.update { it.copy(result = BoardResult.GettingLocation) }
+            viewModelScope.launch {
+                val fresh = try {
+                    location.freshFix(nowMillis = read.readAtMillis)
+                } finally {
+                    pendingFreshFix.remove(key)
+                }
+                startTap(read, s0, key, shiftId, fresh ?: s0.fix)
+            }
+        } else {
+            viewModelScope.launch { startTap(read, s0, key, shiftId, s0.fix) }
+        }
+    }
+
+    /** Prices and records the tap, with the freshest fix the phone had for it. The conductor's choices
+     *  are the ones on screen when the card was read, not whatever changed during the fix wait. */
+    private suspend fun startTap(read: CardRead, s0: ConductorState, key: String, shiftId: String, fix: GeoFix?) {
         val result = BoardFlow.handleTap(
             nfcUid = read.uidHex,
             passengers = s0.tally,
@@ -490,7 +530,7 @@ class ConductorViewModel @Inject constructor(
             tripFor = { tripByCard[it] },
             newTripId = { UUID.randomUUID().toString() },
             nowMillis = read.readAtMillis,
-            fix = s0.fix,
+            fix = fix,
         )
         when (result) {
             is TapResult.Started -> {

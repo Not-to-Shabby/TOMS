@@ -217,6 +217,21 @@ private fun ResultArea(
             Text(r.message, style = MaterialTheme.typography.titleLarge, color = TomsColors.Bad, textAlign = TextAlign.Center)
         }
 
+        BoardResult.GettingLocation -> Column(
+            modifier.fillMaxWidth().background(TomsColors.Paper, RoundedCornerShape(16.dp)).padding(16.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Getting location…", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
+            Text(
+                "The vehicle has been waiting, so the phone is taking one fresh fix. Boarding continues " +
+                    "as soon as it arrives — or without GPS after a few seconds.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TomsColors.InkSoft,
+                textAlign = TextAlign.Center,
+            )
+        }
+
         is BoardResult.Started -> TripCard(r.trip, r.state, "Started", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm, onLost)
         is BoardResult.Existing -> TripCard(r.trip, r.state, "Already on a trip", nameOf, modifier, onPaid, onCalc, onReturn, onClearAlarm, onLost)
     }
