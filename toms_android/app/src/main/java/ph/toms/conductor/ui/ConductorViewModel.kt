@@ -48,6 +48,7 @@ import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.ble.RmEvent
+import ph.toms.conductor.ble.RmReadIntake
 import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.telemetry.DeviceStatusReporter
 import ph.toms.conductor.ble.RmProtocol
@@ -155,6 +156,7 @@ class ConductorViewModel @Inject constructor(
     private val rmLink: ReturnMachineLink,
     private val shiftService: ShiftServiceController = ShiftServiceController.None,
     private val statusReporter: DeviceStatusReporter,
+    private val rmIntake: RmReadIntake,
     initial: InitialConfig,
 ) : ViewModel() {
 
@@ -220,21 +222,31 @@ class ConductorViewModel @Inject constructor(
         viewModelScope.launch {
             rmLink.connectionState.collect { conn ->
                 _state.update { it.copy(rmConnection = conn) }
-                if (conn is RmConnectionState.Connected) {
-                    syncFullCardSnapshotToRm()
+                when (conn) {
+                    is RmConnectionState.Connected -> {
+                        rmIntake.onConnected(conn.deviceAddress)
+                        syncFullCardSnapshotToRm()
+                    }
+                    RmConnectionState.Disconnected -> rmIntake.onDisconnected()
+                    else -> {}
                 }
             }
         }
         viewModelScope.launch {
             rmLink.lastHeartbeat.collect { hb ->
+                hb?.let(rmIntake::onHeartbeat)
                 _state.update { it.copy(rmHeartbeat = hb) }
             }
         }
         viewModelScope.launch {
             rmLink.events.collect { event ->
                 when (event) {
-                    is RmEvent.PaidCheckReceived -> handleTerminalPaidCheck(event.checkSeq, event.uidHex)
+                    is RmEvent.PaidCheckReceived -> {
+                        rmIntake.onPaidCheck(event.checkSeq)
+                        handleTerminalPaidCheck(event.checkSeq, event.uidHex)
+                    }
                     is RmEvent.CardReadReceived -> {
+                        rmIntake.onCardRead(event.read)
                         val read = CardRead(event.read.uidHex, listOf("PN532"), event.read.timestamp * 1000L)
                         _state.update { it.copy(recentReads = (listOf(read) + it.recentReads).take(30)) }
                     }
@@ -303,6 +315,7 @@ class ConductorViewModel @Inject constructor(
             else -> RmProtocol.VERDICT_UNPAID
         }
         rmLink.sendPaidReply(checkSeq, verdict)
+        rmIntake.onPaidReplySent(checkSeq)
     }
 
     private fun syncFullCardSnapshotToRm() {

@@ -16,6 +16,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject
@@ -40,6 +41,7 @@ import kotlinx.coroutines.withTimeout
 @SuppressLint("MissingPermission")
 class AndroidBleReturnMachineLink @Inject constructor(
     @ApplicationContext private val context: Context,
+    trust: RmMachineTrust,
 ) : ReturnMachineLink {
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -56,18 +58,36 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private val _events = MutableSharedFlow<RmEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<RmEvent> = _events.asSharedFlow()
 
+    private val _droppedCount = MutableStateFlow(0)
+    override val droppedCount: StateFlow<Int> = _droppedCount.asStateFlow()
+
+    /** The address of the machine the GATT is attached to: the per-machine id the trust is keyed by. */
+    private var machineAddress: String? = null
+
+    /** Everything signed the machine sends is verified here before the app believes it. */
+    private val gate = RmNotifyGate(
+        trust,
+        machineId = { machineAddress },
+        onDrop = { reason, suffix ->
+            _droppedCount.value += 1
+            Log.w("RmTrust", "dropped notify 0x%02x: %s".format(suffix, reason))
+        },
+    )
+
     private var gatt: BluetoothGatt? = null
     private var scanning = false
     private val gattMutex = Mutex()
 
     private var descDone: CompletableDeferred<Int>? = null
     private var charWritten: CompletableDeferred<Int>? = null
+    private var provisionReply: CompletableDeferred<Int>? = null
 
     // Characteristic handles
     private var charPaidReply: BluetoothGattCharacteristic? = null
     private var charStateUpdate: BluetoothGattCharacteristic? = null
     private var charTimeSync: BluetoothGattCharacteristic? = null
     private var charDiag: BluetoothGattCharacteristic? = null
+    private var charAck: BluetoothGattCharacteristic? = null
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -134,14 +154,17 @@ class AndroidBleReturnMachineLink @Inject constructor(
             charStateUpdate = service.getCharacteristic(RmProtocol.CHAR_STATE_UPDATE)
             charTimeSync = service.getCharacteristic(RmProtocol.CHAR_TIME_SYNC)
             charDiag = service.getCharacteristic(RmProtocol.CHAR_DIAG)
+            charAck = service.getCharacteristic(RmProtocol.CHAR_ACK)
 
-            // Subscribe to notifications strictly sequentially, awaiting each onDescriptorWrite
+            // Subscribe to notifications strictly sequentially, awaiting each onDescriptorWrite.
+            // Diag is subscribed too: it carries the provisioning status reply (0x86).
             scope.launch {
                 val notifyChars = listOf(
                     service.getCharacteristic(RmProtocol.CHAR_PAID_CHECK),
                     service.getCharacteristic(RmProtocol.CHAR_CARD_READ),
                     service.getCharacteristic(RmProtocol.CHAR_HEARTBEAT),
                     service.getCharacteristic(RmProtocol.CHAR_RM_ACK),
+                    service.getCharacteristic(RmProtocol.CHAR_DIAG),
                 ).filterNotNull()
 
                 for (c in notifyChars) {
@@ -185,27 +208,30 @@ class AndroidBleReturnMachineLink @Inject constructor(
     }
 
     private fun handleNotification(uuid: UUID, value: ByteArray) {
-        when (uuid) {
-            RmProtocol.CHAR_PAID_CHECK -> {
+        val suffix = RmProtocol.suffixOf(uuid)
+        when (suffix) {
+            RmSignature.SUFFIX_CARD_READ, RmSignature.SUFFIX_HEARTBEAT, RmSignature.SUFFIX_RM_ACK -> {
+                // Verified or dropped by the gate; nothing unverified reaches the app from here.
+                val payload = gate.accept(suffix, value) ?: return
+                when (suffix) {
+                    RmSignature.SUFFIX_CARD_READ ->
+                        RmProtocol.decodeCardReadStrict(payload)?.let { _events.tryEmit(RmEvent.CardReadReceived(it)) }
+                    RmSignature.SUFFIX_HEARTBEAT ->
+                        RmProtocol.decodeHeartbeatStrict(payload)?.let {
+                            _lastHeartbeat.value = it
+                            _events.tryEmit(RmEvent.HeartbeatReceived(it))
+                        }
+                    else ->
+                        RmProtocol.decodeRmAckStrict(payload)?.let { _events.tryEmit(RmEvent.RmAckReceived(it)) }
+                }
+            }
+            RmProtocol.suffixOf(RmProtocol.CHAR_PAID_CHECK) -> {
                 RmProtocol.decodePaidCheck(value)?.let {
                     _events.tryEmit(RmEvent.PaidCheckReceived(it.checkSeq, it.uid, it.uidHex))
                 }
             }
-            RmProtocol.CHAR_CARD_READ -> {
-                RmProtocol.decodeCardRead(value)?.let {
-                    _events.tryEmit(RmEvent.CardReadReceived(it))
-                }
-            }
-            RmProtocol.CHAR_HEARTBEAT -> {
-                RmProtocol.decodeHeartbeat(value)?.let {
-                    _lastHeartbeat.value = it
-                    _events.tryEmit(RmEvent.HeartbeatReceived(it))
-                }
-            }
-            RmProtocol.CHAR_RM_ACK -> {
-                RmProtocol.decodeRmAck(value)?.let {
-                    _events.tryEmit(RmEvent.RmAckReceived(it))
-                }
+            RmProtocol.suffixOf(RmProtocol.CHAR_DIAG) -> {
+                RmProtocol.decodeProvisionReply(value)?.let { status -> provisionReply?.complete(status) }
             }
         }
     }
@@ -250,6 +276,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     }
 
     private fun connectTo(device: BluetoothDevice, name: String) {
+        machineAddress = device.address
         _connectionState.value = RmConnectionState.Connecting(name, device.address)
         gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -263,6 +290,8 @@ class AndroidBleReturnMachineLink @Inject constructor(
         charStateUpdate = null
         charTimeSync = null
         charDiag = null
+        charAck = null
+        machineAddress = null
         try {
             gatt?.close()
         } catch (_: Exception) {}
@@ -305,6 +334,11 @@ class AndroidBleReturnMachineLink @Inject constructor(
         _connectionState.value = RmConnectionState.Disconnected
     }
 
+    private companion object {
+        /** The machine answers the key provisioning write within one connection interval or two. */
+        const val PROVISION_REPLY_TIMEOUT_MS = 5_000L
+    }
+
     override fun sendPaidReply(checkSeq: Long, verdict: Int) {
         val g = gatt ?: return
         val ch = charPaidReply ?: return
@@ -340,6 +374,34 @@ class AndroidBleReturnMachineLink @Inject constructor(
         val bytes = RmProtocol.encodeAlarmClear()
         scope.launch {
             writeCharWithResp(g, ch, bytes)
+        }
+    }
+
+    override fun sendReadAck(upToReadSeq: Long) {
+        val g = gatt ?: return
+        val ch = charAck ?: return
+        val bytes = RmProtocol.encodeReadAck(upToReadSeq)
+        scope.launch {
+            writeCharWithResp(g, ch, bytes)
+        }
+    }
+
+    override suspend fun sendProvisionKey(key: ByteArray): Int? {
+        // writeCharWithResp takes the GATT mutex itself, so the await must stay outside it.
+        val deferred = CompletableDeferred<Int>()
+        provisionReply = deferred
+        try {
+            val g = gatt ?: return null
+            val ch = charDiag ?: return null
+            val written = writeCharWithResp(g, ch, RmProtocol.encodeProvisionKey(key))
+            if (!written) return null
+            return try {
+                withTimeout(PROVISION_REPLY_TIMEOUT_MS) { deferred.await() }
+            } catch (_: Exception) {
+                null
+            }
+        } finally {
+            provisionReply = null
         }
     }
 

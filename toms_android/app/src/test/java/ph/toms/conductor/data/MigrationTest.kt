@@ -92,6 +92,33 @@ class MigrationTest {
         helper.runMigrationsAndValidate(name, 2, true, *ALL_MIGRATIONS).close()
     }
 
+    @Test fun `version 5 gains the Return Machine read table with its unique machine and sequence key`() {
+        val name6 = "$name-5-6"
+        helper.createDatabase(name6, 5).close()
+        val db = helper.runMigrationsAndValidate(name6, 6, true, *ALL_MIGRATIONS)
+
+        // The pair (machineId, readSeq) is the primary key: a resent read is a no-op insert.
+        db.execSQL(
+            "INSERT INTO rm_reads (machineId, readSeq, uidHex, atype, stateCached, readAtMillis, arrivalMillis, stored) " +
+                "VALUES ('AA:BB', 7, '6FF1AD39', 3, 1, 1000, 2000, 1)",
+        )
+        try {
+            db.execSQL(
+                "INSERT INTO rm_reads (machineId, readSeq, uidHex, atype, stateCached, readAtMillis, arrivalMillis, stored) " +
+                    "VALUES ('AA:BB', 7, '6FF1AD39', 3, 1, 1000, 3000, 1)",
+            )
+            throw AssertionError("a duplicate (machineId, readSeq) must violate the unique key")
+        } catch (expected:android.database.sqlite.SQLiteConstraintException) {
+            // the de-duplication guarantee
+        }
+        db.query("SELECT uidHex, stored FROM rm_reads WHERE machineId = 'AA:BB' AND readSeq = 7").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("6FF1AD39", c.getString(0))
+            assertEquals(1, c.getInt(1))
+        }
+        db.close()
+    }
+
     @Test fun `a migrated database opens through Room and reads the old trip as one passenger`() = runBlocking {
         helper.createDatabase(name, 1).apply {
             insertV1Trip(this, "old", "pwd", 1200, 300, gps = false)

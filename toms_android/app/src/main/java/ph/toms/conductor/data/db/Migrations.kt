@@ -93,7 +93,29 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
-val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+/**
+ * The Return Machine's card reads, keyed by (machine id, read_seq): the unique pair is what makes a
+ * resent read a no-op insert (firmware/PROTOCOL.md section 6). Reads the machine made while the phone
+ * was away are resent on every connection until acked, so the table must tolerate exact repeats.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS rm_reads (
+                machineId TEXT NOT NULL,
+                readSeq INTEGER NOT NULL,
+                uidHex TEXT NOT NULL,
+                atype INTEGER NOT NULL,
+                stateCached INTEGER NOT NULL,
+                readAtMillis INTEGER NOT NULL,
+                arrivalMillis INTEGER NOT NULL,
+                stored INTEGER NOT NULL,
+                PRIMARY KEY(machineId, readSeq))""",
+        )
+    }
+}
+
+val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
 
 @kotlinx.serialization.Serializable
 data class PassengerLineRecord(

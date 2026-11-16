@@ -34,6 +34,7 @@ import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ShiftTime
 import ph.toms.conductor.domain.formatCentavos
 import ph.toms.conductor.domain.unaccountedWarningText
+import ph.toms.conductor.domain.unverifiedWarningText
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
 import ph.toms.conductor.ui.theme.QuietButton
@@ -166,6 +167,12 @@ private fun ShiftDetailContent(
             unaccountedWarningText(summary.unknownCentavos)?.let { warning ->
                 Column(Modifier.fillMaxWidth().background(TomsColors.BadBg, RoundedCornerShape(12.dp)).padding(12.dp)) {
                     Line("Not accounted for", peso(summary.unknownCentavos), TomsColors.Bad)
+                    Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                }
+            }
+            unverifiedWarningText(summary.unverifiedReads)?.let { warning ->
+                Column(Modifier.fillMaxWidth().background(TomsColors.BadBg, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                    Line("Unverified reads", summary.unverifiedReads.toString(), TomsColors.Bad)
                     Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
                 }
             }

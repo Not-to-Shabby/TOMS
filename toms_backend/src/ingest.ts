@@ -133,6 +133,39 @@ const deviceStatusPayload = z
   })
   .strict();
 
+// Return Machine health events from the phone's verified link (RmReadIntake). Strict like
+// device_status, and deliberately without any card UID: these carry the machine's Bluetooth address,
+// read sequence numbers and counts, never passenger card data. machineId is the machine's BLE address.
+const rmMachineId = z.string().trim().min(1).max(64);
+const rmSeq = z.number().int().min(0).max(4_294_967_295);
+
+const rmStoredReadPayload = z
+  .object({
+    machineId: rmMachineId,
+    readSeq: rmSeq,
+    buffered: z.number().int().min(0).max(65_535),
+    atMillis: millis,
+  })
+  .strict();
+
+const rmUnverifiedPayload = z
+  .object({
+    machineId: rmMachineId,
+    checkSeq: rmSeq,
+    delayMs: z.number().int().min(0),
+    reason: z.enum(['timeout', 'disconnected']),
+  })
+  .strict();
+
+const rmLostGapPayload = z
+  .object({
+    machineId: rmMachineId,
+    lastSeq: rmSeq,
+    readSeq: rmSeq,
+    gap: z.number().int().min(1),
+  })
+  .strict();
+
 export interface Rejection {
   index: number;
   event_id: string | null;
@@ -245,6 +278,19 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
     // Validated and stored with its payload; the device_status view (migration 012) extracts the
     // fields for querying. It links to no trip and carries no passenger data.
     const p = deviceStatusPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+  } else if (e.type === 'rm_stored_read') {
+    // Return Machine health (migration 014's rm_health view counts them). A read the machine flushed
+    // from its flash log because the phone was away. No trip or card link by design.
+    const p = rmStoredReadPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+  } else if (e.type === 'rm_unverified') {
+    // The phone answered a paid check late or never, so the machine played the unverified tone.
+    const p = rmUnverifiedPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+  } else if (e.type === 'rm_lost_gap') {
+    // The read_seq jumped ahead after a lost card: the machine's log overflowed.
+    const p = rmLostGapPayload.safeParse(e.payload);
     if (!p.success) return fail(describe(p.error));
   }
   // Any other type is kept as it arrived in the payload column, so a newer app version
