@@ -24,7 +24,7 @@ static atomic_t pending;
 static atomic_t last_feed_ms;  /* uptime of the last wdt_feed */
 static atomic_t stage0_hits;   /* times the watchdog's first (interrupt) stage fired */
 
-static const char *const task_name[TRIAL_TASK_COUNT] = {"main", "nfc", "display"};
+static const char *const task_name[TRIAL_TASK_COUNT] = {"main", "nfc", "display", "ble"};
 
 static const struct device *const wdt = DEVICE_DT_GET(DT_ALIAS(watchdog0));
 static int wdt_channel = -1;

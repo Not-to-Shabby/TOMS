@@ -20,7 +20,8 @@ void buzzer_init(void);
 void buzzer_play(enum toms_tone tone);
 
 /* Start continuous pulsing alarm (200ms on, 150ms off repeating).
- * Stops automatically after timeout_ms (e.g. 30000ms), or when buzzer_alarm_stop() is called. */
+ * Stops after timeout_ms, or when buzzer_alarm_stop() is called. timeout_ms == 0 holds the
+ * alarm until it is stopped (phone command or button). */
 void buzzer_alarm_start(uint32_t timeout_ms);
 
 /* Stop any active continuous alarm immediately and silence the buzzer. */

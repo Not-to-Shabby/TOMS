@@ -14,6 +14,8 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #include "button.h"
 #include "display_test.h"
 #include "pn532.h"
+#include "battery.h"
+#include "readstore.h"
 #include "reset_reason.h"
 #include "toms_pins.h"
 #include "trial.h"
@@ -78,19 +80,7 @@ static uint8_t tone_for_verdict(uint8_t verdict)
 	}
 }
 
-/* Offline fallback (PROTOCOL.md): only a cached paid or returned-unpaid state
- * earns a definite tone; anything else, unknown included, is "unverified". */
-static uint8_t tone_for_cached(uint8_t status)
-{
-	switch (status) {
-	case TOMS_STATUS_ASSIGNED_PAID:
-		return TOMS_TONE_OK;
-	case TOMS_STATUS_RETURNED_UNPAID:
-		return TOMS_TONE_UNPAID;
-	default:
-		return TOMS_TONE_UNVERIFIED;
-	}
-}
+#define ALARM_MS (CONFIG_TOMS_ALARM_TIMEOUT_S * 1000u) /* 0 = until the phone or button clears */
 
 static void play(uint8_t tone)
 {
@@ -106,6 +96,9 @@ static void play(uint8_t tone)
  * path. The mutex keeps two sources from interleaving a paid check. */
 static K_MUTEX_DEFINE(card_lock);
 
+/* Wakes the flush thread: a read was stored, or a phone connected. */
+static K_SEM_DEFINE(flush_wake, 0, 1);
+
 static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 {
 	k_mutex_lock(&card_lock, K_FOREVER);
@@ -114,8 +107,9 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	log_uid("card read", uid, uid_len);
 	LOG_INF("type %u, cached state %u", atype, status);
 
+	int32_t seq = readstore_take_seq();
 	struct toms_card_read_msg msg = {
-		.read_seq = 0, /* persisted sequence lands with the NVS ring */
+		.read_seq = seq > 0 ? (uint32_t)seq : 0,
 		.timestamp = rm_ble_epoch(),
 		.boot_ms = (uint32_t)k_uptime_get(),
 		.uid_len = uid_len,
@@ -128,16 +122,29 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	int len = toms_codec_encode_card_read(frame, sizeof(frame), &msg);
 	if (len < 0) {
 		LOG_ERR("card_read encode failed (%d)", len);
-		play(tone_for_cached(status));
+		play(TOMS_TONE_UNVERIFIED);
 		k_mutex_unlock(&card_lock);
 		return;
 	}
-	int rc = rm_ble_notify_card_read(frame, (size_t)len);
-	if (rc == -ENOTCONN) {
-		/* Buffer to flash here once the NVS ring exists (spike item 3). */
-		LOG_INF("no central; read would be buffered");
-	} else if (rc != 0) {
-		LOG_WRN("card_read notify failed (%d)", rc);
+
+	/* A read goes out live only when no older read is waiting, so the phone always sees them in
+	 * read_seq order. Otherwise, or if the notify fails, it is stored in flash and the flush
+	 * thread sends it after the older ones. */
+	int rc = -ENOTCONN;
+
+	if (seq > 0 && readstore_unsent() == 0) {
+		rc = rm_ble_notify_card_read(frame, (size_t)len);
+	}
+	if (rc == 0) {
+		readstore_mark_sent(msg.read_seq);
+	} else if (seq > 0) {
+		int krc = readstore_keep(&msg);
+
+		LOG_INF("read %u stored in flash (notify %d, store %d), %u pending",
+			(unsigned int)msg.read_seq, rc, krc, (unsigned int)readstore_pending());
+		k_sem_give(&flush_wake);
+	} else {
+		LOG_ERR("no read_seq (%d): read not recorded", (int)seq);
 	}
 
 	/* Ask the phone, and fall back to the cached state when it cannot answer. */
@@ -149,24 +156,17 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	if (rc == 0) {
 		LOG_INF("paid_reply: verdict %u", verdict);
 		if (verdict == TOMS_VERDICT_UNPAID) {
-			buzzer_alarm_start(30000); /* 30-second persistent alarm */
+			buzzer_alarm_start(ALARM_MS); /* held until the phone or the button clears it */
 		} else {
-			buzzer_alarm_stop();
 			play(tone_for_verdict(verdict));
 		}
 		display_set_verdict(verdict, uid, uid_len, atype);
 	} else {
-		LOG_INF("no paid_reply (%d); using cached state", rc);
-		uint8_t tone = tone_for_cached(status);
-		if (tone == TOMS_TONE_UNPAID) {
-			buzzer_alarm_start(30000);
-			display_set_verdict(TOMS_VERDICT_UNPAID, uid, uid_len, atype);
-		} else {
-			buzzer_alarm_stop();
-			play(tone);
-			uint8_t v = (tone == TOMS_TONE_OK) ? TOMS_VERDICT_OK : 0xFF;
-			display_set_verdict(v, uid, uid_len, atype);
-		}
+		/* No answer from the phone: the read is unverified. Never the full alarm, whatever
+		 * the cached state says; the cache only goes to the phone in card_read. */
+		LOG_INF("no paid_reply (%d): unverified (cached state %u)", rc, status);
+		play(TOMS_TONE_UNVERIFIED);
+		display_set_verdict(0xFF, uid, uid_len, atype);
 	}
 	k_mutex_unlock(&card_lock);
 }
@@ -208,6 +208,49 @@ static void sim_loop(void *a, void *b, void *c)
 	}
 }
 #endif
+
+/* Sends stored reads to the phone, oldest first, whenever it is connected and subscribed. A read
+ * stays in flash until the phone acks it (rm "ack" kind 2), so a drop in the middle loses
+ * nothing: the next connection offers everything not yet acked again. */
+#define FLUSH_STACK 3072
+#define FLUSH_PRIO 8
+static K_THREAD_STACK_DEFINE(flush_stack, FLUSH_STACK);
+static struct k_thread flush_thread;
+
+static void flush_loop(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+	bool was_up = false;
+
+	for (;;) {
+		(void)k_sem_take(&flush_wake, K_MSEC(1000));
+		bool up = rm_ble_card_subscribed();
+
+		if (up && !was_up) {
+			readstore_rewind(); /* new link: whatever is not acked goes out again */
+		}
+		was_up = up;
+
+		while (up) {
+			uint8_t fr[32];
+			uint32_t seq;
+
+			k_mutex_lock(&card_lock, K_FOREVER);
+			int n = readstore_next_unsent(fr, sizeof(fr), &seq);
+
+			if (n > 0 && rm_ble_notify_card_read(fr, (size_t)n) == 0) {
+				readstore_mark_sent(seq);
+				k_mutex_unlock(&card_lock);
+				k_sleep(K_MSEC(30)); /* leave room for the paid_check traffic */
+				continue;
+			}
+			k_mutex_unlock(&card_lock);
+			break;
+		}
+	}
+}
 
 static void nfc_loop(void *a, void *b, void *c)
 {
@@ -261,7 +304,6 @@ static void nfc_loop(void *a, void *b, void *c)
 					    memcmp(last_removed_uid, t.uid, t.uid_len) == 0 &&
 					    now - card_removed_ms < 5000) {
 						LOG_INF("card re-inserted within 5s -> DUPLICATE");
-						buzzer_alarm_stop();
 						play(TOMS_TONE_DUPLICATE);
 						display_set_verdict(TOMS_VERDICT_ALREADY_RETURNED, t.uid, t.uid_len, t.atype);
 					} else {
@@ -300,13 +342,15 @@ static void send_heartbeat(void)
 
 	struct toms_heartbeat_msg msg = {
 		.uptime_s = (uint32_t)(k_uptime_get() / 1000),
-		.battery_pct = 0xFF, /* nothing wired to GPIO1 yet */
+		.battery_pct = 0xFF,
 		.battery_mv = 0,
 		.nfc_status = (uint8_t)atomic_get(&nfc_status),
 		.state_version = st.state_version,
-		.buffered_reads = 0, /* NVS ring not built */
+		.buffered_reads = (uint16_t)readstore_pending(),
 		.reset_reason = reset_reason,
 	};
+	battery_read(&msg.battery_pct, &msg.battery_mv);
+
 	uint8_t frame[24];
 	int len = toms_codec_encode_heartbeat(frame, sizeof(frame), &msg);
 	if (len < 0) {
@@ -359,6 +403,12 @@ int main(void)
 		LOG_ERR("backlight GPIO failed (%d)", rc);
 	}
 
+	int store_rc = readstore_init();
+
+	if (store_rc != 0) {
+		LOG_ERR("read store init failed (%d): reads cannot be buffered", store_rc);
+	}
+
 	display_rc = display_test_init();
 	if (display_rc != 0) {
 		LOG_ERR("display test init failed (%d)", display_rc);
@@ -374,6 +424,10 @@ int main(void)
 		LOG_ERR("BLE start failed (%d)", ble_rc);
 	}
 	trial_report_ble(ble_rc == 0);
+
+	k_thread_create(&flush_thread, flush_stack, FLUSH_STACK, flush_loop, NULL, NULL, NULL,
+			FLUSH_PRIO, 0, K_NO_WAIT);
+	k_thread_name_set(&flush_thread, "flush");
 
 	k_thread_create(&nfc_thread, nfc_stack, NFC_STACK, nfc_loop, NULL, NULL, NULL, NFC_PRIO, 0,
 			K_NO_WAIT);
@@ -398,6 +452,10 @@ int main(void)
 		/* Sleep in short steps so the watchdog sees this task is alive. */
 		for (uint32_t s = 0; s < cfg.heartbeat_interval_s * 10u; s++) {
 			trial_alive(TRIAL_TASK_MAIN);
+			/* The BLE task counts as alive only while the controller answers an HCI command. */
+			if (s % 5u == 0u && ble_rc == 0 && rm_ble_probe() == 0) {
+				trial_alive(TRIAL_TASK_BLE);
+			}
 			k_sleep(K_MSEC(100));
 		}
 		beat++;

@@ -19,6 +19,7 @@ enum trial_task {
 	TRIAL_TASK_MAIN = 0,
 	TRIAL_TASK_NFC,
 	TRIAL_TASK_DISPLAY,
+	TRIAL_TASK_BLE, /* only counted after an HCI round trip to the controller succeeded */
 	TRIAL_TASK_COUNT,
 };
 

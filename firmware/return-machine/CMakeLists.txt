@@ -13,6 +13,8 @@ target_sources(app PRIVATE
   src/button.c
   src/display_test.c
   src/trial.c
+  src/readstore.c
+  src/battery.c
   src/ble/svc.c
   src/ble/ota.c
   src/ota_ui.c
@@ -25,6 +27,8 @@ target_sources(app PRIVATE
   ${TOMS_CORE}/src/reset.c
   ${TOMS_CORE}/src/ota.c
   ${TOMS_CORE}/src/sha256.c
+  ${TOMS_CORE}/src/sig.c
+  ${TOMS_CORE}/src/readlog.c
 )
 
 target_include_directories(app PRIVATE

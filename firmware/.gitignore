@@ -21,3 +21,7 @@ build/
 
 # west / toolchain droppings
 .west/
+
+# host test binaries
+lib/toms_core/test/test_*
+!lib/toms_core/test/test_*.c

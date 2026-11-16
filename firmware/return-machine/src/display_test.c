@@ -23,6 +23,9 @@ LOG_MODULE_REGISTER(display_test, LOG_LEVEL_INF);
 #define AUTO_ADVANCE_S 3
 #define UID_MAX 10
 #define LONG_PRESS_MS 800
+/* The alarm screen follows the buzzer: it leaves when the alarm is cleared, or after the
+ * configured timeout (0 = never on its own). */
+#define ALARM_SCREEN_EXPIRED(idle) 	(CONFIG_TOMS_ALARM_TIMEOUT_S != 0 && (idle) >= CONFIG_TOMS_ALARM_TIMEOUT_S * 1000u)
 
 /* RGB565, sent high byte first. */
 #define C_BLACK 0x0000
@@ -682,7 +685,7 @@ static void display_loop(void *a, void *b, void *c)
 						}
 					} else if (page == PAGE_PASSENGER_VERDICT) {
 						if (screen_alarming) {
-							if (idle_ms >= 30000 || !buzzer_is_alarming()) {
+							if (ALARM_SCREEN_EXPIRED(idle_ms) || !buzzer_is_alarming()) {
 								/* 30s auto-timeout or alarm silenced */
 								LOG_INF("display: unpaid alarm timed out");
 								screen_alarming = false;
@@ -719,7 +722,7 @@ static void display_loop(void *a, void *b, void *c)
 						}
 					} else if (page == PAGE_PASSENGER_VERDICT) {
 						if (screen_alarming) {
-							if (idle_ms >= 30000 || !buzzer_is_alarming()) {
+							if (ALARM_SCREEN_EXPIRED(idle_ms) || !buzzer_is_alarming()) {
 								screen_alarming = false;
 								buzzer_alarm_stop();
 								idle_ms = 0;
@@ -868,7 +871,7 @@ void display_set_verdict(uint8_t verdict, const uint8_t *uid, uint8_t len, uint8
 	card_uid_len = len;
 	card_uid_atype = atype;
 	card_verdict = verdict;
-	screen_alarming = (verdict == 1); /* 1 = TOMS_VERDICT_UNPAID */
+	screen_alarming = (verdict == 1) || buzzer_is_alarming(); /* 1 = UNPAID; a held alarm stays */
 	k_mutex_unlock(&uid_lock);
 
 	atomic_or(&requests, REQ_CARD);

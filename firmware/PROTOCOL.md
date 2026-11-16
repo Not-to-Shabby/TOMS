@@ -87,7 +87,7 @@ Notified when a passenger taps an NFC card on the PN532 reader:
 [N+1]   atype (uint8: 1=Type 2/NTAG, 2=Type 4/DESFire, 3=MIFARE Classic, 0=Other)
 [N+2]   state_cached (uint8: current cached state from local table, 0xFF if unknown)
 ```
-*Deduplication Rule*: The RM automatically deduplicates physical card reads — the same UID within 2,000 ms is played locally as `TOMS_TONE_DUPLICATE` and is not re-notified over BLE.
+*Deduplication Rule*: The RM automatically deduplicates physical card reads — a card resting in the slot is read once (presence tracking, removal after 400 ms without a read); the same UID put back within 5 s is played locally as `TOMS_TONE_DUPLICATE` and is not re-notified over BLE.
 
 ---
 
@@ -112,10 +112,16 @@ When a card is tapped, the RM asks the phone for payment verification:
 * `2`: `TOMS_VERDICT_UNKNOWN` — Card unrecognized. Plays `TOMS_TONE_UNKNOWN`.
 * `3`: `TOMS_VERDICT_ALREADY_RETURNED` — Card already scanned at exit. Plays `TOMS_TONE_DUPLICATE`.
 
-*Timeout Fallback*: The RM waits `paid_timeout_ms` (default 1,500 ms). If BLE is disconnected or the phone does not respond within the timeout, the RM falls back to its local cached state:
-* `ASSIGNED_PAID` (`2`) $\rightarrow$ `TOMS_TONE_OK`
-* `RETURNED_UNPAID` (`4`) $\rightarrow$ `TOMS_TONE_UNPAID`
-* Any other status $\rightarrow$ `TOMS_TONE_UNVERIFIED` (two short 60 ms beeps).
+*Timeout Fallback*: The RM waits `paid_timeout_ms` (default 1,500 ms). If BLE is disconnected or the phone does not respond within the timeout:
+No reply, or no phone, always gives `TOMS_TONE_UNVERIFIED` (two short 60 ms beeps) and the
+"unverified" screen, whatever the cached state is. The full alarm is only ever started by a
+real `UNPAID` verdict from the phone; the cache is not trusted for that. The cached state is
+still sent to the phone in `card_read.state_cached`.
+
+*Alarm*: an `UNPAID` verdict starts the continuous alarm (200 ms on, 150 ms off). It is held
+until the phone sends diag `05 00` or the button is pressed (`CONFIG_TOMS_ALARM_TIMEOUT_S`
+can add a timeout; default 0 = none). Other tones cannot cancel it. A BLE disconnect or
+reconnect does not touch it.
 
 ---
 
@@ -164,6 +170,11 @@ Hardware diagnostic test bench commands:
 * `cmd = 0x02`: Display Next Page
 * `cmd = 0x03`: Toggle LCD Backlight
 * `cmd = 0x04`: Query PN532 NFC Hardware Health
+* `cmd = 0x05`: Clear / silence the alarm (`05 00`, what `RmProtocol.encodeAlarmClear()` sends). Accepted on an encrypted link.
+* `cmd = 0x06`: Provision the signing key: `06` + 32 key bytes. Accepted once, only on an encrypted link; answered with `[0x86, status, 0, 0]` (0 stored, 1 already set, 2 flash error, 0xFF refused).
+* `cmd = 0x00`: removed. It used to unlock the bench commands with a fixed code; a fixed code is a credential in source.
+
+`0x01`-`0x04` exist only in a `CONFIG_TOMS_DEV_MODE` build.
 
 **Diagnostic Notification (RM → Phone)**:
 * `[0x81, count_low, count_high, 0x01]`: Physical Button Pressed (`count`: uint16 button presses)
@@ -171,7 +182,7 @@ Hardware diagnostic test bench commands:
 
 ---
 
-### 3.8 `auth_token` (`0x0F`, Phone → RM, Write/Notify)
+### 3.8 `auth_token` (`0x0F`) — documented only, NOT implemented in this firmware
 Single-packet HMAC-SHA256 Conductor Shift Authorization:
 ```
 [0..15]   vehicle_id (16 bytes UUID)
@@ -236,3 +247,24 @@ The Return Machine uses a fixed-frequency active piezo buzzer (GPIO6):
        │                                              │
        │ ======== NORMAL IN-SERVICE OPERATION ======= │
 ```
+
+
+---
+
+## 6. Signing and the read log (this firmware)
+
+**Signing.** Once a per-machine key is provisioned (diag `06`), every value the RM notifies
+(`card_read`, `heartbeat`, `rm_ack`) gets an 8-byte trailer: the first 8 bytes of
+`HMAC-SHA256(key, suffix || payload)` where `suffix` is the characteristic's last UUID byte.
+`device_info.flags` bit 1 is set. `RmProtocol.kt` decoders read fixed fields and ignore bytes
+after them, so the phone still parses signed frames. The phone does not verify or send
+signatures yet: writes without a trailer are accepted, writes with a wrong trailer are
+rejected. The key is never in the source or the image; it lives in the settings partition.
+
+**Read log.** `card_read.read_seq` is a persistent counter (numbers are reserved ahead in
+flash, so they never repeat across a power cycle). A read delivered live is also given a
+number. A read made while the phone is away or not subscribed is stored in a flash record
+(128 slots, CRC per record) and sent in `read_seq` order when the phone subscribes. Stored
+reads stay until the phone writes `ack` (`0x08`) kind 2 with the highest `read_seq` it has;
+unacked reads are offered again on every new connection, so the phone must de-duplicate by
+`read_seq`. `heartbeat.buffered_reads` is the stored count.

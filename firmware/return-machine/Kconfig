@@ -4,7 +4,6 @@ mainmenu "TOMS Return Machine"
 
 menu "TOMS Return Machine"
 
-# Unified firmware: boots in Passenger In-Service mode, unlocks Diagnostic mode on special code
 config TOMS_BACKLIGHT_ACTIVE_HIGH
 	bool "Backlight is on when GPIO13 is high"
 	default n
@@ -12,6 +11,15 @@ config TOMS_BACKLIGHT_ACTIVE_HIGH
 		The built board uses a PNP (2N3906) high-side switch: base low =
 		backlight on, so GPIO13 low is "on". The Fritzing sketch still
 		shows an NPN; enable this only for that wiring.
+
+config TOMS_ALARM_TIMEOUT_S
+	int "Seconds before an unpaid alarm silences itself (0 = hold until cleared)"
+	default 0
+	range 0 600
+	help
+		0 holds the alarm until the phone clears it (diag command 05 00) or the button is
+		pressed. The alarm lives in the buzzer and display state, so a BLE reconnect neither
+		loses nor repeats it.
 
 config TOMS_PAID_TIMEOUT_MS
 	int "Paid-check timeout in milliseconds (brief allows 1000-2000)"
@@ -25,7 +33,7 @@ config TOMS_HEARTBEAT_INTERVAL_S
 
 config TOMS_RING_CAPACITY
 	int "Offline card-read ring capacity (entries)"
-	default 256
+	default 128
 
 config TOMS_STATE_TABLE_CAPACITY
 	int "Cached card state table capacity (entries)"

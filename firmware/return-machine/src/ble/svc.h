@@ -3,8 +3,8 @@
  *
  * The phone is the central. It writes state_update, paid_reply, time_sync,
  * config, ack and sim_card, and subscribes to card_read, paid_check,
- * heartbeat and rm_ack. Signatures and flash buffering land with the spike /
- * M2 work: until then values carry no HMAC trailer. */
+ * heartbeat and rm_ack. Values from the RM carry an 8-byte HMAC trailer once a
+ * per-machine key is provisioned (diag command 0x06); see PROTOCOL.md. */
 #ifndef TOMS_BLE_SVC_H
 #define TOMS_BLE_SVC_H
 
@@ -67,6 +67,12 @@ uint32_t rm_ble_epoch(void);
 int rm_ble_notify_card_read(const uint8_t *data, size_t len);
 int rm_ble_notify_heartbeat(const uint8_t *data, size_t len);
 int rm_ble_notify_diag(const uint8_t *data, size_t len);
+
+/* HCI round trip to the controller. 0 = the Bluetooth stack answered. */
+int rm_ble_probe(void);
+
+/* True while a phone is connected and subscribed to card_read. */
+bool rm_ble_card_subscribed(void);
 
 typedef void (*rm_ble_diag_cmd_cb_t)(uint8_t cmd, uint8_t arg);
 void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb);

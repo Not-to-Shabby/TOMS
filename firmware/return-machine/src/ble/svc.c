@@ -4,12 +4,15 @@
 #include "buzzer.h"
 #include "display_test.h"
 #include "pn532.h"
+#include "readstore.h"
+#include "trial.h"
 
 #include <errno.h>
 #include <string.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
+#include <zephyr/bluetooth/hci.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
@@ -20,6 +23,7 @@ LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 
 #include <toms/clock.h>
 #include <toms/codec.h>
+#include <toms/sig.h>
 #include <toms/state_table.h>
 
 #define TOMS_FW_MAJOR 0
@@ -44,6 +48,9 @@ LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 #define CHAR_OTA_CONTROL 0x0C
 #define CHAR_OTA_DATA 0x0D
 #define CHAR_DIAG 0x0E
+
+/* diag command that provisions the per-machine signing key (once, encrypted link only) */
+#define DIAG_CMD_PROVISION_KEY 0x06
 
 #define ATT_HEADER 3 /* opcode + handle */
 
@@ -205,13 +212,77 @@ static int notify_uuid(const struct bt_uuid *uuid, bool subscribed, const uint8_
 #define NOTIFY(suffix, subscribed, data, len) \
 	notify_uuid(BT_UUID_DECLARE_128(TOMS_UUID(suffix)), (subscribed), (data), (len))
 
+/* Frames RM -> phone carry the 8-byte trailer once a key is provisioned. The phone's decoders
+ * ignore bytes after the fields they read (RmProtocol.kt), so a signed frame still parses. */
+#define MAX_FRAME 48
+
+static uint32_t unsigned_writes;
+static uint32_t bad_sigs;
+
+static bool signing_on(void)
+{
+	uint8_t key[TOMS_SIG_KEY_LEN];
+	bool on = keystore_get(key);
+
+	memset(key, 0, sizeof(key));
+	return on;
+}
+
+static int notify_signed(uint8_t suffix, bool subscribed, const uint8_t *data, size_t len)
+{
+	uint8_t key[TOMS_SIG_KEY_LEN];
+	uint8_t frame[MAX_FRAME + TOMS_SIG_LEN];
+
+	if (len > MAX_FRAME) {
+		return -EMSGSIZE;
+	}
+	if (!keystore_get(key)) {
+		return notify_uuid(BT_UUID_DECLARE_128(TOMS_UUID(suffix)), subscribed, data, len);
+	}
+	memcpy(frame, data, len);
+	int n = toms_sig_append(key, sizeof(key), suffix, frame, len, sizeof(frame));
+
+	memset(key, 0, sizeof(key));
+	if (n < 0) {
+		return n;
+	}
+	return notify_uuid(BT_UUID_DECLARE_128(TOMS_UUID(suffix)), subscribed, frame, (size_t)n);
+}
+
+/* A write that carries a trailer must have a valid one. The phone does not sign yet, so an
+ * unsigned write is still accepted; that gap is listed in the PR. */
+static int verify_write(uint8_t suffix, const uint8_t *data, uint16_t len, int consumed)
+{
+	uint8_t key[TOMS_SIG_KEY_LEN];
+
+	if (consumed < 0) {
+		return consumed;
+	}
+	if (!keystore_get(key)) {
+		return 0;
+	}
+	int rc = toms_sig_check(key, sizeof(key), suffix, data, len, (size_t)consumed);
+
+	memset(key, 0, sizeof(key));
+	if (rc == TOMS_SIG_ABSENT) {
+		unsigned_writes++;
+		return 0;
+	}
+	if (rc < 0) {
+		bad_sigs++;
+		LOG_WRN("write to 0x%02x: bad signature", suffix);
+		return -EACCES;
+	}
+	return 0;
+}
+
 static void send_rm_ack(uint8_t kind, uint32_t value)
 {
 	uint8_t frame[5];
 	int len = toms_codec_encode_ack(frame, sizeof(frame), kind, value);
 
 	if (len > 0) {
-		int rc = NOTIFY(0x0A, ack_notify, frame, (size_t)len);
+		int rc = notify_signed(0x0A, ack_notify, frame, (size_t)len);
 		if (rc != 0 && rc != -ENOTCONN) {
 			LOG_WRN("rm_ack notify failed (%d)", rc);
 		}
@@ -226,7 +297,8 @@ static ssize_t read_info(struct bt_conn *conn, const struct bt_gatt_attr *attr, 
 		.fw_major = TOMS_FW_MAJOR,
 		.fw_minor = TOMS_FW_MINOR,
 		.fw_patch = TOMS_FW_PATCH,
-		.flags = IS_ENABLED(CONFIG_TOMS_DEV_MODE) ? TOMS_INFO_FLAG_DEV_MODE : 0,
+		.flags = (uint8_t)((IS_ENABLED(CONFIG_TOMS_DEV_MODE) ? TOMS_INFO_FLAG_DEV_MODE : 0) |
+				   (signing_on() ? TOMS_INFO_FLAG_SIGNED : 0)),
 		.max_state_entries = TOMS_STATE_TABLE_MAX,
 	};
 	uint8_t frame[8];
@@ -252,6 +324,10 @@ static int handle_state_update(const uint8_t *data, uint16_t len)
 		LOG_WRN("state_update malformed (%d)", rc);
 		return rc;
 	}
+	rc = verify_write(CHAR_STATE_UPDATE, data, len, rc);
+	if (rc < 0) {
+		return rc;
+	}
 
 	k_mutex_lock(&table_lock, K_FOREVER);
 	rc = toms_state_table_apply(&table, version, snapshot, entries, count);
@@ -272,9 +348,13 @@ static int handle_paid_reply(const uint8_t *data, uint16_t len)
 	uint32_t seq;
 	uint8_t verdict;
 
-	if (toms_codec_decode_paid_reply(data, len, &seq, &verdict) < 0 ||
-	    verdict > TOMS_VERDICT_ALREADY_RETURNED) {
+	int used = toms_codec_decode_paid_reply(data, len, &seq, &verdict);
+
+	if (used < 0 || verdict > TOMS_VERDICT_ALREADY_RETURNED) {
 		return -EINVAL;
+	}
+	if (verify_write(CHAR_PAID_REPLY, data, len, used) < 0) {
+		return -EACCES;
 	}
 	if (!waiting_reply || seq != pending_seq) {
 		LOG_INF("paid_reply %u ignored (late or unknown)", (unsigned int)seq);
@@ -290,8 +370,13 @@ static int handle_time_sync(const uint8_t *data, uint16_t len)
 	uint32_t epoch;
 	uint16_t rem;
 
-	if (toms_codec_decode_time_sync(data, len, &epoch, &rem) < 0) {
+	int used = toms_codec_decode_time_sync(data, len, &epoch, &rem);
+
+	if (used < 0) {
 		return -EINVAL;
+	}
+	if (verify_write(CHAR_TIME_SYNC, data, len, used) < 0) {
+		return -EACCES;
 	}
 	int rc = toms_clock_sync(&rm_clock, epoch, rem, k_uptime_get());
 	if (rc == 0) {
@@ -318,13 +403,19 @@ static int handle_ack(const uint8_t *data, uint16_t len)
 	uint8_t kind;
 	uint32_t value;
 
-	if (toms_codec_decode_ack(data, len, &kind, &value) < 0) {
+	int used = toms_codec_decode_ack(data, len, &kind, &value);
+
+	if (used < 0) {
 		return -EINVAL;
+	}
+	if (verify_write(CHAR_ACK, data, len, used) < 0) {
+		return -EACCES;
 	}
 	if (kind == TOMS_ACK_STATE) {
 		state_acked = value;
 	} else if (kind == TOMS_ACK_READ) {
 		read_acked = value;
+		(void)readstore_ack(value); /* frees every stored read up to and including value */
 	} else {
 		return -EINVAL;
 	}
@@ -374,6 +465,23 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 		uint8_t ack[4] = { 0x85, 0x00, 0x00, 0x00 };
 		(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
 		return 0;
+	}
+
+	/* Command 0x06: store the per-machine signing key. Once, and only on an encrypted link;
+	 * the key arrives over the air at enrollment and is never part of the image. */
+	if (cmd == DIAG_CMD_PROVISION_KEY) {
+		uint8_t st = 0xFF;
+
+		if (len == 1u + TOMS_SIG_KEY_LEN && current_conn != NULL &&
+		    bt_conn_get_security(current_conn) >= BT_SECURITY_L2) {
+			int krc = keystore_provision(&data[1]);
+
+			st = (krc == 0) ? 0 : (krc == -EEXIST ? 1 : 2);
+		}
+		uint8_t ack[4] = { 0x86, st, 0x00, 0x00 };
+
+		(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
+		return st == 0 ? 0 : -EACCES;
 	}
 
 	/* Bench commands 0x01..0x04 exist only in a dev build */
@@ -705,7 +813,7 @@ int rm_ble_notify_ota(const uint8_t *data, size_t len)
 
 int rm_ble_notify_card_read(const uint8_t *data, size_t len)
 {
-	int rc = NOTIFY(0x01, card_notify, data, len);
+	int rc = notify_signed(0x01, card_notify, data, len);
 
 	if (rc == 0) {
 		tx_card++;
@@ -715,7 +823,7 @@ int rm_ble_notify_card_read(const uint8_t *data, size_t len)
 
 int rm_ble_notify_heartbeat(const uint8_t *data, size_t len)
 {
-	int rc = NOTIFY(0x05, hb_notify, data, len);
+	int rc = notify_signed(0x05, hb_notify, data, len);
 
 	if (rc == 0) {
 		tx_heartbeat++;
@@ -762,6 +870,25 @@ int rm_ble_paid_check(const uint8_t *uid, uint8_t uid_len, uint32_t timeout_ms,
 void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb)
 {
 	diag_cb = cb;
+}
+
+/* A real round trip to the Bluetooth controller: the host sends HCI Read Local Version and the
+ * controller must answer. If the stack or the controller is wedged this blocks or fails, and the
+ * caller stops reporting the BLE task alive, so the watchdog is not fed. */
+int rm_ble_probe(void)
+{
+	struct net_buf *rsp = NULL;
+	int rc = bt_hci_cmd_send_sync(BT_HCI_OP_READ_LOCAL_VERSION_INFO, NULL, &rsp);
+
+	if (rsp != NULL) {
+		net_buf_unref(rsp);
+	}
+	return rc;
+}
+
+bool rm_ble_card_subscribed(void)
+{
+	return current_conn != NULL && card_notify;
 }
 
 int rm_ble_notify_diag(const uint8_t *data, size_t len)

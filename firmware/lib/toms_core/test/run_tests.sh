@@ -23,3 +23,6 @@ fi
 
 "$CC_BIN" -std=c99 -Wall -Wextra -Werror -I../include test_ota.c ../src/ota.c ../src/sha256.c -o test_ota
 ./test_ota
+
+"$CC_BIN" -std=c99 -Wall -Wextra -Werror -I../include test_rm.c ../src/sig.c ../src/readlog.c ../src/sha256.c ../src/crc16.c ../src/codec.c ../src/state_table.c -o test_rm
+./test_rm

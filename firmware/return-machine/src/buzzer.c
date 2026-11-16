@@ -48,8 +48,8 @@ static void step_run(struct k_work *work)
 		sounding = false;
 
 		if (alarm_active) {
-			if (k_uptime_get() >= alarm_deadline_ms) {
-				LOG_INF("buzzer: unpaid alarm auto-timeout after 30s");
+			if (alarm_deadline_ms != 0 && k_uptime_get() >= alarm_deadline_ms) {
+				LOG_INF("buzzer: unpaid alarm auto-timeout");
 				alarm_active = false;
 				current = NULL;
 				return;
@@ -84,6 +84,9 @@ void buzzer_play(enum toms_tone tone)
 	if (tone >= ARRAY_SIZE(patterns)) {
 		return;
 	}
+	if (alarm_active) {
+		return; /* a held alarm is cleared by the phone or the button, never by another tone */
+	}
 	k_work_cancel_delayable(&step_work);
 	alarm_active = false;
 	gpio_pin_set_dt(&bz, 0);
@@ -99,7 +102,7 @@ void buzzer_alarm_start(uint32_t timeout_ms)
 	gpio_pin_set_dt(&bz, 0);
 	sounding = false;
 	alarm_active = true;
-	alarm_deadline_ms = k_uptime_get() + (timeout_ms > 0 ? timeout_ms : 30000u);
+	alarm_deadline_ms = timeout_ms > 0 ? k_uptime_get() + timeout_ms : 0; /* 0 = until cleared */
 	current = patterns[TOMS_TONE_UNPAID];
 	step = 0;
 	LOG_INF("buzzer: continuous unpaid alarm started (timeout %u ms)", (unsigned int)timeout_ms);
