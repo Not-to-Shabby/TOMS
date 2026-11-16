@@ -262,4 +262,15 @@ class ShiftSummaryTest {
         assertEquals(1500L, s.collectedCashCentavos)
         assertEquals(0, s.carriedIn.paidHereCount)
     }
+
+    // The unaccounted warning: non-zero is warned in plain words on every surface, zero stays quiet.
+    @Test fun `a non-zero unknown amount gets the plain warning line`() {
+        val text = unaccountedWarningText(1500L)
+        assertTrue("it names what the money is", text!!.contains("not collected"))
+        assertTrue("it names the typical cause", text.contains("lost card"))
+    }
+
+    @Test fun `zero unknown stays quiet`() {
+        assertEquals(null, unaccountedWarningText(0L))
+    }
 }

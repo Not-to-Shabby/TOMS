@@ -219,6 +219,18 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
       nfc_uid: p.data.nfcUid,
       card_state: p.data.state,
     });
+  } else if (e.type === 'fare_written_off') {
+    // The phone's WriteOffPayload, shared with fare_recovered. The trip link is what lets the
+    // dashboards tell a written-off fare apart from an unaccounted one; without it a write-off
+    // row stored before this fix reads as unaccounted money, so the unaccounted query also falls
+    // back to the payload's tripId for those older rows.
+    const p = fareAdjustmentPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+    Object.assign(columns, {
+      trip_id: p.data.tripId,
+      card_uuid: p.data.cardUuid,
+      nfc_uid: p.data.nfcUid,
+    });
   } else if (e.type === 'fare_recovered') {
     // A returned-unpaid card whose fare was paid late. The trip and card links are set so the
     // trip_status view can count the fare as collected; the full payload is kept as it arrived.
