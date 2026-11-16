@@ -39,6 +39,7 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.ble.RealRmReadIntake
 import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.sync.ConfigRefresher
 import ph.toms.conductor.sync.UploadStats
@@ -89,9 +90,10 @@ class ShiftFlowTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, TomsDatabase::class.java).allowMainThreadQueries().build()
         repo = TripRepository(db, "dev-1", newEventId = { "evt-${eventSeq++}" }, newShiftId = { "shift-${shiftSeq++}" })
+        val fakeLink = FakeReturnMachineLink()
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, FakeDeviceStatusReporter(), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), fakeLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, fakeLink), InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader), FakeUplinkManager())
     }
@@ -285,9 +287,10 @@ class ShiftFlowTest {
         vm.acknowledgeEnded()
         // The first conductor's app was killed; a second person signs in on the same vehicle and route.
         val context = ApplicationProvider.getApplicationContext<Context>()
+        val secondLink = FakeReturnMachineLink()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), FakeReturnMachineLink(), ShiftServiceController.None, FakeDeviceStatusReporter(), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), secondLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, secondLink), InitialConfig(TestConfig.config),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }

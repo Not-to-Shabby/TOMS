@@ -40,6 +40,12 @@ object EventTypes {
     const val FARE_WRITTEN_OFF = "fare_written_off"
     const val CONDUCTOR_RELEASED_UNPAID = "conductor_released_unpaid"
     const val DEVICE_STATUS = "device_status"
+
+    // Machine-health events from the Return Machine link. They carry machine ids, sequence numbers
+    // and counts — never passenger card data.
+    const val RM_STORED_READ = "rm_stored_read"
+    const val RM_UNVERIFIED = "rm_unverified"
+    const val RM_LOST_GAP = "rm_lost_gap"
 }
 
 @Serializable
@@ -174,7 +180,8 @@ class TripRepository(
         val trips = db.trips().all().map { ShiftTrip(it.toDomain(), it.shiftId) }
         val facts = db.events().tripFacts().flatMap { it.toFacts() }
         val states = db.cards().all().mapNotNull { c -> c.currentTripId?.let { it to CardState.valueOf(c.state) } }.toMap()
-        return ShiftSummary.of(shiftId, trips, facts, states)
+        val unverified = db.events().ofTypeInShift(EventTypes.RM_UNVERIFIED, shiftId).size
+        return ShiftSummary.of(shiftId, trips, facts, states, unverified)
     }
 
     /**
@@ -321,6 +328,27 @@ class TripRepository(
      */
     suspend fun recordDeviceStatus(payloadJson: String, shiftId: String?) {
         appendEvent(EventTypes.DEVICE_STATUS, payloadJson, clock(), shiftId = shiftId)
+        uploadKick.kick()
+    }
+
+    /**
+     * Appends a Return Machine health event (an [EventTypes.RM_STORED_READ], [EventTypes.RM_UNVERIFIED]
+     * or [EventTypes.RM_LOST_GAP] payload) and asks for a drain. The payload is built by the link's
+     * intake; it carries machine ids and read sequence numbers, never passenger card data.
+     */
+    suspend fun recordMachineEvent(type: String, payloadJson: String, shiftId: String?) {
+        appendEvent(type, payloadJson, clock(), shiftId = shiftId)
+        uploadKick.kick()
+    }
+
+    /** Appends a machine health event without kicking: for callers inside a transaction, which kicks
+     *  itself once everything is committed. */
+    suspend fun appendMachineEvent(type: String, payloadJson: String, shiftId: String?) {
+        appendEvent(type, payloadJson, clock(), shiftId = shiftId)
+    }
+
+    /** Starts the outbox drain. For callers that appended events inside their own transaction. */
+    fun kick() {
         uploadKick.kick()
     }
 

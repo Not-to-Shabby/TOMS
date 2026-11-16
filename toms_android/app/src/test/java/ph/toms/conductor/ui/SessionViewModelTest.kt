@@ -26,6 +26,7 @@ import ph.toms.conductor.data.VehicleDto
 import ph.toms.conductor.data.db.TomsDatabase
 import ph.toms.conductor.data.serverConfigResponse
 import ph.toms.conductor.location.LocationTracker
+import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -64,7 +65,7 @@ class SessionViewModelTest {
 
     @Test
     fun `when no server config is saved login falls back to stub vehicles and routes`() = runTest {
-        val vm = SessionViewModel(stubRepo, trips, location)
+        val vm = SessionViewModel(stubRepo, trips, location, FakeDeviceStatusReporter())
         vm.login("conductor1", "password")
         waitUntil { vm.state.value.conductor != null }
 
@@ -85,7 +86,7 @@ class SessionViewModelTest {
             )
         }
 
-        val vm = SessionViewModel(stubRepo, trips, location)
+        val vm = SessionViewModel(stubRepo, trips, location, FakeDeviceStatusReporter())
         vm.login("conductor1", "password")
         waitUntil { vm.state.value.conductor != null }
 
@@ -97,7 +98,7 @@ class SessionViewModelTest {
 
     @Test
     fun `observing server config updates available vehicles and routes dynamically`() = runTest {
-        val vm = SessionViewModel(stubRepo, trips, location)
+        val vm = SessionViewModel(stubRepo, trips, location, FakeDeviceStatusReporter())
         vm.login("conductor1", "password")
         waitUntil { vm.state.value.conductor != null }
         assertEquals(stubRepo.vehicles(), vm.state.value.vehicles)

@@ -110,6 +110,26 @@ data class ConfigCacheEntity(
     val fetchedAtMillis: Long,
 )
 
+/**
+ * One card read the Return Machine delivered, keyed by (machine id, read_seq) — the unique pair makes a
+ * resent read a no-op insert, which is what lets the phone ack a read_seq after exactly one event and
+ * never two (firmware/PROTOCOL.md section 6). [uidHex] stays local only; the uploaded machine-health
+ * events carry sequence numbers and counts, never card UIDs.
+ */
+@Entity(tableName = "rm_reads", primaryKeys = ["machineId", "readSeq"])
+data class RmReadEntity(
+    val machineId: String,
+    val readSeq: Long,
+    val uidHex: String,
+    val atype: Int,
+    val stateCached: Int,
+    /** The machine's own clock (card_read.timestamp), or the arrival time when it was unsynced. */
+    val readAtMillis: Long,
+    val arrivalMillis: Long,
+    /** True when the machine flushed it from its flash log rather than delivering it live. */
+    val stored: Boolean,
+)
+
 /** An event the server refused, with why. Shown on More so whoever fixes the cause knows what to look for. */
 data class ParkedEvent(
     val eventId: String,

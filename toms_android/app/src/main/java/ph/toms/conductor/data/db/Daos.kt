@@ -56,6 +56,26 @@ interface CardDao {
 }
 
 @Dao
+interface RmReadDao {
+    /** 1 when the read is new, 0 when the machine resent one already stored (the dedup no-op). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insert(read: RmReadEntity): Long
+
+    @Query("SELECT MAX(readSeq) FROM rm_reads WHERE machineId = :machineId")
+    suspend fun maxReadSeq(machineId: String): Long?
+
+    /** The cached card state of the most recent read, or null before the first one. */
+    @Query("SELECT stateCached FROM rm_reads WHERE machineId = :machineId ORDER BY readSeq DESC LIMIT 1")
+    suspend fun lastStateCached(machineId: String): Int?
+
+    @Query("DELETE FROM rm_reads WHERE machineId = :machineId")
+    suspend fun clear(machineId: String)
+
+    @Query("SELECT COUNT(*) FROM rm_reads")
+    suspend fun count(): Int
+}
+
+@Dao
 interface EventDao {
     /** Returns -1 when an event with the same eventId already exists. */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -183,9 +203,9 @@ interface ServerConfigDao {
 @Database(
     entities = [
         TripEntity::class, CardEntity::class, EventEntity::class, OutboxEntity::class, ConfigCacheEntity::class,
-        ShiftEntity::class, ServerConfigEntity::class,
+        ShiftEntity::class, ServerConfigEntity::class, RmReadEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class TomsDatabase : RoomDatabase() {
@@ -196,4 +216,5 @@ abstract class TomsDatabase : RoomDatabase() {
     abstract fun outbox(): OutboxDao
     abstract fun config(): ConfigDao
     abstract fun serverConfig(): ServerConfigDao
+    abstract fun rmReads(): RmReadDao
 }

@@ -91,6 +91,10 @@ data class ShiftSummary(
     // Cash: collected from own trips + collected from carried-in trips.
     val collectedFromCarriedInCentavos: Long,
     val carriedIn: CarriedIn,
+
+    /** Reads the Return Machine could not verify during this shift (the phone was out of reach).
+     *  Machine health, not money: never part of the reconciliation above. Zero for older summaries. */
+    val unverifiedReads: Int = 0,
 ) {
     /** The money the conductor hands over for this shift. */
     val collectedCashCentavos: Long get() = collectedOwnCentavos + collectedFromCarriedInCentavos
@@ -115,6 +119,7 @@ data class ShiftSummary(
             trips: List<ShiftTrip>,
             events: List<TripEventRecord>,
             currentStateByTrip: Map<String, CardState>,
+            unverifiedReads: Int = 0,
         ): ShiftSummary {
             val byTrip = events.groupBy { it.tripId }
 
@@ -203,10 +208,35 @@ data class ShiftSummary(
                     writtenOffHereCount = writtenOffHere.size,
                     writtenOffHereCentavos = writtenOffHere.sumOf { it.trip.fareCentavos.toLong() },
                 ),
+                unverifiedReads = unverifiedReads,
             )
         }
     }
 }
+
+/**
+ * The plain-language warning for a shift's unaccounted money — fares with no recorded payment, no
+ * write-off, and no card still out. A lost card is the usual cause, but a cleared unpaid-return alarm
+ * lands here too, so the line says both. Null when the shift has nothing unaccounted, so zero stays
+ * quiet everywhere the amount is shown.
+ */
+fun unaccountedWarningText(unknownCentavos: Long): String? =
+    if (unknownCentavos > 0) "Fares not collected and not written off, with the card no longer out. Often a lost card." else null
+
+/** From this many unverified reads up, the shift summary warns; fewer stay quiet. */
+const val UNVERIFIED_WARNING_THRESHOLD = 3
+
+/**
+ * The plain-language warning for reads the Return Machine could not verify — the phone was out of
+ * reach when the passenger tapped, so the machine played the unverified tone and nobody confirmed the
+ * fare. Null while the shift has fewer than [UNVERIFIED_WARNING_THRESHOLD], so a stray one stays quiet.
+ */
+fun unverifiedWarningText(unverifiedReads: Int): String? =
+    if (unverifiedReads >= UNVERIFIED_WARNING_THRESHOLD) {
+        "The Return Machine could not verify $unverifiedReads reads (the phone was out of reach). Their fares are unconfirmed."
+    } else {
+        null
+    }
 
 object ShiftTime {
     /** "2 h 05 min", "45 min", "under 1 min". A clock that went backwards reads as zero, never negative. */

@@ -5,9 +5,12 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
+import androidx.annotation.VisibleForTesting
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -31,11 +34,17 @@ import javax.inject.Singleton
  * The reporter only records state; it never changes shift, upload or link behavior.
  */
 interface DeviceStatusReporter {
-    /** Starts the periodic writer for an open shift and writes the shift-start status immediately. */
-    fun start(scope: CoroutineScope, openShiftId: String, fixProvider: () -> GeoFix?)
+    /** Starts the periodic writer for an open shift and writes the shift-start status immediately.
+     *  Runs in the reporter's own scope, so it follows the shift and the foreground service rather
+     *  than the screen; safe to call again when the screen is recreated. */
+    fun start(openShiftId: String, fixProvider: () -> GeoFix?)
 
     /** Writes the shift-end status and stops the periodic writer. */
     suspend fun stop(endedShiftId: String)
+
+    /** Cancels the periodic writer without writing a shift-end status — for sign-out, which leaves
+     *  the shift open for someone to resume (a later start() runs the writer again). */
+    fun pause()
 }
 
 @Singleton
@@ -53,12 +62,20 @@ class RealDeviceStatusReporter @Inject constructor(
     private var shiftId: String? = null
     private var fixProvider: () -> GeoFix? = { null }
 
+    // The process's own scope, deliberately not a screen's: the foreground service holds the process
+    // for the whole shift, so the heartbeat follows the shift even when the activity is destroyed by
+    // the screen going off or the conductor backing out. A test can run the loop on its own clock.
+    private val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    @VisibleForTesting
+    internal var scopeForTests: CoroutineScope? = null
+
     /** Starts the periodic writer for an open shift and writes the shift-start status immediately. */
-    override fun start(scope: CoroutineScope, openShiftId: String, fixProvider: () -> GeoFix?) {
+    override fun start(openShiftId: String, fixProvider: () -> GeoFix?) {
         shiftId = openShiftId
         this.fixProvider = fixProvider
         if (job?.isActive == true) return
-        job = scope.launch {
+        job = (scopeForTests ?: processScope).launch {
             writeOnce()
             while (isActive) {
                 delay(INTERVAL_MILLIS)
@@ -67,17 +84,21 @@ class RealDeviceStatusReporter @Inject constructor(
         }
     }
 
-    /**
-     * Writes the shift-end status for [endedShiftId] and stops the periodic writer. Suspend: the caller
-     * runs it inside its own coroutine.
-     */
-    /** Writes the shift-end status for [endedShiftId] and stops the periodic writer. */
+    /** Writes the shift-end status for [endedShiftId] and stops the periodic writer. Suspend: the caller
+     * runs it inside its own coroutine. */
     override suspend fun stop(endedShiftId: String) {
         val running = job
         job = null
         running?.cancel()
         shiftId = null
         writeOnce(endedShiftId)
+    }
+
+    override fun pause() {
+        val running = job
+        job = null
+        running?.cancel()
+        shiftId = null
     }
 
     /** Visible for tests. [overrideShiftId] replaces the open shift id (the shift-end status uses it). */

@@ -1,5 +1,6 @@
 package ph.toms.conductor.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +21,8 @@ import androidx.compose.ui.unit.dp
 import ph.toms.conductor.domain.ShiftSummary
 import ph.toms.conductor.domain.ShiftTime
 import ph.toms.conductor.domain.TomsConfig
+import ph.toms.conductor.domain.unaccountedWarningText
+import ph.toms.conductor.domain.unverifiedWarningText
 import ph.toms.conductor.domain.formatCentavos
 import ph.toms.conductor.ui.theme.BigButton
 import ph.toms.conductor.ui.theme.Gap
@@ -106,6 +110,14 @@ fun ShiftEndedDialog(summary: ShiftSummary, config: TomsConfig, continues: Boole
                 if (summary.writtenOffCentavos > 0) {
                     Text("Written off ${peso(summary.writtenOffCentavos)}", style = MaterialTheme.typography.titleMedium, color = TomsColors.Bad)
                 }
+                unaccountedWarningText(summary.unknownCentavos)?.let { warning ->
+                    Text("Not accounted for ${peso(summary.unknownCentavos)}", style = MaterialTheme.typography.titleMedium, color = TomsColors.Bad)
+                    Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                }
+                unverifiedWarningText(summary.unverifiedReads)?.let { warning ->
+                    Text("Unverified reads ${summary.unverifiedReads}", style = MaterialTheme.typography.titleMedium, color = TomsColors.Bad)
+                    Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                }
                 Text(
                     "${summary.passengers} ${if (summary.passengers == 1) "passenger" else "passengers"} on ${summary.tripCount} ${if (summary.tripCount == 1) "trip" else "trips"}",
                     style = MaterialTheme.typography.bodyMedium,
@@ -152,7 +164,21 @@ fun ShiftSummaryScreen(
 
         if (summary.outstandingCentavos > 0) Line("Still to collect", peso(summary.outstandingCentavos), TomsColors.Bad)
         if (summary.writtenOffCentavos > 0) Line("Written off", peso(summary.writtenOffCentavos), TomsColors.Bad)
-        if (summary.unknownCentavos > 0) Line("Not accounted for", peso(summary.unknownCentavos), TomsColors.Bad)
+                // Unaccounted money must be impossible to miss: it is what a lost card (or a cleared alarm)
+                // leaves behind, so it is warned in colour and explained in plain words, never shown quietly.
+                unaccountedWarningText(summary.unknownCentavos)?.let { warning ->
+                    Column(Modifier.fillMaxWidth().background(TomsColors.BadBg, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Line("Not accounted for", peso(summary.unknownCentavos), TomsColors.Bad)
+                        Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                    }
+                }
+                // The same treatment for reads the Return Machine could not verify.
+                unverifiedWarningText(summary.unverifiedReads)?.let { warning ->
+                    Column(Modifier.fillMaxWidth().background(TomsColors.BadBg, RoundedCornerShape(12.dp)).padding(12.dp)) {
+                        Line("Unverified reads", summary.unverifiedReads.toString(), TomsColors.Bad)
+                        Text(warning, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+                    }
+                }
         if (summary.discountCentavos > 0) Line("Discounts given", peso(summary.discountCentavos))
         if (summary.overrideCount > 0) {
             Line("Fares changed by hand", "${summary.overrideCount}  (${if (summary.overrideNetCentavos < 0) "-" else "+"}${peso(kotlin.math.abs(summary.overrideNetCentavos))})")

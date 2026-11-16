@@ -42,6 +42,7 @@ import ph.toms.conductor.feedback.RecordingFeedback
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.ble.RealRmReadIntake
 import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.telemetry.DeviceStatusReporter
 import ph.toms.conductor.settings.DeviceConfigStore
@@ -144,7 +145,8 @@ class ConductorViewModelTest {
         flusher = OutboxFlusher(db.outbox(), uploader)
         vm = ConductorViewModel(
             repo, location, feedback, settings, deviceConfig, fakeCardSync,
-            ConfigRefresher(repo, configSync), fakeRmLink, fakeShiftService, fakeStatusReporter, InitialConfig(TestConfig.config),
+            ConfigRefresher(repo, configSync), fakeRmLink, fakeShiftService, fakeStatusReporter,
+            RealRmReadIntake(repo, db, fakeRmLink), InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, deviceConfig, flusher, fakeUplink)
         // Every trip belongs to a shift, so the tests run inside one.

@@ -26,7 +26,15 @@ import ph.toms.conductor.settings.PrefsSettings
 import ph.toms.conductor.settings.SettingsStore
 import ph.toms.conductor.BuildConfig
 import ph.toms.conductor.ble.AndroidBleReturnMachineLink
+import ph.toms.conductor.ble.NoRmKeySource
+import ph.toms.conductor.ble.PrefsRmMachineTrust
+import ph.toms.conductor.ble.RealRmProvisioner
+import ph.toms.conductor.ble.RealRmReadIntake
 import ph.toms.conductor.ble.ReturnMachineLink
+import ph.toms.conductor.ble.RmKeySource
+import ph.toms.conductor.ble.RmMachineTrust
+import ph.toms.conductor.ble.RmProvisioner
+import ph.toms.conductor.ble.RmReadIntake
 import ph.toms.conductor.domain.TomsConfig
 import ph.toms.conductor.service.AndroidShiftServiceController
 import ph.toms.conductor.service.ShiftServiceController
@@ -78,6 +86,15 @@ abstract class DataModule {
     abstract fun returnMachineLink(impl: AndroidBleReturnMachineLink): ReturnMachineLink
 
     @Binds
+    abstract fun rmMachineTrust(impl: PrefsRmMachineTrust): RmMachineTrust
+
+    @Binds
+    abstract fun rmReadIntake(impl: RealRmReadIntake): RmReadIntake
+
+    @Binds
+    abstract fun rmProvisioner(impl: RealRmProvisioner): RmProvisioner
+
+    @Binds
     abstract fun uplinkManager(impl: AndroidUplinkManager): UplinkManager
 
     @Binds
@@ -104,6 +121,10 @@ object ProvidersModule {
 
     @Provides @Singleton
     fun secretCipher(): SecretCipher = KeystoreSecretCipher()
+
+    /** The enrolment flow does not hand out Return Machine keys yet; provisioning reports that honestly. */
+    @Provides @Singleton
+    fun rmKeySource(): RmKeySource = NoRmKeySource
 
     /** What the phone works from before any fares are downloaded: nothing, unless a debug build asks for the test fares. */
     @Provides @Singleton
