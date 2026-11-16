@@ -1,0 +1,174 @@
+Parts: 37
+  PBTN_1                   SparkFun-Electromechanical-SWITCH-MOMENTARY-2-PTH
+  TXT1                     LogoTextModuleID
+  R1                       5BandResistorModuleID
+  RFID                     PN532_a458c673348a8f04175132de31b91a92_18
+  PCB1                     TwoLayerRectanglePCBModuleID
+  LCD1                     prefix001_72958abe3e5d8c35430886eaa1ad20e5_1
+  ESP32 S3 SUPERMINI       esp32-S3-supermini-tht_1
+  Part3                    SchematicFrameModuleID
+  Part4                    SchematicFrameModuleID
+  Part5                    SchematicFrameModuleID
+  Part6                    SchematicFrameModuleID
+  Copper Fill1             GroundPlaneModuleID
+  Copper Fill2             GroundPlaneModuleID
+  Copper Fill3             GroundPlaneModuleID
+  Copper Fill4             GroundPlaneModuleID
+  Copper Fill5             GroundPlaneModuleID
+  Copper Fill6             GroundPlaneModuleID
+  Copper Fill7             GroundPlaneModuleID
+  Copper Fill8             GroundPlaneModuleID
+  Part7                    SchematicFrameModuleID
+  A1                       DWEII_USBC_5v_2a_boost_converter_mod_1
+  BATTERY 2000mah          SparkFun-Electromechanical-LIPO-OUTLINE-2000
+  J1                       8abf6496b5d466c7a1893c17a296a676
+  Part8                    SchematicFrameModuleID
+  Part9                    SchematicFrameModuleID
+  Q3                       NPN-to92-ebc
+  R3                       ResistorModuleID
+  Q4                       SparkFun-DiscreteSemi-TRANSISTOR_NPN-TO-92-AMMO
+  U1                       Mini-360_850109602f1429a6e614bc76b93b083e_1
+  R4                       5BandResistorModuleID
+  R7                       5BandResistorModuleID
+  C1                       SmallElectrolyticCapacitorModuleID
+  C2                       100milCeramicCapacitorModuleID
+  C3                       SmallElectrolyticCapacitorModuleID
+  C4                       100milCeramicCapacitorModuleID
+  C5                       100milCeramicCapacitorModuleID
+  C6                       100milCeramicCapacitorModuleID
+
+Nets with >= 2 members: 23
+
+NET (15):
+  3.3V
+  3.3V2
+  C1(connector1)
+  C2(connector1)
+  C3(connector1)
+  C4(connector1)
+  C5(connector1)
+  ESP32 S3 SUPERMINI(connector37)
+  LCD1(connector0)
+  R1(connector0)
+  RFID(connector2)
+  U1(connector2)
+
+NET (2):
+  3.3V1
+  J1(connector1)
+
+NET (4):
+  5V_BAT_OUT+
+  A1(connector2)
+  U1(connector1)
+
+NET (4):
+  5V_BAT_OUT-
+  A1(connector3)
+  U1(connector0)
+
+NET (4):
+  A1(connector0)
+  BATTERY 2000mah(connector1)
+  BAT_IN-
+
+NET (4):
+  A1(connector1)
+  BATTERY 2000mah(connector0)
+  BAT_IN+
+
+NET (4):
+  BUZZER_TO_BASE_S8050
+  ESP32 S3 SUPERMINI(connector9)
+  R4(connector0)
+
+NET (20):
+  C1(connector0)
+  C2(connector0)
+  C3(connector0)
+  C4(connector0)
+  C5(connector0)
+  C6(connector1)
+  ESP32 S3 SUPERMINI(connector38)
+  GND
+  GND2
+  LCD1(connector1)
+  PBTN_1(connector0)
+  Q3(connector0)
+  Q4(connector0)
+  RFID(connector1)
+  U1(connector3)
+
+NET (6):
+  C6(connector0)
+  ESP32 S3 SUPERMINI(connector7)
+  ESP_TO_PUSHBUTTON_1
+  PBTN_1(connector2)
+  R1(connector1)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector10)
+  ESP_TO_RFID_SCL
+  RFID(connector4)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector31)
+  ESP_TO_LCD_RST
+  LCD1(connector3)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector32)
+  ESP_TO_LCD_A0
+  LCD1(connector4)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector33)
+  ESP_TO_LCD_CS
+  LCD1(connector2)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector34)
+  ESP_TO_LCD_SDA
+  LCD1(connector5)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector35)
+  ESP_TO_LCD_SCLK
+  LCD1(connector6)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector36)
+  ESP_TO_LCD_LED
+  R3(connector0)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector5)
+  ESP_TO_RFID_SDA
+  RFID(connector3)
+
+NET (4):
+  ESP32 S3 SUPERMINI(connector8)
+  ESP_TO_RFID_IRQ
+  RFID(connector11)
+
+NET (2):
+  GND1
+  R7(connector1)
+
+NET (2):
+  J1(connector0)
+  Q4(connector2)
+
+NET (4):
+  LCD1(connector7)
+  LCD_LED_SWITCH
+  Q3(connector2)
+
+NET (2):
+  Q3(connector1)
+  R3(connector1)
+
+NET (3):
+  Q4(connector1)
+  R4(connector1)
+  R7(connector0)
