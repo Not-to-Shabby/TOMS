@@ -9,10 +9,15 @@ let pool: Pool;
 let drop: () => Promise<void>;
 let app: ReturnType<typeof createApp>;
 let deviceToken: string;
+let admin: string;
 
 beforeAll(async () => {
   ({ pool, drop } = await createTestDb());
   app = createApp({ pool, jwtSecret: TEST_JWT_SECRET });
+  const { createAdmin } = await import('../src/admins');
+  await createAdmin(pool, 'boss', 'correct horse battery');
+  const login = await request(app).post('/api/admin/login').send({ username: 'boss', password: 'correct horse battery' });
+  admin = login.body.token;
 });
 afterAll(async () => drop());
 beforeEach(async () => {
@@ -187,5 +192,48 @@ describe('device_status telemetry', () => {
     ]);
     expect(body.accepted).toHaveLength(1);
     expect(await viewRows()).toHaveLength(0);
+  });
+
+  it('is excluded from the audit log, the audit CSV and the delivery counts, but keeps the device seen', async () => {
+    const tripId = randomUUID();
+    await upload([
+      {
+        event_id: randomUUID(),
+        device_id: 'dev-1',
+        local_seq: 1,
+        type: 'trip_created',
+        created_at_millis: T0,
+        payload: {
+          tripId,
+          cardUuid: randomUUID(),
+          nfcUid: '6FF1AD39',
+          boardingStopId: 's1',
+          declaredDestinationStopId: 's2',
+          computedFareCentavos: 1500,
+          fareCentavos: 1500,
+          discountCentavos: 0,
+          fareVersion: 1,
+        },
+      },
+      statusEvent(2, deviceStatusPayload()),
+    ]);
+
+    // Audit log: only the trip, never the heartbeat.
+    const audit = await request(app).get('/api/audit/logs').set('Authorization', `Bearer ${admin}`);
+    expect(audit.body.metadata.total).toBe(1);
+    expect(audit.body.logs[0].event_type).toBe('trip_created');
+
+    // CSV export: the heartbeat cannot crowd trips out of the row-limited export.
+    const csv = await request(app).get('/api/export/audit').set('Authorization', `Bearer ${admin}`);
+    expect(csv.text).toContain('trip_created');
+    expect(csv.text).not.toContain('device_status');
+
+    // Delivery summary: the counts and lag stay the RQ4 numbers for real events...
+    const delivery = await request(app).get('/api/delivery/summary').set('Authorization', `Bearer ${admin}`);
+    expect(delivery.body.channels[0].events).toBe(1);
+    const device = delivery.body.devices.find((d: { device_id: string }) => d.device_id === 'dev-1');
+    expect(device.events_24h).toBe(1);
+    // ...but the heartbeat still proves the device is alive.
+    expect(device.last_seen).not.toBeNull();
   });
 });

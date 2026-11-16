@@ -4,6 +4,10 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -144,5 +148,74 @@ class DeviceStatusReporterTest {
 
         val second = decode(statuses().last().payload).localSeq
         assertTrue("the sequence advanced past the first status", second > first)
+    }
+
+    // The heartbeat follows the shift, not a screen: it runs in the reporter's own scope, survives the
+    // screen being recreated, and stops at the shift end or a sign-out (pause).
+
+    /** The writes land on Room's own thread, so pump the scheduler and poll rather than asserting at once. */
+    private fun TestScope.settleUntil(condition: () -> Boolean) {
+        val end = System.currentTimeMillis() + 5_000
+        while (!condition() && System.currentTimeMillis() < end) {
+            testScheduler.runCurrent()
+            Thread.sleep(10)
+        }
+        testScheduler.runCurrent()
+        assertTrue("condition not met in time", condition())
+    }
+
+    @Test
+    fun `the timer writes at shift start on the 5-minute period and stops when the shift ends`() = runTest {
+        val reporter = reporter()
+        reporter.scopeForTests = backgroundScope
+        reporter.start("shift-1") { fix }
+        settleUntil { statuses().size == 1 }
+
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS)
+        settleUntil { statuses().size == 2 }
+
+        reporter.stop("shift-1")
+        settleUntil { statuses().size == 3 }
+
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS * 3)
+        settleUntil { statuses().size == 3 }
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS)
+        Thread.sleep(50)
+        testScheduler.runCurrent()
+        assertEquals("nothing is written after the shift ended", 3, statuses().size)
+    }
+
+    @Test
+    fun `a recreated screen starting the shift again does not double the heartbeat`() = runTest {
+        val reporter = reporter()
+        reporter.scopeForTests = backgroundScope
+        reporter.start("shift-1") { fix }
+        settleUntil { statuses().size == 1 }
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS)
+        settleUntil { statuses().size == 2 }
+
+        // The same thing a configuration change or a reopened app does: start() is called again while
+        // the loop is already running. It must keep the one loop, not launch a second one.
+        reporter.start("shift-1") { fix }
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS)
+        settleUntil { statuses().size == 3 }
+    }
+
+    @Test
+    fun `signing out pauses the heartbeat without writing a shift-end status`() = runTest {
+        val reporter = reporter()
+        reporter.scopeForTests = backgroundScope
+        reporter.start("shift-1") { fix }
+        settleUntil { statuses().size == 1 }
+
+        reporter.pause()
+        advanceTimeBy(RealDeviceStatusReporter.INTERVAL_MILLIS * 2)
+        Thread.sleep(50)
+        testScheduler.runCurrent()
+        assertEquals("no further statuses, and no shift-end status either", 1, statuses().size)
+
+        // A resumed shift starts the writer again (start after pause behaves like a fresh start).
+        reporter.start("shift-1") { fix }
+        settleUntil { statuses().size == 2 }
     }
 }

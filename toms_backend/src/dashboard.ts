@@ -143,7 +143,7 @@ export function registerDashboardRoutes(
     const where = auditWhere(q.data, tz);
 
     const total = Number(
-      (await pool.query(`SELECT count(*) AS n FROM events ${where.sql}`, where.params)).rows[0].n,
+      (await pool.query(`SELECT count(*) AS n FROM audit_events ${where.sql}`, where.params)).rows[0].n,
     );
     const { rows } = await pool.query(
       `SELECT id, event_id, event_type, effective_at AS timestamp, occurred_at, received_at, clock_suspect,
@@ -153,7 +153,7 @@ export function registerDashboardRoutes(
               discount_category_id, computed_fare_centavos, fare_centavos, discount_centavos,
               fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m, gps_fix_at,
               passenger_count, passengers
-       FROM events ${where.sql}
+       FROM audit_events ${where.sql}
        ORDER BY effective_at DESC, id DESC
        LIMIT $${where.params.length + 1} OFFSET $${where.params.length + 2}`,
       [...where.params, limit, (page - 1) * limit],
@@ -228,7 +228,7 @@ export function registerDashboardRoutes(
               boarding_stop_id, declared_destination_stop_id, actual_destination_stop_id,
               discount_category_id, computed_fare_centavos, fare_centavos, discount_centavos,
               fare_version, override_reason, gps_lat, gps_lon, gps_accuracy_m, passenger_count
-       FROM events ORDER BY effective_at DESC, id DESC LIMIT $1`,
+       FROM audit_events ORDER BY effective_at DESC, id DESC LIMIT $1`,
       [EXPORT_ROW_LIMIT + 1],
     );
     const truncated = rows.length > EXPORT_ROW_LIMIT;
@@ -292,8 +292,10 @@ export function registerDashboardRoutes(
   });
 
   // How events are reaching the server. The server cannot see a phone's unsent backlog; that count
-  // needs a heartbeat from the app (not built yet). What it can show is when each phone last
-  // delivered, by which channel, and how long events waited between happening and arriving.
+  // comes from the phone's device_status telemetry, which is deliberately excluded here (via the
+  // audit_events view) so these delivery counts and lag figures stay the RQ4 numbers for real trip
+  // and shift events. A phone's last_seen keeps using every event, heartbeat included: liveness is
+  // exactly what the heartbeat is for.
   app.get('/api/delivery/summary', admin, async (_req, res) => {
     const channels = await pool.query(
       `SELECT delivery_channel,
@@ -301,17 +303,19 @@ export function registerDashboardRoutes(
               max(received_at) AS last_received,
               percentile_cont(0.5)  WITHIN GROUP (ORDER BY extract(epoch FROM received_at - occurred_at)) AS lag_p50_s,
               percentile_cont(0.95) WITHIN GROUP (ORDER BY extract(epoch FROM received_at - occurred_at)) AS lag_p95_s
-       FROM events
+       FROM audit_events
        WHERE received_at > now() - interval '7 days' AND NOT clock_suspect
        GROUP BY delivery_channel ORDER BY delivery_channel`,
     );
     const devices = await pool.query(
       `SELECT d.device_id, d.vehicle_id, d.label, d.revoked_at IS NOT NULL AS revoked,
-              max(e.received_at) AS last_seen,
-              count(e.id) FILTER (WHERE e.received_at > now() - interval '24 hours') AS events_24h,
-              count(e.id) FILTER (WHERE e.clock_suspect) AS clock_suspect_events
-       FROM devices d LEFT JOIN events e ON e.device_id = d.device_id
-       GROUP BY d.device_id ORDER BY last_seen DESC NULLS LAST, d.device_id`,
+              (SELECT max(e.received_at) FROM events e WHERE e.device_id = d.device_id) AS last_seen,
+              (SELECT count(*) FROM audit_events a
+                WHERE a.device_id = d.device_id AND a.received_at > now() - interval '24 hours') AS events_24h,
+              (SELECT count(*) FROM audit_events a
+                WHERE a.device_id = d.device_id AND a.clock_suspect) AS clock_suspect_events
+       FROM devices d
+       ORDER BY last_seen DESC NULLS LAST, d.device_id`,
     );
     const num = (v: unknown) => (v == null ? null : Number(v));
     res.json({

@@ -33,6 +33,7 @@ import ph.toms.conductor.domain.TripRejection
 import ph.toms.conductor.domain.TripResult
 import ph.toms.conductor.location.LocationTracker
 import ph.toms.conductor.nfc.CardRead
+import ph.toms.conductor.telemetry.DeviceStatusReporter
 
 data class TripRow(val trip: Trip, val cardState: CardState)
 
@@ -61,6 +62,7 @@ class SessionViewModel @Inject constructor(
     private val repo: SessionRepository,
     private val trips: TripRepository,
     private val location: LocationTracker,
+    private val statusReporter: DeviceStatusReporter,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SessionUiState())
@@ -157,9 +159,11 @@ class SessionViewModel @Inject constructor(
         }
     }
 
-    /** Ends the sign-in only. The shift stays open in the database, and the same conductor can resume it. */
+    /** Ends the sign-in only. The shift stays open in the database, and the same conductor can resume it.
+     *  The heartbeat pauses with the sign-in: nobody is on the vehicle, so nobody is reporting. */
     fun signOut() {
         repo.signOut()
+        statusReporter.pause()
         stopLocation()
         _state.update { it.copy(conductor = null, assignment = null, loginError = null) }
     }

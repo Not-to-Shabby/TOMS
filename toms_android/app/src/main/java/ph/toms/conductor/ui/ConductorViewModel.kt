@@ -348,13 +348,13 @@ class ConductorViewModel @Inject constructor(
         when (result) {
             is StartShiftResult.Started -> {
                 shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
-                statusReporter.start(viewModelScope, result.shift.id) { _state.value.fix }
+                statusReporter.start(result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
             is StartShiftResult.Resumed -> {
                 shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
-                statusReporter.start(viewModelScope, result.shift.id) { _state.value.fix }
+                statusReporter.start(result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
                 _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
             }
