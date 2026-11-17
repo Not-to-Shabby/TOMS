@@ -172,9 +172,9 @@ Hardware diagnostic test bench commands:
 * `cmd = 0x04`: Query PN532 NFC Hardware Health
 * `cmd = 0x05`: Clear / silence the alarm (`05 00`, what `RmProtocol.encodeAlarmClear()` sends). Accepted on an encrypted link.
 * `cmd = 0x06`: Provision the signing key: `06` + 32 key bytes. Accepted once, only on an encrypted link; answered with `[0x86, status, 0, 0]` (0 stored, 1 already set, 2 flash error, 0xFF refused).
-* `cmd = 0x00`: removed. It used to unlock the bench commands with a fixed code; a fixed code is a credential in source.
+* `cmd = 0x00`: open a diagnostic session. Accepted only while the machine is in its local diagnostic mode (someone at the machine holds the button 3 s); answered `[0x80, 0, 1, 0]` (open) or `[0x80, 0, 0, 0xFF]` (refused). Bytes after the command are ignored: the old fixed code is no longer checked, so nothing secret is in the image. The session ends on disconnect.
 
-`0x01`-`0x04` exist only in a `CONFIG_TOMS_DEV_MODE` build.
+`0x01`-`0x04` need an open session (or a `CONFIG_TOMS_DEV_MODE` build).
 
 **Diagnostic Notification (RM → Phone)**:
 * `[0x81, count_low, count_high, 0x01]`: Physical Button Pressed (`count`: uint16 button presses)
