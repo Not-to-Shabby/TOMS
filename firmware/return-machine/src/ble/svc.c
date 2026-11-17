@@ -440,6 +440,9 @@ static int handle_sim_card(const uint8_t *data, uint16_t len)
 	return 0;
 }
 
+/* Set by diag command 0x00 on an encrypted link; cleared on disconnect. */
+static bool diag_authenticated;
+
 static int handle_diag(const uint8_t *data, uint16_t len)
 {
 	if (len < 1) {
@@ -448,13 +451,25 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	uint8_t cmd = data[0];
 	uint8_t arg = (len >= 2) ? data[1] : 0;
 
-	/* Command 0x00 used to unlock the bench commands with a fixed code compiled into the
-	 * image. A fixed code is a credential in source, so it is gone: the bench commands below
-	 * exist only in a CONFIG_TOMS_DEV_MODE build. */
+	/* Command 0x00: open a diagnostic session and turn the machine's diagnostic mode on (what the
+	 * diagnostic app expects on connect). The authorization is the link: a write to this
+	 * characteristic already needs an encrypted, bonded connection (the passkey is shown on the
+	 * LCD and confirmed at the machine), and the same is checked here. Bytes after the command
+	 * are ignored: older apps send a fixed code there, it is not checked, so there is no secret
+	 * in the image. */
 	if (cmd == 0x00) {
-		uint8_t nack[4] = { 0x80, 0x00, 0x00, 0xFF };
-		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
-		return -EACCES;
+		bool ok = IS_ENABLED(CONFIG_TOMS_DEV_MODE) ||
+			  (current_conn != NULL && bt_conn_get_security(current_conn) >= BT_SECURITY_L2);
+
+		diag_authenticated = ok;
+		if (ok) {
+			display_set_diag_mode(true);
+		}
+		LOG_INF("diag: session %s", ok ? "opened (encrypted link)" : "refused (link not encrypted)");
+		uint8_t rsp[4] = { 0x80, 0x00, (uint8_t)(ok ? 0x01 : 0x00), (uint8_t)(ok ? 0x00 : 0xFF) };
+
+		(void)NOTIFY(0x0E, diag_notify, rsp, sizeof(rsp));
+		return ok ? 0 : -EACCES;
 	}
 
 	/* Command 0x05: Clear / Silence Unpaid Alarm (allowed for conductors anytime) */
@@ -484,9 +499,9 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 		return st == 0 ? 0 : -EACCES;
 	}
 
-	/* Bench commands 0x01..0x04 exist only in a dev build */
-	if (!IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
-		LOG_WRN("diag: cmd 0x%02X rejected (not a dev build)", cmd);
+	/* Bench commands 0x01..0x04: a dev build, or a session opened with command 0x00 */
+	if (!diag_authenticated && !display_is_diag_mode() && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
+		LOG_WRN("diag: cmd 0x%02X rejected (machine diagnostic mode is off)", cmd);
 		uint8_t nack[4] = { (uint8_t)(0x80 | cmd), 0x00, 0x00, 0xFF };
 		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
 		return -EACCES;
@@ -631,7 +646,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	ack_notify = false;
 	ota_notify = false;
 	diag_notify = false;
-	display_set_diag_mode(false);
+	diag_authenticated = false;
+	display_set_diag_mode(false); /* the session ends with the link */
 }
 
 /* The connection object is free again: advertise for the next connection. */
