@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import { assertJwtSecret } from './auth';
 import { assertTimezone } from './dashboard';
 import { createPool, migrate } from './db';
+import { vaultFromEnv } from './keyVault';
 import { createServer } from './server';
 
 dotenv.config();
@@ -27,7 +28,12 @@ async function main() {
   if (applied.length > 0) console.log('Applied migrations:', applied.join(', '));
   const reportTimezone = await assertTimezone(pool, process.env.REPORT_TIMEZONE ?? 'Asia/Manila');
 
-  const { server } = createServer({ pool, jwtSecret, corsOrigins, reportTimezone, trustProxyHops });
+  // Optional: without RM_KEY_MASTER_KEY the Return Machine key routes answer 503 and store nothing.
+  // A set-but-invalid value throws here, so a typo cannot silently turn the feature off.
+  const keyVault = vaultFromEnv();
+  if (!keyVault) console.log('RM_KEY_MASTER_KEY is not set: Return Machine key issuing is disabled');
+
+  const { server } = createServer({ pool, jwtSecret, corsOrigins, reportTimezone, trustProxyHops, keyVault });
   const port = Number(process.env.PORT) || 3000;
   server.listen(port, () => console.log(`TOMS backend listening on port ${port}`));
 }

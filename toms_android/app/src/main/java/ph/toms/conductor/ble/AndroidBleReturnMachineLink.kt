@@ -42,6 +42,7 @@ import kotlinx.coroutines.withTimeout
 class AndroidBleReturnMachineLink @Inject constructor(
     @ApplicationContext private val context: Context,
     trust: RmMachineTrust,
+    private val enrolment: dagger.Lazy<RmKeyEnrolment>,
 ) : ReturnMachineLink {
 
     private val scope = CoroutineScope(Dispatchers.IO + Job())
@@ -72,6 +73,9 @@ class AndroidBleReturnMachineLink @Inject constructor(
             _droppedCount.value += 1
             Log.w("RmTrust", "dropped notify 0x%02x: %s".format(suffix, reason))
         },
+        onVerified = { id, match -> enrolment.get().onVerified(id, match) },
+        onSignedWithoutKey = { id -> enrolment.get().onUnknownSignature(id) },
+        onBadSignature = { id -> enrolment.get().onUnknownSignature(id) },
     )
 
     private var gatt: BluetoothGatt? = null

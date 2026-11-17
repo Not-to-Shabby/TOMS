@@ -39,6 +39,7 @@ import ph.toms.conductor.sync.EventUploader
 import ph.toms.conductor.sync.OutboxFlusher
 import ph.toms.conductor.ble.FakeReturnMachineLink
 import ph.toms.conductor.service.ShiftServiceController
+import ph.toms.conductor.ble.FakeRmKeyEnrolment
 import ph.toms.conductor.ble.RealRmReadIntake
 import ph.toms.conductor.telemetry.FakeDeviceStatusReporter
 import ph.toms.conductor.sync.ConfigRefresher
@@ -93,7 +94,7 @@ class ShiftFlowTest {
         val fakeLink = FakeReturnMachineLink()
         vm = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), fakeLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, fakeLink), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), fakeLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, fakeLink), FakeRmKeyEnrolment(), InitialConfig(TestConfig.config),
         )
         syncVm = SyncViewModel(repo, Config(), OutboxFlusher(db.outbox(), uploader), FakeUplinkManager())
     }
@@ -290,7 +291,7 @@ class ShiftFlowTest {
         val secondLink = FakeReturnMachineLink()
         val second = ConductorViewModel(
             repo, LocationTracker(context), RecordingFeedback(), MemorySettings(Handedness.Right),
-            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), secondLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, secondLink), InitialConfig(TestConfig.config),
+            Config(), NoCardSync(), ConfigRefresher(repo, FakeConfigSync()), secondLink, ShiftServiceController.None, FakeDeviceStatusReporter(), RealRmReadIntake(repo, db, secondLink), FakeRmKeyEnrolment(), InitialConfig(TestConfig.config),
         )
         second.startShift("maria", "v1", "r1")
         settle { second.state.value.blockedBy != null }

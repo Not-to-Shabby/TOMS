@@ -48,6 +48,8 @@ import ph.toms.conductor.domain.ServerConfig
 import ph.toms.conductor.ble.ReturnMachineLink
 import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.ble.RmEvent
+import ph.toms.conductor.ble.RmKeyEnrolment
+import ph.toms.conductor.ble.RmKeyStatus
 import ph.toms.conductor.ble.RmReadIntake
 import ph.toms.conductor.service.ShiftServiceController
 import ph.toms.conductor.telemetry.DeviceStatusReporter
@@ -124,6 +126,8 @@ data class ConductorState(
     val rmConnection: RmConnectionState = RmConnectionState.Disconnected,
     /** Latest telemetry heartbeat received from the Return Machine. */
     val rmHeartbeat: RmProtocol.Heartbeat? = null,
+    /** What the conductor reads about the Return Machine's signing key. Plain words, never a key. */
+    val rmKeyStatus: RmKeyStatus = RmKeyStatus.NONE,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 
@@ -157,6 +161,7 @@ class ConductorViewModel @Inject constructor(
     private val shiftService: ShiftServiceController = ShiftServiceController.None,
     private val statusReporter: DeviceStatusReporter,
     private val rmIntake: RmReadIntake,
+    private val rmEnrolment: RmKeyEnrolment,
     initial: InitialConfig,
 ) : ViewModel() {
 
@@ -225,13 +230,18 @@ class ConductorViewModel @Inject constructor(
                 when (conn) {
                     is RmConnectionState.Connected -> {
                         rmIntake.onConnected(conn.deviceAddress)
+                        rmEnrolment.onConnected(conn.deviceAddress)
                         syncFullCardSnapshotToRm()
                     }
-                    RmConnectionState.Disconnected -> rmIntake.onDisconnected()
+                    RmConnectionState.Disconnected -> {
+                        rmIntake.onDisconnected()
+                        rmEnrolment.onDisconnected()
+                    }
                     else -> {}
                 }
             }
         }
+        viewModelScope.launch { rmEnrolment.status.collect { s -> _state.update { it.copy(rmKeyStatus = s) } } }
         viewModelScope.launch {
             rmLink.lastHeartbeat.collect { hb ->
                 hb?.let(rmIntake::onHeartbeat)

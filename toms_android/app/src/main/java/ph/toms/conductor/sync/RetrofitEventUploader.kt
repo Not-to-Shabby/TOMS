@@ -11,6 +11,8 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import ph.toms.conductor.ble.RmKeyFetch
+import ph.toms.conductor.ble.RmKeyService
 import ph.toms.conductor.data.DeviceConfigResponse
 import ph.toms.conductor.data.db.PendingEvent
 import ph.toms.conductor.domain.ApprovedCardList
@@ -86,7 +88,43 @@ interface TomsApiService {
     suspend fun loginConductor(
         @Body request: ConductorLoginRequest,
     ): ConductorLoginResponse
+
+    @GET("api/device/return-machine-key")
+    suspend fun fetchReturnMachineKey(
+        @Header("Authorization") authHeader: String?,
+    ): ReturnMachineKeyResponse
+
+    @POST("api/device/return-machine-key/mismatch")
+    suspend fun reportReturnMachineMismatch(
+        @Header("Authorization") authHeader: String?,
+        @Body body: ReturnMachineMismatchBody,
+    ): StatusResponse
+
+    @POST("api/device/return-machine-key/verified")
+    suspend fun reportReturnMachineVerified(
+        @Header("Authorization") authHeader: String?,
+        @Body body: ReturnMachineVerifiedBody,
+    ): StatusResponse
 }
+
+/** The key the server issues for this phone's vehicle's Return Machine. [key] is base64 of 32 bytes. Never logged. */
+@Serializable
+data class ReturnMachineKeyResponse(
+    @SerialName("machine_id") val machineId: String,
+    @SerialName("key_version") val keyVersion: Int,
+    val key: String,
+    @SerialName("previous_key") val previousKey: String? = null,
+    @SerialName("previous_valid_until") val previousValidUntil: String? = null,
+)
+
+@Serializable
+data class ReturnMachineMismatchBody(val reason: String)
+
+@Serializable
+data class ReturnMachineVerifiedBody(@SerialName("key_version") val keyVersion: Int)
+
+@Serializable
+data class StatusResponse(val status: String = "")
 
 @Serializable
 data class ConductorLoginRequest(
@@ -123,7 +161,7 @@ interface CardRegistrySync {
 class RetrofitEventUploader @Inject constructor(
     private val config: DeviceConfigStore,
     private val okHttpClient: OkHttpClient,
-) : EventUploader, CardRegistrySync, ConfigSync, ConductorAuthService {
+) : EventUploader, CardRegistrySync, ConfigSync, ConductorAuthService, RmKeyService {
 
     override val channel: String = "data_a"
 
@@ -226,6 +264,55 @@ class RetrofitEventUploader @Inject constructor(
             Result.success(ApprovedCardList(res.cards, res.statuses))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    override suspend fun fetchKey(): RmKeyFetch {
+        val token = config.deviceToken.value
+        if (token.isNullOrBlank()) return RmKeyFetch.Failed("Not enrolled. Set the device token on More.")
+        val api = createApi() ?: return RmKeyFetch.Failed(if (config.serverUrl.value.isBlank()) NO_SERVER_MESSAGE else "The server URL is not valid.")
+        return try {
+            val res = api.fetchReturnMachineKey("Bearer $token")
+            val key = runCatching { android.util.Base64.decode(res.key, android.util.Base64.DEFAULT) }.getOrNull()
+            if (key == null || key.size != 32) {
+                RmKeyFetch.Failed("The server sent a key of the wrong size.")
+            } else {
+                val previous = res.previousKey?.let { runCatching { android.util.Base64.decode(it, android.util.Base64.DEFAULT) }.getOrNull() }
+                    ?.takeIf { it.size == 32 }
+                RmKeyFetch.Issued(
+                    machineId = res.machineId,
+                    keyVersion = res.keyVersion,
+                    key = key,
+                    previousKey = previous,
+                    previousValidUntilMillis = res.previousValidUntil?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() },
+                )
+            }
+        } catch (e: HttpException) {
+            when (e.code()) {
+                404 -> RmKeyFetch.NotRegistered(serverReason(e) ?: "No Return Machine is registered for this vehicle.")
+                401 -> RmKeyFetch.Failed("The server did not accept this phone's token (401).")
+                429 -> RmKeyFetch.Failed("Too many key requests; trying again shortly.")
+                503 -> RmKeyFetch.Failed("The server is not set up to issue Return Machine keys yet.")
+                else -> RmKeyFetch.Failed("The server answered ${e.code()}.")
+            }
+        } catch (e: Exception) {
+            RmKeyFetch.Failed(e.message ?: "No connection to the server.")
+        }
+    }
+
+    override suspend fun reportMismatch(reason: String): Boolean = report { api, bearer -> api.reportReturnMachineMismatch(bearer, ReturnMachineMismatchBody(reason)) }
+
+    override suspend fun reportVerified(keyVersion: Int): Boolean = report { api, bearer -> api.reportReturnMachineVerified(bearer, ReturnMachineVerifiedBody(keyVersion)) }
+
+    private suspend fun report(call: suspend (TomsApiService, String) -> StatusResponse): Boolean {
+        val token = config.deviceToken.value
+        if (token.isNullOrBlank()) return false
+        val api = createApi() ?: return false
+        return try {
+            call(api, "Bearer $token")
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
