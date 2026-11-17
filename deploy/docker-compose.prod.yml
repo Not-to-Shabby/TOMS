@@ -43,6 +43,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set in deploy/.env}
       CORS_ORIGINS: ${PUBLIC_BASE_URL}
       REPORT_TIMEZONE: ${REPORT_TIMEZONE:-Asia/Manila}
+      # Seals the Return Machine signing keys at rest: 64 hex characters (openssl rand -hex 32). Optional: while it is
+      # blank the Return Machine routes answer 503 and nothing is stored. A value that is set but malformed makes the API refuse to start.
+      RM_KEY_MASTER_KEY: ${RM_KEY_MASTER_KEY:-}
       # Caddy sets X-Forwarded-For to the client's address (replacing anything the client sent) and nginx appends the
       # address it sees, so the real client is the second address from the right. Change this only if a proxy is added or removed.
       TRUST_PROXY_HOPS: 2
