@@ -231,6 +231,17 @@ fun MoreScreen(
             ph.toms.conductor.ble.RmConnectionState.Disconnected -> "offline"
         }
         Fact("Return Machine", rmLabel)
+        // The signing key's state in plain words: waiting, written, verified, or a mismatch that needs a person.
+        Text(
+            state.rmKeyStatus.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = when (state.rmKeyStatus.severity) {
+                ph.toms.conductor.ble.RmKeyStatus.Severity.GOOD -> TomsColors.Good
+                ph.toms.conductor.ble.RmKeyStatus.Severity.WARN -> TomsColors.Warn
+                ph.toms.conductor.ble.RmKeyStatus.Severity.BAD -> TomsColors.Bad
+                ph.toms.conductor.ble.RmKeyStatus.Severity.NEUTRAL -> TomsColors.InkSoft
+            },
+        )
         state.rmHeartbeat?.let { hb ->
             Fact("RM battery", if (hb.isOnUsb) "USB power" else "${hb.batteryPct}% (${hb.batteryMv} mV)")
             Fact("RM uptime", "${hb.uptimeS}s")

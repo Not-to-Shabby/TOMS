@@ -11,6 +11,8 @@ import { registerFareRoutes, FARES_UPLOAD_DIR } from './fares';
 import { registerReceiptRoutes } from './receipt';
 import { envelopeSchema, ingestEvents } from './ingest';
 import { RateLimiter } from './rateLimit';
+import type { KeyVault } from './keyVault';
+import { registerReturnMachineRoutes } from './returnMachines';
 
 export interface AppDeps {
   pool: Pool;
@@ -31,6 +33,13 @@ export interface AppDeps {
   trustProxyHops?: number;
   /** IANA zone used for "today" in reports. Defaults to the Philippines. */
   reportTimezone?: string;
+  /**
+   * Seals the Return Machine signing keys at rest (RM_KEY_MASTER_KEY). Without it the Return Machine routes
+   * answer 503 and nothing is stored or served.
+   */
+  keyVault?: KeyVault;
+  /** Return Machine key fetches per phone. Defaults to 6 per minute. */
+  rmKeyFetchLimiter?: RateLimiter;
 }
 
 const id = z.coerce.number().int().positive();
@@ -65,6 +74,8 @@ export function createApp({
   publicLimiter,
   trustProxyHops = 0,
   reportTimezone = 'Asia/Manila',
+  keyVault,
+  rmKeyFetchLimiter,
 }: AppDeps) {
   const app = express();
   const auth = makeAuth({ pool, jwtSecret });
@@ -241,6 +252,7 @@ export function createApp({
 
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
   registerCardRoutes(app, { pool, admin, auth });
+  registerReturnMachineRoutes(app, { pool, admin, auth, vault: keyVault, fetchLimiter: rmKeyFetchLimiter });
   registerFareRoutes(app, { pool, admin });
   registerDeviceConfigRoutes(app, { pool, auth });
   registerReceiptRoutes(app, { pool, limiter: publicLimiter ?? new RateLimiter(120, 60_000) });

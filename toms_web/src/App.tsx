@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Map as MapIcon, BarChart3, History, Users, Bus, LogOut, CreditCard, FileText, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Map as MapIcon, BarChart3, History, Users, Bus, LogOut, CreditCard, FileText, KeyRound, Menu, X } from 'lucide-react';
 import RouteBuilder from './pages/RouteBuilder';
 import DashboardHome from './pages/DashboardHome';
 import AnalyticsHome from './pages/AnalyticsHome';
 import AuditLogs from './pages/AuditLogs';
 import ConductorsList from './pages/ConductorsList';
 import FleetManager from './pages/FleetManager';
+import ReturnMachines from './pages/ReturnMachines';
 import CardRegistry from './pages/CardRegistry';
 import FareSettings from './pages/FareSettings';
 import ReceiptView from './pages/ReceiptView';
@@ -56,6 +57,10 @@ function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }
         <Link to="/vehicles" style={getLinkStyle('/vehicles')}>
           <Bus size={20} />
           <span>Fleet Manager</span>
+        </Link>
+        <Link to="/return-machines" style={getLinkStyle('/return-machines')}>
+          <KeyRound size={20} />
+          <span>Return Machines</span>
         </Link>
         <Link to="/conductors" style={getLinkStyle('/conductors')}>
           <Users size={20} />
@@ -116,6 +121,7 @@ function AdminShell() {
           <Route path="/routes" element={<RouteBuilder />} />
           <Route path="/conductors" element={<ConductorsList />} />
           <Route path="/vehicles" element={<FleetManager />} />
+          <Route path="/return-machines" element={<ReturnMachines />} />
           <Route path="/cards" element={<CardRegistry />} />
           <Route path="/cards/designer" element={<CardDesigner />} />
           <Route path="/fares" element={<FareSettings />} />
