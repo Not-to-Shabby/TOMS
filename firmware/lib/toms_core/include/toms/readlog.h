@@ -3,8 +3,11 @@
  * logic runs on the host against a fake flash that can lose power in the middle of a write.
  *
  * Layout: slots are used round robin, one fixed 32-byte record each:
- * [seq u32][len u8][frame ...][crc16 u16 in the last two bytes]. A record is valid only when the
- * crc matches, so a torn write is never sent. The write pointer is rebuilt at open from the
+ * [seq u32][len+outcome u8][v1 frame ...][crc16 u16 in the last two bytes]. The length byte is
+ * len in bits 0-4 and the paid-check outcome in bits 5-6 (bit 7 must be 0); a record written
+ * before outcomes existed has them 0 = NORMAL. The frame is always the v1 card_read; v2 is that
+ * plus the outcome byte, appended at send time. A record is valid only when the crc matches, so
+ * a torn write is never sent. The write pointer is rebuilt at open from the
  * slot after the highest sequence number. Sequence numbers
  * never go back across a power cycle: a high-water mark is saved ahead of use, in steps. */
 #ifndef TOMS_READLOG_H
@@ -29,6 +32,9 @@ struct toms_readlog_io {
 	/* -ENOENT when nothing was saved yet */
 	int (*load_hwm)(void *ctx, uint32_t *hwm);
 	int (*save_hwm)(void *ctx, uint32_t hwm);
+	/* Optional (NULL = the drop count is not kept across a power cycle). -ENOENT when unset. */
+	int (*load_dropped)(void *ctx, uint32_t *dropped);
+	int (*save_dropped)(void *ctx, uint32_t dropped);
 };
 
 struct toms_readlog {
@@ -40,7 +46,8 @@ struct toms_readlog {
 	uint32_t hwm;       /* saved high-water mark, always >= next_seq */
 	uint32_t count;     /* valid records between first_seq and next_seq */
 	uint32_t sent_upto; /* highest seq notified on a live link this boot (RAM only) */
-	uint32_t dropped;   /* never-sent reads overwritten because the log was full */
+	uint32_t dropped;   /* reads overwritten before they were sent on a live link; kept in flash
+			     * when the io has save_dropped, saturates at UINT32_MAX */
 };
 
 /* Scans the storage and rebuilds the state. Returns 0 or a negative errno. */
@@ -61,6 +68,11 @@ int32_t toms_readlog_append(struct toms_readlog *l, struct toms_card_read_msg *m
 /* First stored frame with seq >= from_seq. Returns the frame length and sets *seq, or -ENOENT. */
 int toms_readlog_get_from(struct toms_readlog *l, uint32_t from_seq, uint8_t *frame, size_t cap,
 			  uint32_t *seq);
+
+/* The same, and also the outcome stored with the read (TOMS_OUTCOME_*). The frame is the v1
+ * card_read; toms_codec_card_read_to_wire() turns it into the connection's layout. */
+int toms_readlog_get_from_ex(struct toms_readlog *l, uint32_t from_seq, uint8_t *frame,
+			     size_t cap, uint32_t *seq, uint8_t *outcome);
 
 /* The phone has everything up to and including upto_seq: free those records. */
 int toms_readlog_ack(struct toms_readlog *l, uint32_t upto_seq);

@@ -23,8 +23,10 @@ LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 
 #include <toms/clock.h>
 #include <toms/codec.h>
+#include <toms/late.h>
 #include <toms/sig.h>
 #include <toms/state_table.h>
+#include <toms/wire.h>
 
 #define TOMS_FW_MAJOR 0
 #define TOMS_FW_MINOR 1
@@ -90,6 +92,11 @@ static volatile uint8_t reply_verdict;
 static uint32_t paid_sent;
 static uint32_t paid_replied;
 static uint32_t paid_timeouts;
+
+/* Layout this connection uses (v1 until the phone asks for v2) and replies that came too late. */
+static struct toms_wire wire;
+static struct toms_late late;
+static struct k_spinlock late_lock;
 
 static ssize_t write_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 			     const void *buf, uint16_t len, uint16_t offset, uint8_t flags);
@@ -356,12 +363,29 @@ static int handle_paid_reply(const uint8_t *data, uint16_t len)
 	if (verify_write(CHAR_PAID_REPLY, data, len, used) < 0) {
 		return -EACCES;
 	}
-	if (!waiting_reply || seq != pending_seq) {
-		LOG_INF("paid_reply %u ignored (late or unknown)", (unsigned int)seq);
-		return 0;
+	k_spinlock_key_t key = k_spin_lock(&late_lock);
+	bool match = waiting_reply && seq == pending_seq;
+	bool was_late = false;
+
+	if (match) {
+		reply_verdict = verdict;
+		/* Given inside the lock: the waiter's timeout path takes this lock before it decides
+		 * the check timed out, so it either sees this reply or this code sees its timeout. */
+		k_sem_give(&reply_sem);
+	} else {
+		was_late = toms_late_on_reply(&late, seq);
 	}
-	reply_verdict = verdict;
-	k_sem_give(&reply_sem);
+	k_spin_unlock(&late_lock, key);
+
+	if (match) {
+		/* in time: nothing more to do */
+	} else if (was_late) {
+		/* The unverified tone was already played; the alarm is not touched, the reply is only
+		 * counted (heartbeat late_replies). */
+		LOG_INF("paid_reply %u arrived late: counted, nothing else changes", (unsigned int)seq);
+	} else {
+		LOG_INF("paid_reply %u ignored (unknown)", (unsigned int)seq);
+	}
 	return 0;
 }
 
@@ -480,6 +504,17 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 		uint8_t ack[4] = { 0x85, 0x00, 0x00, 0x00 };
 		(void)NOTIFY(0x0E, diag_notify, ack, sizeof(ack));
 		return 0;
+	}
+
+	/* Command 0x07: choose the message layout for this connection (wire v1 or v2, PROTOCOL.md
+	 * section 7). A connection starts on v1, the layout the shipped phone parses. */
+	if (cmd == TOMS_DIAG_CMD_WIRE) {
+		uint8_t rsp[4];
+		uint8_t st = toms_wire_handle_select(&wire, data, len, rsp);
+
+		LOG_INF("diag: wire layout select -> status %u, v%u in force", st, wire.version);
+		(void)NOTIFY(0x0E, diag_notify, rsp, sizeof(rsp));
+		return st == TOMS_WIRE_OK ? 0 : -EINVAL;
 	}
 
 	/* Command 0x06: store the per-machine signing key. Once, and only on an encrypted link;
@@ -629,6 +664,7 @@ static void connected(struct bt_conn *conn, uint8_t err)
 	}
 	current_conn = bt_conn_ref(conn);
 	advertising = false;
+	toms_wire_reset(&wire); /* every connection starts on v1 */
 	LOG_INF("phone connected");
 }
 
@@ -647,6 +683,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	ota_notify = false;
 	diag_notify = false;
 	diag_authenticated = false;
+	toms_wire_reset(&wire);
 	display_set_diag_mode(false); /* the session ends with the link */
 }
 
@@ -727,6 +764,8 @@ static void make_name(char *out, size_t cap)
 int rm_ble_start(void)
 {
 	toms_state_table_init(&table);
+	toms_late_init(&late);
+	toms_wire_reset(&wire);
 	toms_config_defaults(&cfg);
 	toms_clock_init(&rm_clock);
 	rm_ota_init();
@@ -862,22 +901,40 @@ int rm_ble_paid_check(const uint8_t *uid, uint8_t uid_len, uint32_t timeout_ms,
 	}
 
 	k_sem_reset(&reply_sem);
+	k_spinlock_key_t lk = k_spin_lock(&late_lock);
+
 	pending_seq = seq;
 	waiting_reply = true;
+	k_spin_unlock(&late_lock, lk);
 
 	int rc = NOTIFY(0x03, check_notify, frame, (size_t)len);
 	if (rc != 0) {
+		lk = k_spin_lock(&late_lock);
 		waiting_reply = false;
+		k_spin_unlock(&late_lock, lk);
 		return rc;
 	}
 	paid_sent++;
 
 	if (k_sem_take(&reply_sem, K_MSEC(timeout_ms)) != 0) {
+		lk = k_spin_lock(&late_lock);
+		/* A reply that slipped in between the timeout and this lock still counts as in time. */
+		bool got = k_sem_take(&reply_sem, K_NO_WAIT) == 0;
+
 		waiting_reply = false;
-		paid_timeouts++;
-		return -ETIMEDOUT;
+		if (!got) {
+			toms_late_note_timeout(&late, seq);
+		}
+		k_spin_unlock(&late_lock, lk);
+		if (!got) {
+			paid_timeouts++;
+			return -ETIMEDOUT;
+		}
+	} else {
+		lk = k_spin_lock(&late_lock);
+		waiting_reply = false;
+		k_spin_unlock(&late_lock, lk);
 	}
-	waiting_reply = false;
 	paid_replied++;
 	*verdict = reply_verdict;
 	return 0;
@@ -900,6 +957,20 @@ int rm_ble_probe(void)
 		net_buf_unref(rsp);
 	}
 	return rc;
+}
+
+uint8_t rm_ble_wire_version(void)
+{
+	return wire.version;
+}
+
+uint16_t rm_ble_late_replies(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&late_lock);
+	uint16_t n = toms_late_count(&late);
+
+	k_spin_unlock(&late_lock, key);
+	return n;
 }
 
 bool rm_ble_card_subscribed(void)

@@ -6,6 +6,9 @@
 #include <toms/crc16.h>
 
 #define REC_CRC_AT (TOMS_READLOG_REC - 2u)
+#define LEN_MASK 0x1Fu
+#define OUTCOME_SHIFT 5u
+#define OUTCOME_MASK 0x03u
 
 static void put_u32(uint8_t *p, uint32_t v)
 {
@@ -37,7 +40,9 @@ static bool slot_valid(const struct toms_readlog *l, uint32_t slot, uint8_t rec[
 	uint32_t s = get_u32(rec);
 
 	(void)slot;
-	if (s == 0 || rec[4] == 0 || rec[4] > TOMS_READLOG_FRAME_MAX) {
+	if (s == 0 || (rec[4] & 0x80u) != 0 || (rec[4] & LEN_MASK) == 0 ||
+	    (rec[4] & LEN_MASK) > TOMS_READLOG_FRAME_MAX ||
+	    ((rec[4] >> OUTCOME_SHIFT) & OUTCOME_MASK) > TOMS_OUTCOME_UNVERIFIED_NO_LINK) {
 		return false;
 	}
 	*seq = s;
@@ -81,6 +86,9 @@ int toms_readlog_open(struct toms_readlog *l, const struct toms_readlog_io *io, 
 			}
 		}
 	}
+	if (io->load_dropped != NULL && io->load_dropped(io->ctx, &l->dropped) != 0) {
+		l->dropped = 0; /* nothing saved yet, or unreadable: start from zero */
+	}
 	l->count = n;
 	l->wslot = n ? (hi_slot + 1u) % capacity : 0;
 	l->first_seq = n ? lo : hwm;
@@ -109,7 +117,8 @@ int32_t toms_readlog_take_seq(struct toms_readlog *l)
 
 int toms_readlog_store(struct toms_readlog *l, const struct toms_card_read_msg *m)
 {
-	if (l == NULL || m == NULL || m->read_seq == 0) {
+	if (l == NULL || m == NULL || m->read_seq == 0 ||
+	    m->outcome > TOMS_OUTCOME_UNVERIFIED_NO_LINK) {
 		return -EINVAL;
 	}
 	uint32_t slot = l->wslot;
@@ -124,7 +133,7 @@ int toms_readlog_store(struct toms_readlog *l, const struct toms_card_read_msg *
 		return len;
 	}
 	put_u32(rec, m->read_seq);
-	rec[4] = (uint8_t)len;
+	rec[4] = (uint8_t)((uint32_t)len | ((uint32_t)m->outcome << OUTCOME_SHIFT));
 	uint16_t crc = toms_crc16(rec, REC_CRC_AT);
 
 	rec[REC_CRC_AT] = (uint8_t)crc;
@@ -141,7 +150,13 @@ int toms_readlog_store(struct toms_readlog *l, const struct toms_card_read_msg *
 	l->wslot = (slot + 1u) % l->capacity;
 	if (overwrites) {
 		if (old > l->sent_upto) {
-			l->dropped++;
+			if (l->dropped != UINT32_MAX) {
+				l->dropped++;
+			}
+			if (l->io.save_dropped != NULL) {
+				/* A failed save leaves the RAM count right and the flash one behind. */
+				(void)l->io.save_dropped(l->io.ctx, l->dropped);
+			}
 		}
 		if (old >= l->first_seq) {
 			l->first_seq = old + 1u;
@@ -171,6 +186,17 @@ int32_t toms_readlog_append(struct toms_readlog *l, struct toms_card_read_msg *m
 int toms_readlog_get_from(struct toms_readlog *l, uint32_t from_seq, uint8_t *frame, size_t cap,
 			  uint32_t *seq_out)
 {
+	uint8_t outcome;
+
+	return toms_readlog_get_from_ex(l, from_seq, frame, cap, seq_out, &outcome);
+}
+
+int toms_readlog_get_from_ex(struct toms_readlog *l, uint32_t from_seq, uint8_t *frame,
+			     size_t cap, uint32_t *seq_out, uint8_t *outcome)
+{
+	if (outcome == NULL) {
+		return -EINVAL;
+	}
 	if (l == NULL || frame == NULL || seq_out == NULL) {
 		return -EINVAL;
 	}
@@ -195,12 +221,15 @@ int toms_readlog_get_from(struct toms_readlog *l, uint32_t from_seq, uint8_t *fr
 	if (!slot_valid(l, best_slot, rec, &best)) {
 		return -EIO;
 	}
-	if (cap < rec[4]) {
+	uint8_t flen = (uint8_t)(rec[4] & LEN_MASK);
+
+	if (cap < flen) {
 		return -ENOSPC;
 	}
-	memcpy(frame, &rec[5], rec[4]);
+	memcpy(frame, &rec[5], flen);
 	*seq_out = best;
-	return (int)rec[4];
+	*outcome = (uint8_t)((rec[4] >> OUTCOME_SHIFT) & OUTCOME_MASK);
+	return (int)flen;
 }
 
 int toms_readlog_ack(struct toms_readlog *l, uint32_t upto_seq)
