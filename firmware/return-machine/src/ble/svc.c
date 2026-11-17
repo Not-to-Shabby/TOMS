@@ -440,8 +440,7 @@ static int handle_sim_card(const uint8_t *data, uint16_t len)
 	return 0;
 }
 
-/* Set by diag command 0x00 while the machine is in its local diagnostic mode (button held 3 s).
- * Physical presence is the authorization; there is no code to leak. Cleared on disconnect. */
+/* Set by diag command 0x00 on an encrypted link; cleared on disconnect. */
 static bool diag_authenticated;
 
 static int handle_diag(const uint8_t *data, uint16_t len)
@@ -452,16 +451,21 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	uint8_t cmd = data[0];
 	uint8_t arg = (len >= 2) ? data[1] : 0;
 
-	/* Command 0x00: open a diagnostic session. Accepted only while the machine is in its local
-	 * diagnostic mode, which someone standing at the machine turns on by holding the button.
-	 * Any bytes after the command are ignored (older apps send a fixed code there; it is not
-	 * checked, so nothing secret is compiled into the image). */
+	/* Command 0x00: open a diagnostic session and turn the machine's diagnostic mode on (what the
+	 * diagnostic app expects on connect). The authorization is the link: a write to this
+	 * characteristic already needs an encrypted, bonded connection (the passkey is shown on the
+	 * LCD and confirmed at the machine), and the same is checked here. Bytes after the command
+	 * are ignored: older apps send a fixed code there, it is not checked, so there is no secret
+	 * in the image. */
 	if (cmd == 0x00) {
-		bool ok = display_is_diag_mode();
+		bool ok = IS_ENABLED(CONFIG_TOMS_DEV_MODE) ||
+			  (current_conn != NULL && bt_conn_get_security(current_conn) >= BT_SECURITY_L2);
 
 		diag_authenticated = ok;
-		LOG_INF("diag: session %s", ok ? "opened (local diagnostic mode is on)"
-					      : "refused (hold the button 3 s first)");
+		if (ok) {
+			display_set_diag_mode(true);
+		}
+		LOG_INF("diag: session %s", ok ? "opened (encrypted link)" : "refused (link not encrypted)");
 		uint8_t rsp[4] = { 0x80, 0x00, (uint8_t)(ok ? 0x01 : 0x00), (uint8_t)(ok ? 0x00 : 0xFF) };
 
 		(void)NOTIFY(0x0E, diag_notify, rsp, sizeof(rsp));
@@ -643,8 +647,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	ota_notify = false;
 	diag_notify = false;
 	diag_authenticated = false;
-	/* The machine's diagnostic mode belongs to whoever is at the machine (button hold, 20 s idle
-	 * timeout in the display thread). A dropped or retried BLE link must not switch it off. */
+	display_set_diag_mode(false); /* the session ends with the link */
 }
 
 /* The connection object is free again: advertise for the next connection. */
