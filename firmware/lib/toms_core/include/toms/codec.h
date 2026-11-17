@@ -26,6 +26,16 @@
 #define TOMS_ATYPE_TYPE4 2u   /* DESFire, ISO 14443-4 */
 #define TOMS_ATYPE_CLASSIC 3u /* MIFARE Classic */
 
+/* card_read outcome, wire v2 only: how the paid check for this read ended. */
+#define TOMS_OUTCOME_NORMAL 0u              /* the phone answered in time */
+#define TOMS_OUTCOME_UNVERIFIED_TIMEOUT 1u /* the check was sent, no reply in time: unverified tone */
+#define TOMS_OUTCOME_UNVERIFIED_NO_LINK 2u /* the check could not be sent: unverified tone */
+
+/* Wire layouts. v1 is what the shipped phone parses. v2 adds card_read.outcome and two
+ * heartbeat counters; the phone opts in per connection (diag command 0x07), see PROTOCOL.md. */
+#define TOMS_WIRE_V1 1u
+#define TOMS_WIRE_V2 2u
+
 /* ack kinds */
 #define TOMS_ACK_STATE 1u
 #define TOMS_ACK_READ 2u
@@ -38,6 +48,7 @@ struct toms_card_read_msg {
 	uint8_t uid_len;
 	uint8_t atype;        /* PN532_ATYPE_* */
 	uint8_t state_cached; /* TOMS_STATUS_*, 0xFF = unknown */
+	uint8_t outcome;      /* TOMS_OUTCOME_*; on the wire only in v2 */
 };
 
 struct toms_heartbeat_msg {
@@ -48,10 +59,13 @@ struct toms_heartbeat_msg {
 	uint32_t state_version;
 	uint16_t buffered_reads;
 	uint8_t reset_reason;
+	uint16_t dropped_reads; /* v2: stored reads overwritten unsent, saturating, kept across power cycles */
+	uint16_t late_replies;  /* v2: paid replies that arrived after the unverified tone, saturating */
 };
 
 /* Wire protocol revision reported by device_info. Bump on any layout change. */
-#define TOMS_PROTOCOL_VERSION 1u
+/* The highest wire version this firmware speaks (device_info). A connection starts on v1. */
+#define TOMS_PROTOCOL_VERSION 2u
 
 /* device_info flags */
 #define TOMS_INFO_FLAG_DEV_MODE 0x01u /* unbonded writes accepted, sim_card enabled */
@@ -102,10 +116,31 @@ int toms_codec_encode_device_info(uint8_t *buf, size_t cap, const struct toms_de
 /* uid_len u8 + uid, used by the dev-mode sim_card write. */
 int toms_codec_decode_uid(const uint8_t *data, size_t len, uint8_t *uid, uint8_t *uid_len);
 
+/* v1 layout (15 + uid_len bytes); outcome is not sent and decodes as NORMAL. */
 int toms_codec_encode_card_read(uint8_t *buf, size_t cap, const struct toms_card_read_msg *m);
 int toms_codec_decode_card_read(const uint8_t *data, size_t len, struct toms_card_read_msg *m);
 
+/* wire = TOMS_WIRE_V1 or V2. v2 is 16 + uid_len bytes (outcome last); an outcome above
+ * NO_LINK is rejected both ways. Decoders accept trailing bytes (the signature trailer). */
+int toms_codec_encode_card_read_wire(uint8_t *buf, size_t cap, const struct toms_card_read_msg *m,
+				     uint8_t wire);
+int toms_codec_decode_card_read_wire(const uint8_t *data, size_t len, struct toms_card_read_msg *m,
+				     uint8_t wire);
+
+/* `buf` holds an encoded v1 card_read of v1_len bytes. Returns the frame for `wire`: v1 is left
+ * as it is, v2 gets `outcome` appended (the same bytes toms_codec_encode_card_read_wire writes).
+ * -EINVAL for a frame that is not a v1 card_read, an outcome above NO_LINK or an unknown wire,
+ * -ENOSPC when cap is too small. */
+int toms_codec_card_read_to_wire(uint8_t *buf, size_t cap, size_t v1_len, uint8_t outcome,
+				 uint8_t wire);
+
+/* v1: 15 bytes. v2: 19 bytes, dropped_reads and late_replies appended. */
 int toms_codec_encode_heartbeat(uint8_t *buf, size_t cap, const struct toms_heartbeat_msg *m);
+int toms_codec_encode_heartbeat_wire(uint8_t *buf, size_t cap, const struct toms_heartbeat_msg *m,
+				     uint8_t wire);
+
+/* Clamp a counter to what a 16-bit wire field can hold. */
+uint16_t toms_u16_sat(uint32_t v);
 
 int toms_codec_encode_paid_check(uint8_t *buf, size_t cap, uint32_t check_seq, const uint8_t *uid,
 				 uint8_t uid_len);

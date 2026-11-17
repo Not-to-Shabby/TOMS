@@ -1,4 +1,4 @@
-# Return Machine — BLE Protocol Specification (v1.0 Final)
+# Return Machine — BLE Protocol Specification (v1.0 Final; wire layouts 1 and 2)
 
 **Status: FINALIZED (Approved for Conductor App Integration)**  
 This specification defines the production Bluetooth Low Energy (BLE) interface between the **TOMS Return Machine (RM)** firmware (ESP32-S3 / Zephyr 4.2.0) and the **TOMS Android Conductor Application** (`toms_android/app`).
@@ -57,7 +57,8 @@ Characteristics share the 128-bit base UUID `544F4D53-5245-5455-524E-414348494Ex
 ### 3.1 `device_info` (`0x09`, RM → Phone, Read)
 Must be read by the Android app immediately upon connection:
 ```
-[0]     protocol_version (uint8, currently 1)
+[0]     protocol_version (uint8: the highest wire layout this firmware speaks, currently 2.
+                         Every connection starts on layout 1; layout 2 is opt-in, see section 7)
 [1]     fw_major (uint8)
 [2]     fw_minor (uint8)
 [3]     fw_patch (uint8)
@@ -86,6 +87,8 @@ Notified when a passenger taps an NFC card on the PN532 reader:
 [13..N] uid (uid_len bytes, big-endian as read from card)
 [N+1]   atype (uint8: 1=Type 2/NTAG, 2=Type 4/DESFire, 3=MIFARE Classic, 0=Other)
 [N+2]   state_cached (uint8: current cached state from local table, 0xFF if unknown)
+[N+3]   outcome (uint8, wire layout 2 ONLY: 0 normal, 1 unverified-timeout, 2 unverified-no-link;
+                 section 7). Not present on layout 1.
 ```
 *Deduplication Rule*: The RM automatically deduplicates physical card reads — a card resting in the slot is read once (presence tracking, removal after 400 ms without a read); the same UID put back within 5 s is played locally as `TOMS_TONE_DUPLICATE` and is not re-notified over BLE.
 
@@ -154,6 +157,8 @@ Dispatched by the RM every 10 seconds:
 [8..11] state_version (uint32, LE active state table version)
 [12..13] buffered_reads (uint16, LE offline reads stored in flash)
 [14]    reset_reason (uint8: 0=power-on, 1=brownout, 2=watchdog, 3=software, 4=pin, 5=other)
+[15..16] dropped_reads (uint16, LE, wire layout 2 ONLY, section 7)
+[17..18] late_replies  (uint16, LE, wire layout 2 ONLY, section 7)
 ```
 
 ---
@@ -171,10 +176,13 @@ Hardware diagnostic test bench commands:
 * `cmd = 0x03`: Toggle LCD Backlight
 * `cmd = 0x04`: Query PN532 NFC Hardware Health
 * `cmd = 0x05`: Clear / silence the alarm (`05 00`, what `RmProtocol.encodeAlarmClear()` sends). Accepted on an encrypted link.
+* `cmd = 0x07`: Select the message layout for this connection: `07 01` or `07 02`. Answered
+  `[0x87, status, version_in_force, max_version]` (status 0 ok, 1 unsupported version, 2 malformed;
+  on 1 and 2 the layout is unchanged). Section 7.
 * `cmd = 0x06`: Provision the signing key: `06` + 32 key bytes. Accepted once, only on an encrypted link; answered with `[0x86, status, 0, 0]` (0 stored, 1 already set, 2 flash error, 0xFF refused).
-* `cmd = 0x00`: removed. It used to unlock the bench commands with a fixed code; a fixed code is a credential in source.
+* `cmd = 0x00`: open a diagnostic session and turn the machine's diagnostic mode on. Accepted on an encrypted (bonded) link; answered `[0x80, 0, 1, 0]` (open) or `[0x80, 0, 0, 0xFF]` (refused). Bytes after the command are ignored: the old fixed code is no longer checked, so nothing secret is in the image. The session ends on disconnect.
 
-`0x01`-`0x04` exist only in a `CONFIG_TOMS_DEV_MODE` build.
+`0x01`-`0x04` need an open session, the machine's local diagnostic mode (button held 3 s), or a `CONFIG_TOMS_DEV_MODE` build.
 
 **Diagnostic Notification (RM → Phone)**:
 * `[0x81, count_low, count_high, 0x01]`: Physical Button Pressed (`count`: uint16 button presses)
@@ -223,7 +231,7 @@ The Return Machine uses a fixed-frequency active piezo buzzer (GPIO6):
        │                                              │
        │ 3. Read device_info (0x09)                   │
        ├─────────────────────────────────────────────►│
-       │    Verify protocol_version == 1              │
+       │    protocol_version 2 = layout 2 offered       │
        │◄─────────────────────────────────────────────┤
        │                                              │
        │ 4. Link Encryption / LE Secure Connections   │
@@ -267,4 +275,131 @@ number. A read made while the phone is away or not subscribed is stored in a fla
 (128 slots, CRC per record) and sent in `read_seq` order when the phone subscribes. Stored
 reads stay until the phone writes `ack` (`0x08`) kind 2 with the highest `read_seq` it has;
 unacked reads are offered again on every new connection, so the phone must de-duplicate by
-`read_seq`. `heartbeat.buffered_reads` is the stored count.
+`read_seq`. `heartbeat.buffered_reads` is the stored count. A stored read keeps the paid-check
+`outcome` it was made with (section 7). The count of reads overwritten before they were ever
+sent on a live link is kept in flash, so it survives power cycles.
+
+
+---
+
+## 7. Wire layout 2 (opt-in): paid-check outcome and loss counters
+
+Why: the phone could only infer two facts, and has asked for them on the wire. (1) The machine
+played the **unverified tone** because the paid-check reply was late or missing. (2) Stored reads
+were **dropped** because the flash log was full.
+
+### 7.1 Choosing a layout
+
+The shipped phone is strict: `RmProtocol.frame()` accepts a `card_read` of exactly `15 + uid_len`
+bytes and a `heartbeat` of exactly `15` bytes (each plus 8 when signed) and **drops anything else
+as "bad size"**. So the machine never sends layout 2 unasked.
+
+```
+connect            -> layout 1 (nothing else changes for a phone that does not ask)
+phone writes diag  [0x07, 0x02]
+RM notifies diag   [0x87, status, version_in_force, max_version]
+                    status 0 = ok, 1 = unsupported version, 2 = malformed (layout unchanged)
+```
+`[0x07, 0x01]` goes back to layout 1. The choice is per connection: a disconnect resets it to
+layout 1, so the phone writes it again after every connect. A phone that never sends `0x07` keeps
+getting layout 1 for the life of the connection, byte for byte what it gets today.
+`device_info.protocol_version` is now 2 = "layout 2 is available". The shipped phone does not
+check that field.
+
+### 7.2 `card_read` (`0x01`) layout 2, with `n = uid_len`
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0..3 | 4 | read_seq (uint32 LE) |
+| 4..7 | 4 | timestamp (uint32 LE, UTC s, 0 = unsynced) |
+| 8..11 | 4 | boot_ms (uint32 LE) |
+| 12 | 1 | uid_len (n, 1..10) |
+| 13 .. 12+n | n | uid |
+| 13+n | 1 | atype |
+| 14+n | 1 | state_cached |
+| **15+n** | 1 | **outcome (new)** |
+
+Length: `16 + n` unsigned, `24 + n` signed (trailer at `16+n .. 23+n`). Layout 1 is the same
+without the last byte (`15 + n`). Example, uid `6F F1 AD 39`, outcome 1 (unverified-timeout):
+
+```
+07000000 00f15365 92100000 04 6ff1ad39 01 02 01        (20 bytes; 28 with the trailer)
+```
+
+`outcome`: **0** normal (the phone answered in time, whatever the verdict); **1**
+unverified-timeout (the check was sent and no reply came within `paid_timeout_ms`, which also
+covers a link that dropped while waiting); **2** unverified-no-link (the check could not be sent:
+no phone, not subscribed to `paid_check`, or the notify failed). 1 and 2 are exactly the reads
+for which the machine played `TOMS_TONE_UNVERIFIED`. A value above 2 is invalid (the machine never
+sends one; a parser should drop the frame).
+
+**Order changes in layout 2.** On layout 1 the machine notifies `card_read` first and asks
+`paid_check` afterwards. On layout 2 it notifies `paid_check` first and the `card_read` after the
+check has ended (at most `paid_timeout_ms`, 1.0 to 2.0 s, later), because the outcome is not known
+before. `read_seq` is still handed out at tap time, so the order of `read_seq` numbers is the order
+of taps. A read that was stored in flash (no phone, or older reads still waiting) keeps its
+outcome and is sent in `read_seq` order like before.
+
+### 7.3 `heartbeat` (`0x05`) layout 2
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0..3 | 4 | uptime_s |
+| 4 | 1 | battery_pct (0xFF = not measurable) |
+| 5..6 | 2 | battery_mv |
+| 7 | 1 | nfc_status |
+| 8..11 | 4 | state_version |
+| 12..13 | 2 | buffered_reads |
+| 14 | 1 | reset_reason |
+| **15..16** | 2 | **dropped_reads (new, uint16 LE)** |
+| **17..18** | 2 | **late_replies (new, uint16 LE)** |
+
+Length: 19 unsigned, 27 signed (trailer at `19 .. 26`). Layout 1 is the first 15 bytes. Example
+(60 s, 85 %, 4132 mV, state v5, 2 buffered, dropped 0x0102, late 0x0304):
+
+```
+3c000000 55 2410 00 05000000 0200 00 0201 0403         (19 bytes)
+```
+
+* `dropped_reads`: stored reads that were **overwritten before they were ever sent on a live
+  link**, because the 128-slot log was full. Saturates at 65535. It is kept in flash, so it
+  survives power cycles and counts since the settings partition was last erased: the phone should
+  use the **change** between heartbeats, not the absolute value. A read that had already been sent
+  live is not counted when its slot is reused (the phone has it).
+* `late_replies`: `paid_reply` writes that arrived **after** the machine gave up waiting and played
+  the unverified tone, for a check it remembers timing out (the last 8 are remembered). Each is
+  counted once. Saturates at 65535, and restarts from 0 at every reboot (RAM only), so use the
+  change between heartbeats and treat a drop as a reboot. A late reply never changes the alarm or
+  the screen: the unverified tone has already played.
+
+### 7.4 Signing
+
+Both messages are signed as before (section 6): `HMAC-SHA256(key, suffix || payload)` cut to 8 bytes,
+appended after the payload. On layout 2 the payload includes the new bytes, so the outcome byte and
+both counters are inside the signed region (the host tests flip each one and the check fails). A
+layout-2 payload is longer, so a verifier must split the trailer using the **layout in force**:
+`16 + n` / `19` for layout 2. Splitting a layout-2 frame with the layout-1 rule treats the last
+byte(s) as part of a trailer and fails the signature, so the phone must switch both rules together.
+
+### 7.5 What the phone must change (the machine does not require it; layout 1 keeps working)
+
+1. After connecting and subscribing, write `07 02` to diag and wait for `87 00 02 02`. Do this only
+   once the parser below is in place: an unchanged parser drops every layout-2 frame.
+2. `RmProtocol.fixedLen`: `card_read` becomes `16 + uid_len` and `heartbeat` becomes `19` when
+   layout 2 is in force; keep `15 + uid_len` / `15` for layout 1. `decodeCardReadStrict` and
+   `decodeHeartbeatStrict` read `outcome`, `dropped_reads` and `late_replies`.
+3. `RmReadIntake`: record `rm_unverified` from `outcome` 1 and 2 instead of inferring it from its
+   own timer (keep the timer for layout 1). Use the `dropped_reads` change to record lost reads;
+   today the gap check in `onCardRead` only fires when the previous card was LOST.
+4. The `paid_check` for a tap now comes **before** the `card_read` for it (7.2): do not assume the
+   read is already stored when the check arrives.
+5. Treat `outcome > 2` as a bad frame.
+
+### 7.6 Phones that do not know layout 2
+
+* A phone that never writes `07` is unaffected: layout 1, same bytes, same order.
+* A phone that writes `07 02` without the new parser will drop layout-2 `card_read` and `heartbeat`
+  frames as "bad size" (counted in `RmNotifyGate.droppedCount`) and its reads would not be stored
+  or acked. That is the reason for the opt-in. If it happens, `07 01` restores layout 1.
+* A phone that ignores trailing bytes (the older lenient decoders) still reads every layout-1
+  field from a layout-2 frame, because the new bytes are at the end.

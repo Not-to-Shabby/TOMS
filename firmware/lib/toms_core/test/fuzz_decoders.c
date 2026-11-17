@@ -104,6 +104,7 @@ int main(int argc, char **argv)
 		bool snap;
 
 		accepted += toms_codec_decode_card_read(buf, len, &cr) > 0;
+		accepted += toms_codec_decode_card_read_wire(buf, len, &cr, TOMS_WIRE_V2) > 0;
 		accepted += toms_codec_decode_paid_reply(buf, len, &seq, &verdict) > 0;
 		accepted += toms_codec_decode_ack(buf, len, &kind, &v32) > 0;
 		accepted += toms_codec_decode_time_sync(buf, len, &epoch, &v16) > 0;

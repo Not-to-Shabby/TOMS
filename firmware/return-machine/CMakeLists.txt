@@ -29,6 +29,8 @@ target_sources(app PRIVATE
   ${TOMS_CORE}/src/sha256.c
   ${TOMS_CORE}/src/sig.c
   ${TOMS_CORE}/src/readlog.c
+  ${TOMS_CORE}/src/late.c
+  ${TOMS_CORE}/src/wire.c
 )
 
 target_include_directories(app PRIVATE
