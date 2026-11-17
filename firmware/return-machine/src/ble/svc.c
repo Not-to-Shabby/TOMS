@@ -496,8 +496,8 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	}
 
 	/* Bench commands 0x01..0x04: a dev build, or a session opened with command 0x00 */
-	if (!diag_authenticated && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
-		LOG_WRN("diag: cmd 0x%02X rejected (no diagnostic session)", cmd);
+	if (!diag_authenticated && !display_is_diag_mode() && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
+		LOG_WRN("diag: cmd 0x%02X rejected (machine diagnostic mode is off)", cmd);
 		uint8_t nack[4] = { (uint8_t)(0x80 | cmd), 0x00, 0x00, 0xFF };
 		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
 		return -EACCES;
@@ -643,7 +643,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	ota_notify = false;
 	diag_notify = false;
 	diag_authenticated = false;
-	display_set_diag_mode(false);
+	/* The machine's diagnostic mode belongs to whoever is at the machine (button hold, 20 s idle
+	 * timeout in the display thread). A dropped or retried BLE link must not switch it off. */
 }
 
 /* The connection object is free again: advertise for the next connection. */
