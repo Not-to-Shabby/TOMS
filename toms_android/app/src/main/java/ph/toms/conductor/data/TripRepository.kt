@@ -46,6 +46,7 @@ object EventTypes {
     const val RM_STORED_READ = "rm_stored_read"
     const val RM_UNVERIFIED = "rm_unverified"
     const val RM_LOST_GAP = "rm_lost_gap"
+    const val RM_LATE_REPLIES = "rm_late_replies"
 }
 
 @Serializable

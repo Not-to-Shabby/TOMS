@@ -103,6 +103,45 @@ describe('Return Machine health events', () => {
     expect(delivery.body.devices[0].events_24h).toBe(0);
   });
 
+  it('accepts the layout-2 shapes and keeps exact and inferred counts apart', async () => {
+    await upload([
+      // outcome byte: no check number or delay, reason no_link
+      rmEvent('rm_unverified', 1, { machineId: MACHINE, checkSeq: null, delayMs: null, reason: 'no_link', source: 'outcome', readSeq: 9 }),
+      rmEvent('rm_unverified', 2, { machineId: MACHINE, checkSeq: 7, delayMs: 1500, reason: 'timeout' }),
+      rmEvent('rm_lost_gap', 3, { machineId: MACHINE, lastSeq: 9, readSeq: 9, gap: 5, source: 'counter' }),
+      rmEvent('rm_lost_gap', 4, { machineId: MACHINE, lastSeq: 9, readSeq: 9, gap: 2, source: 'counter' }),
+      rmEvent('rm_lost_gap', 5, { machineId: MACHINE, lastSeq: 40, readSeq: 44, gap: 3 }),
+      rmEvent('rm_late_replies', 6, { machineId: MACHINE, count: 2 }),
+      rmEvent('rm_late_replies', 7, { machineId: MACHINE, count: 4 }),
+    ]);
+    const [row] = await rmHealthRows();
+    expect(Number(row.unverified_reported)).toBe(1);
+    expect(Number(row.unverified_inferred)).toBe(1);
+    expect(Number(row.lost_reads_reported)).toBe(7);
+    expect(Number(row.lost_reads_inferred)).toBe(3);
+    expect(Number(row.late_replies)).toBe(6);
+
+    const delivery = await request(app).get('/api/delivery/summary').set('Authorization', `Bearer ${admin}`);
+    expect(delivery.body.devices[0].rm_late_replies).toBe(6);
+    expect(delivery.body.devices[0].rm_lost_reads_reported).toBe(7);
+    expect(delivery.body.devices[0].events_24h).toBe(0);
+  });
+
+  it("accepts the phone's earlier rm_lost_gap shape with lastState, and rejects bad late_replies", async () => {
+    await upload([rmEvent('rm_lost_gap', 1, { machineId: MACHINE, lastSeq: 1, readSeq: 5, gap: 3, lastState: 3 })]);
+    const res = await request(app)
+      .post('/api/events')
+      .set('Authorization', `Bearer ${deviceToken}`)
+      .send({
+        events: [
+          rmEvent('rm_late_replies', 2, { machineId: MACHINE, count: 0 }),
+          rmEvent('rm_late_replies', 3, { machineId: MACHINE, count: 1, uid: '6FF1AD39' }),
+          rmEvent('rm_unverified', 4, { machineId: MACHINE, checkSeq: null, delayMs: null, reason: 'timeout', source: 'guess' }),
+        ],
+      });
+    expect(res.body.rejected).toHaveLength(3);
+  });
+
   it('keeps working for a phone that never sends rm_* events', async () => {
     const body = await upload([
       rmEvent('heartbeat_placeholder_never_a_real_type', 1, {}),
