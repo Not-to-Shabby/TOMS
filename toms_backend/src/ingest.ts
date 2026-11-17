@@ -148,21 +148,41 @@ const rmStoredReadPayload = z
   })
   .strict();
 
+// `source` says whether the machine reported it (layout 2: the card_read outcome byte, "outcome") or the phone inferred it
+// from its own late or absent reply (layout 1, "inferred"), so the exact and the inferred counts are never mixed. On "outcome" the
+// check number and delay are unknown (a check that was never sent has none), so they may be null. Older phones omit source and
+// readSeq: both default so a phone from before layout 2 keeps being accepted.
 const rmUnverifiedPayload = z
   .object({
     machineId: rmMachineId,
-    checkSeq: rmSeq,
-    delayMs: z.number().int().min(0),
-    reason: z.enum(['timeout', 'disconnected']),
+    checkSeq: rmSeq.nullish(),
+    delayMs: z.number().int().min(0).nullish(),
+    reason: z.enum(['timeout', 'disconnected', 'no_link']),
+    source: z.enum(['outcome', 'inferred']).default('inferred'),
+    readSeq: rmSeq.nullish(),
   })
   .strict();
 
+// `source` is "counter" when the machine counted the loss itself (layout 2 heartbeat dropped_reads: gap is the increase) and
+// "seq_jump" when the phone noticed a read_seq jump after a lost card (layout 1). Older phones omit it; it defaults to
+// "seq_jump". An earlier phone build also sent a `lastState` field, which this strict schema rejected for every event; it is
+// accepted and ignored so those stored events upload.
 const rmLostGapPayload = z
   .object({
     machineId: rmMachineId,
     lastSeq: rmSeq,
     readSeq: rmSeq,
     gap: z.number().int().min(1),
+    source: z.enum(['counter', 'seq_jump']).default('seq_jump'),
+    lastState: z.number().int().min(0).max(255).optional(),
+  })
+  .strict();
+
+// Paid replies that arrived after the machine had given up (layout 2 heartbeat late_replies): the increase since the last heartbeat.
+const rmLateRepliesPayload = z
+  .object({
+    machineId: rmMachineId,
+    count: z.number().int().min(1).max(65_535),
   })
   .strict();
 
@@ -287,6 +307,10 @@ function prepare(raw: unknown, index: number, channel: Channel, nowMs: number): 
   } else if (e.type === 'rm_unverified') {
     // The phone answered a paid check late or never, so the machine played the unverified tone.
     const p = rmUnverifiedPayload.safeParse(e.payload);
+    if (!p.success) return fail(describe(p.error));
+  } else if (e.type === 'rm_late_replies') {
+    // Return Machine health (layout 2): the phone answered a paid check after the machine had given up waiting.
+    const p = rmLateRepliesPayload.safeParse(e.payload);
     if (!p.success) return fail(describe(p.error));
   } else if (e.type === 'rm_lost_gap') {
     // The read_seq jumped ahead after a lost card: the machine's log overflowed.

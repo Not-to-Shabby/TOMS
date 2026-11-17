@@ -34,6 +34,12 @@ class RmNotifyGate(
     private val onSignedWithoutKey: (machineId: String) -> Unit = {},
     /** Called when a machine with a key keeps sending messages that do not verify under any valid key. */
     private val onBadSignature: (machineId: String) -> Unit = {},
+    /**
+     * The layout in force on this connection (PROTOCOL.md section 7). The trailer starts at a different offset on layout 2, so
+     * the framing and the layout must change together: a layout-2 frame split with the layout-1 rule treats its last bytes as
+     * a trailer and fails the signature. Defaults to layout 1, which is what every connection starts on.
+     */
+    private val layout: () -> RmProtocol.Layout = { RmProtocol.Layout.V1 },
 ) {
 
     private val _droppedCount = MutableStateFlow(0)
@@ -41,7 +47,7 @@ class RmNotifyGate(
 
     /** The notify's payload to decode further, or null when it must be dropped. */
     fun accept(suffix: Int, value: ByteArray): ByteArray? {
-        val framed = RmProtocol.frame(suffix, value) ?: return counted("bad size", suffix)
+        val framed = RmProtocol.frame(suffix, value, layout()) ?: return counted("bad size", suffix)
 
         val id = machineId() ?: return counted("no machine id", suffix)
         val trailer = framed.trailer

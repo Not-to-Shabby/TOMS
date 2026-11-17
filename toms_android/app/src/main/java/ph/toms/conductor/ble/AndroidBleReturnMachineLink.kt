@@ -62,6 +62,10 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private val _droppedCount = MutableStateFlow(0)
     override val droppedCount: StateFlow<Int> = _droppedCount.asStateFlow()
 
+    /** Layout 1 until the machine says layout 2 is in force after this connection's `07 02`; reset at every disconnect. */
+    private val negotiation = RmLayoutNegotiation()
+    override val layout: StateFlow<RmProtocol.Layout> = negotiation.layout
+
     /** The address of the machine the GATT is attached to: the per-machine id the trust is keyed by. */
     private var machineAddress: String? = null
 
@@ -76,6 +80,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
         onVerified = { id, match -> enrolment.get().onVerified(id, match) },
         onSignedWithoutKey = { id -> enrolment.get().onUnknownSignature(id) },
         onBadSignature = { id -> enrolment.get().onUnknownSignature(id) },
+        layout = { negotiation.layout.value },
     )
 
     private var gatt: BluetoothGatt? = null
@@ -128,6 +133,8 @@ class AndroidBleReturnMachineLink @Inject constructor(
                     g.discoverServices()
                 }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                // The machine goes back to layout 1 on a disconnect, so the phone does too.
+                negotiation.reset()
                 cleanup()
                 _connectionState.value = RmConnectionState.Disconnected
                 // Auto-retry scanning if disconnected unexpectedly
@@ -178,10 +185,17 @@ class AndroidBleReturnMachineLink @Inject constructor(
 
                 val name = g.device.name ?: RmProtocol.DEVICE_NAME_PREFIX
                 val address = g.device.address ?: ""
+                // Every connection starts on layout 1, whatever the last one used.
+                negotiation.reset()
                 _connectionState.value = RmConnectionState.Connected(name, address)
 
                 // Sync time immediately on connection
                 sendTimeSync()
+
+                // Ask for layout 2 once the parser that understands it is in place (it is: the gate frames with the layout
+                // in force). A machine that does not answer keeps layout 1, byte for byte what it sent before.
+                val ch = charDiag
+                if (ch != null) negotiation.negotiate { bytes -> writeCharWithResp(g, ch, bytes) }
             }
         }
 
@@ -217,11 +231,13 @@ class AndroidBleReturnMachineLink @Inject constructor(
             RmSignature.SUFFIX_CARD_READ, RmSignature.SUFFIX_HEARTBEAT, RmSignature.SUFFIX_RM_ACK -> {
                 // Verified or dropped by the gate; nothing unverified reaches the app from here.
                 val payload = gate.accept(suffix, value) ?: return
+                // Decoded with the same layout the gate framed with: the two cannot disagree.
+                val inForce = negotiation.layout.value
                 when (suffix) {
                     RmSignature.SUFFIX_CARD_READ ->
-                        RmProtocol.decodeCardReadStrict(payload)?.let { _events.tryEmit(RmEvent.CardReadReceived(it)) }
+                        RmProtocol.decodeCardReadStrict(payload, inForce)?.let { _events.tryEmit(RmEvent.CardReadReceived(it)) }
                     RmSignature.SUFFIX_HEARTBEAT ->
-                        RmProtocol.decodeHeartbeatStrict(payload)?.let {
+                        RmProtocol.decodeHeartbeatStrict(payload, inForce)?.let {
                             _lastHeartbeat.value = it
                             _events.tryEmit(RmEvent.HeartbeatReceived(it))
                         }
@@ -231,11 +247,12 @@ class AndroidBleReturnMachineLink @Inject constructor(
             }
             RmProtocol.suffixOf(RmProtocol.CHAR_PAID_CHECK) -> {
                 RmProtocol.decodePaidCheck(value)?.let {
-                    _events.tryEmit(RmEvent.PaidCheckReceived(it.checkSeq, it.uid, it.uidHex))
+                    _events.tryEmit(RmEvent.PaidCheckReceived(it.checkSeq, it.uid, it.uidHex, negotiation.layout.value))
                 }
             }
             RmProtocol.suffixOf(RmProtocol.CHAR_DIAG) -> {
                 RmProtocol.decodeProvisionReply(value)?.let { status -> provisionReply?.complete(status) }
+                negotiation.onDiagNotify(value)
             }
         }
     }

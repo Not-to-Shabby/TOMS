@@ -194,4 +194,120 @@ class RmReadIntakeTest {
         assertFalse("no passenger card uid leaves the phone", stored.payload.contains("6FF1AD39"))
         assertEquals("the uid itself stays only in the local SQLCipher table", 1, reads())
     }
+
+    // ---- wire layout 2 (firmware/PROTOCOL.md section 7)
+
+    private fun readV2(seq: Long, outcome: Int, stateCached: Int = RmProtocol.STATUS_ASSIGNED_UNPAID) =
+        read(seq, stateCached = stateCached).copy(outcome = outcome)
+
+    private fun hbV2(dropped: Int, late: Int) = RmProtocol.Heartbeat(60, 85, 4132, 0, 1, 0, 0, dropped, late)
+
+    @Test
+    fun `an outcome byte of timeout or no_link records one exact rm_unverified, a normal one records nothing`() {
+        intake.onCardRead(readV2(1, RmProtocol.OUTCOME_NORMAL))
+        intake.onCardRead(readV2(2, RmProtocol.OUTCOME_UNVERIFIED_TIMEOUT))
+        intake.onCardRead(readV2(3, RmProtocol.OUTCOME_UNVERIFIED_NO_LINK))
+        settle { reads() == 3 }
+        settle { eventsOf(EventTypes.RM_UNVERIFIED).size == 2 }
+        settleIdle()
+
+        val payloads = eventsOf(EventTypes.RM_UNVERIFIED).map { it.payload }
+        assertEquals(2, payloads.size)
+        assertTrue(payloads.all { it.contains("\"source\":\"outcome\"") })
+        assertTrue(payloads.any { it.contains("\"reason\":\"timeout\"") && it.contains("\"readSeq\":2") })
+        assertTrue(payloads.any { it.contains("\"reason\":\"no_link\"") && it.contains("\"readSeq\":3") })
+        assertTrue("no card uid in the payload", payloads.none { it.contains("6FF1AD39") })
+    }
+
+    @Test
+    fun `a resent layout-2 read still gives one rm_unverified, one row and an ack every time`() {
+        intake.onCardRead(readV2(4, RmProtocol.OUTCOME_UNVERIFIED_TIMEOUT))
+        settle { eventsOf(EventTypes.RM_UNVERIFIED).size == 1 }
+        val acks = link.sentReadAcks.size
+
+        intake.onCardRead(readV2(4, RmProtocol.OUTCOME_UNVERIFIED_TIMEOUT))
+        intake.onCardRead(readV2(4, RmProtocol.OUTCOME_UNVERIFIED_TIMEOUT))
+        settleIdle()
+
+        assertEquals(1, reads())
+        assertEquals(1, eventsOf(EventTypes.RM_UNVERIFIED).size)
+        assertTrue("each resend is acked again", link.sentReadAcks.size >= acks + 2)
+        assertEquals(4L, link.sentReadAcks.last().upToReadSeq)
+    }
+
+    @Test
+    fun `on layout 2 a paid check arms no phone timer and the outcome is the only record`() {
+        intake.paidTimeoutMs = 30
+        intake.onPaidCheck(5, RmProtocol.Layout.V2) // paid_check arrives before its card_read
+        settleIdle()
+        assertEquals("the phone does not guess on layout 2", 0, eventsOf(EventTypes.RM_UNVERIFIED).size)
+
+        intake.onCardRead(readV2(9, RmProtocol.OUTCOME_UNVERIFIED_TIMEOUT))
+        settle { eventsOf(EventTypes.RM_UNVERIFIED).size == 1 }
+        settleIdle()
+        assertEquals("counted once, not once by the timer and once by the outcome", 1, eventsOf(EventTypes.RM_UNVERIFIED).size)
+    }
+
+    @Test
+    fun `a layout-2 read that skips ahead after a lost card infers no gap, the machine's counter does`() {
+        intake.onCardRead(readV2(5, RmProtocol.OUTCOME_NORMAL, stateCached = RmProtocol.STATUS_LOST))
+        settle { reads() == 1 }
+        intake.onCardRead(readV2(20, RmProtocol.OUTCOME_NORMAL))
+        settle { reads() == 2 }
+        settleIdle()
+        assertEquals(0, eventsOf(EventTypes.RM_LOST_GAP).size)
+    }
+
+    @Test
+    fun `dropped_reads increases become rm_lost_gap events and a reset to zero is ignored`() {
+        intake.onHeartbeat(hbV2(dropped = 3, late = 0))
+        settleIdle()
+        assertEquals("the first value is only a baseline", 0, eventsOf(EventTypes.RM_LOST_GAP).size)
+
+        intake.onHeartbeat(hbV2(dropped = 5, late = 0))
+        settle { eventsOf(EventTypes.RM_LOST_GAP).size == 1 }
+        val gap = eventsOf(EventTypes.RM_LOST_GAP).single().payload
+        assertTrue(gap, gap.contains("\"gap\":2") && gap.contains("\"source\":\"counter\""))
+        assertFalse("the old lastState field is gone", gap.contains("lastState"))
+
+        intake.onHeartbeat(hbV2(dropped = 5, late = 0)) // unchanged: nothing new
+        settleIdle()
+        intake.onHeartbeat(hbV2(dropped = 0, late = 0)) // a wiped counter: no loss now
+        settleIdle()
+        assertEquals(1, eventsOf(EventTypes.RM_LOST_GAP).size)
+
+        intake.onHeartbeat(hbV2(dropped = 1, late = 0)) // counts again from the new baseline
+        settle { eventsOf(EventTypes.RM_LOST_GAP).size == 2 }
+        assertTrue(eventsOf(EventTypes.RM_LOST_GAP).last().payload.contains("\"gap\":1"))
+    }
+
+    @Test
+    fun `late_replies increases are recorded and a reboot back to zero is ignored`() {
+        intake.onHeartbeat(hbV2(dropped = 0, late = 2))
+        settleIdle()
+        intake.onHeartbeat(hbV2(dropped = 0, late = 5))
+        settle { eventsOf(EventTypes.RM_LATE_REPLIES).size == 1 }
+        assertTrue(eventsOf(EventTypes.RM_LATE_REPLIES).single().payload.contains("\"count\":3"))
+
+        intake.onHeartbeat(hbV2(dropped = 0, late = 0)) // the machine rebooted
+        settleIdle()
+        assertEquals(1, eventsOf(EventTypes.RM_LATE_REPLIES).size)
+        intake.onHeartbeat(hbV2(dropped = 0, late = 1))
+        settle { eventsOf(EventTypes.RM_LATE_REPLIES).size == 2 }
+    }
+
+    @Test
+    fun `a layout-1 heartbeat records nothing and a new connection restarts the counter baselines`() {
+        intake.onHeartbeat(RmProtocol.Heartbeat(60, 85, 4132, 0, 1, 0, 0))
+        settleIdle()
+        assertEquals(0, eventsOf(EventTypes.RM_LOST_GAP).size)
+
+        intake.onHeartbeat(hbV2(dropped = 10, late = 0))
+        settleIdle()
+        intake.onDisconnected()
+        intake.onConnected(machine)
+        intake.onHeartbeat(hbV2(dropped = 10, late = 0)) // same value after a reconnect: a baseline, not a loss
+        settleIdle()
+        assertEquals(0, eventsOf(EventTypes.RM_LOST_GAP).size)
+    }
 }

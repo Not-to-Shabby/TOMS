@@ -50,6 +50,20 @@ object RmProtocol {
     const val CMD_PROVISION_KEY = 0x06
     const val DIAG_PROVISION_REPLY = 0x86
 
+    // diag command and reply for choosing the message layout of this connection (section 7.1)
+    const val CMD_WIRE_LAYOUT = 0x07
+    const val DIAG_WIRE_REPLY = 0x87
+
+    // Status byte of the layout reply
+    const val WIRE_OK = 0
+    const val WIRE_UNSUPPORTED = 1
+    const val WIRE_MALFORMED = 2
+
+    // card_read outcome byte (layout 2, section 7.2). 1 and 2 are exactly the reads the machine played the unverified tone for.
+    const val OUTCOME_NORMAL = 0
+    const val OUTCOME_UNVERIFIED_TIMEOUT = 1
+    const val OUTCOME_UNVERIFIED_NO_LINK = 2
+
     // Status byte of the provisioning reply
     const val PROVISION_STORED = 0
     const val PROVISION_ALREADY_SET = 1
@@ -109,7 +123,18 @@ object RmProtocol {
         val uidHex: String,
         val atype: Int,
         val stateCached: Int,
+        /**
+         * Layout 2 only: how the paid check for this read ended (0 normal, 1 timeout, 2 no link). Null on layout 1, where the
+         * machine does not say, so a null is never mistaken for "the check was answered in time".
+         */
+        val outcome: Int? = null,
     ) {
+        /** True for the reads the machine played the unverified tone for (outcome 1 or 2). Always false on layout 1. */
+        val unverified: Boolean get() = outcome == OUTCOME_UNVERIFIED_TIMEOUT || outcome == OUTCOME_UNVERIFIED_NO_LINK
+
+        /** True when this read came in the layout that reports an outcome. */
+        val hasOutcome: Boolean get() = outcome != null
+
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
             if (other !is CardRead) return false
@@ -127,6 +152,16 @@ object RmProtocol {
         val stateVersion: Long,
         val bufferedReads: Int,
         val resetReason: Int,
+        /**
+         * Layout 2 only: stored reads overwritten before they were ever sent on a live link (the machine's log was full).
+         * Kept in flash, so it survives power cycles; saturates at 65535. Null on layout 1, where the machine does not say.
+         */
+        val droppedReads: Int? = null,
+        /**
+         * Layout 2 only: `paid_reply` writes that arrived after the machine gave up waiting. RAM only, so it restarts from 0 at
+         * every reboot; saturates at 65535. Null on layout 1.
+         */
+        val lateReplies: Int? = null,
     ) {
         val isOnUsb: Boolean get() = batteryPct == 0xFF
     }
@@ -225,24 +260,41 @@ object RmProtocol {
     /** A notify split into the part the machine signed and the trailer behind it (null when unsigned). */
     class Framed(val payload: ByteArray, val trailer: ByteArray?)
 
+    /**
+     * Which message layout this connection uses (firmware/PROTOCOL.md section 7). Every connection starts on [V1]; the phone
+     * opts into [V2] with diag `07 02` and the machine confirms with `87 00 02 02`. The layout also decides where a signed
+     * message's trailer starts, so the framing and the layout always change together (section 7.4).
+     */
+    enum class Layout(val version: Int) {
+        V1(1),
+        V2(2),
+        ;
+
+        /** Extra payload bytes this layout adds to a card_read (the outcome byte). */
+        val cardReadExtra: Int get() = if (this == V2) 1 else 0
+
+        /** Fixed payload length of a heartbeat: 15, or 19 with the two uint16 counters. */
+        val heartbeatLen: Int get() = if (this == V2) 19 else 15
+    }
+
     /** Fixed payload length of each signed notify, or null for a characteristic that carries no trailer. */
-    private fun fixedLen(suffix: Int, value: ByteArray): Int? = when (suffix) {
-        RmSignature.SUFFIX_HEARTBEAT -> 15
+    private fun fixedLen(suffix: Int, value: ByteArray, layout: Layout): Int? = when (suffix) {
+        RmSignature.SUFFIX_HEARTBEAT -> layout.heartbeatLen
         RmSignature.SUFFIX_RM_ACK -> 5
-        // card_read is 13 + uid_len + 2: the uid length byte decides, so it must be readable and sane first.
+        // card_read is 13 + uid_len + 2 (+1 on layout 2): the uid length byte decides, so it must be readable and sane first.
         RmSignature.SUFFIX_CARD_READ -> {
             val uidLen = if (value.size > 12) value[12].toInt() and 0xFF else -1
-            if (uidLen in 1..10) 15 + uidLen else null
+            if (uidLen in 1..10) 15 + uidLen + layout.cardReadExtra else null
         }
         else -> null
     }
 
     /**
-     * Splits [value] for the characteristic ending in [suffix]. Null when the length is neither the exact
+     * Splits [value] for the characteristic ending in [suffix] under [layout]. Null when the length is neither the exact
      * payload nor the payload plus a full trailer: too short, too long, or a partial trailer.
      */
-    fun frame(suffix: Int, value: ByteArray): Framed? {
-        val len = fixedLen(suffix, value) ?: return null
+    fun frame(suffix: Int, value: ByteArray, layout: Layout = Layout.V1): Framed? {
+        val len = fixedLen(suffix, value, layout) ?: return null
         return when (value.size) {
             len -> Framed(value, null)
             len + RmSignature.TRAILER_LEN -> Framed(
@@ -253,21 +305,46 @@ object RmProtocol {
         }
     }
 
-    /** card_read from the exact payload only (no trailer). Same fields as [decodeCardRead], none optional. */
-    fun decodeCardReadStrict(payload: ByteArray): CardRead? {
-        if (payload.size < 15) return null
+    /**
+     * card_read from the exact payload only (no trailer): `15 + uid_len` on layout 1, `16 + uid_len` on layout 2. On layout 2
+     * the last byte is the outcome; a value above 2 is not one the machine ever sends, so the whole frame is refused.
+     */
+    fun decodeCardReadStrict(payload: ByteArray, layout: Layout = Layout.V1): CardRead? {
+        if (payload.size < 15 + layout.cardReadExtra) return null
         val uidLen = payload[12].toInt() and 0xFF
-        if (uidLen < 1 || uidLen > 10 || payload.size != 15 + uidLen) return null
-        return decodeCardRead(payload)
+        if (uidLen < 1 || uidLen > 10 || payload.size != 15 + uidLen + layout.cardReadExtra) return null
+        val base = decodeCardRead(payload.copyOfRange(0, 15 + uidLen)) ?: return null
+        if (layout == Layout.V1) return base
+        val outcome = payload[15 + uidLen].toInt() and 0xFF
+        if (outcome > OUTCOME_UNVERIFIED_NO_LINK) return null
+        return base.copy(outcome = outcome)
     }
 
-    /** heartbeat from the exact 15-byte payload only. */
-    fun decodeHeartbeatStrict(payload: ByteArray): Heartbeat? =
-        if (payload.size == 15) decodeHeartbeat(payload) else null
+    /** heartbeat from the exact payload only: 15 bytes on layout 1, 19 on layout 2 (dropped_reads, late_replies). */
+    fun decodeHeartbeatStrict(payload: ByteArray, layout: Layout = Layout.V1): Heartbeat? {
+        if (payload.size != layout.heartbeatLen) return null
+        val base = decodeHeartbeat(payload.copyOfRange(0, 15)) ?: return null
+        if (layout == Layout.V1) return base
+        val bb = ByteBuffer.wrap(payload, 15, 4).order(ByteOrder.LITTLE_ENDIAN)
+        return base.copy(
+            droppedReads = bb.short.toInt() and 0xFFFF,
+            lateReplies = bb.short.toInt() and 0xFFFF,
+        )
+    }
 
     /** rm_ack from the exact 5-byte payload only. */
     fun decodeRmAckStrict(payload: ByteArray): RmAck? =
         if (payload.size == 5) decodeRmAck(payload) else null
+
+    /** The machine's answer to the layout choice: [0x87, status, version_in_force, max_version]. Null for any other diag notify. */
+    class WireReply(val status: Int, val versionInForce: Int, val maxVersion: Int)
+
+    fun decodeWireReply(data: ByteArray): WireReply? =
+        if (data.size == 4 && (data[0].toInt() and 0xFF) == DIAG_WIRE_REPLY) {
+            WireReply(data[1].toInt() and 0xFF, data[2].toInt() and 0xFF, data[3].toInt() and 0xFF)
+        } else {
+            null
+        }
 
     /** The reply to key provisioning on the diag characteristic: [0x86, status, 0, 0]. Null for any other diag notify. */
     fun decodeProvisionReply(data: ByteArray): Int? =
@@ -290,10 +367,10 @@ object RmProtocol {
      * A card_read frame as the machine builds it (used by the in-app fake, and round-trip tested
      * against [decodeCardReadStrict]): 13 fixed bytes, the uid, then atype and state_cached.
      */
-    fun encodeCardRead(read: CardRead): ByteArray {
+    fun encodeCardRead(read: CardRead, layout: Layout = Layout.V1): ByteArray {
         val uid = parseHexBytes(read.uidHex)
         require(uid.size in 1..10) { "A card uid is 1 to 10 bytes" }
-        val bb = ByteBuffer.allocate(15 + uid.size).order(ByteOrder.LITTLE_ENDIAN)
+        val bb = ByteBuffer.allocate(15 + uid.size + layout.cardReadExtra).order(ByteOrder.LITTLE_ENDIAN)
         bb.putInt((read.readSeq and 0xFFFFFFFFL).toInt())
         bb.putInt((read.timestamp and 0xFFFFFFFFL).toInt())
         bb.putInt((read.bootMs and 0xFFFFFFFFL).toInt())
@@ -301,8 +378,12 @@ object RmProtocol {
         bb.put(uid)
         bb.put((read.atype and 0xFF).toByte())
         bb.put((read.stateCached and 0xFF).toByte())
+        if (layout == Layout.V2) bb.put(((read.outcome ?: OUTCOME_NORMAL) and 0xFF).toByte())
         return bb.array()
     }
+
+    /** Chooses this connection's message layout on the diag characteristic: `07 01` (layout 1) or `07 02` (layout 2). */
+    fun encodeWireSelect(layout: Layout): ByteArray = byteArrayOf(CMD_WIRE_LAYOUT.toByte(), layout.version.toByte())
 
     /** Key provisioning on the diag characteristic: command 0x06 followed by the 32-byte key. */
     fun encodeProvisionKey(key: ByteArray): ByteArray {
@@ -311,8 +392,8 @@ object RmProtocol {
     }
 
     /** A heartbeat frame as the machine builds it (used by the in-app fake; mirrors [decodeHeartbeat]). */
-    fun encodeHeartbeat(heartbeat: Heartbeat): ByteArray {
-        val bb = ByteBuffer.allocate(15).order(ByteOrder.LITTLE_ENDIAN)
+    fun encodeHeartbeat(heartbeat: Heartbeat, layout: Layout = Layout.V1): ByteArray {
+        val bb = ByteBuffer.allocate(layout.heartbeatLen).order(ByteOrder.LITTLE_ENDIAN)
         bb.putInt((heartbeat.uptimeS and 0xFFFFFFFFL).toInt())
         bb.put((heartbeat.batteryPct and 0xFF).toByte())
         bb.putShort((heartbeat.batteryMv and 0xFFFF).toShort())
@@ -320,6 +401,10 @@ object RmProtocol {
         bb.putInt((heartbeat.stateVersion and 0xFFFFFFFFL).toInt())
         bb.putShort((heartbeat.bufferedReads and 0xFFFF).toShort())
         bb.put((heartbeat.resetReason and 0xFF).toByte())
+        if (layout == Layout.V2) {
+            bb.putShort(((heartbeat.droppedReads ?: 0) and 0xFFFF).toShort())
+            bb.putShort(((heartbeat.lateReplies ?: 0) and 0xFFFF).toShort())
+        }
         return bb.array()
     }
 

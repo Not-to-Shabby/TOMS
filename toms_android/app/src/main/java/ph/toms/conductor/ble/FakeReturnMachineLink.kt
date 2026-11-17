@@ -13,6 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
  * bad signatures, resent reads, stored reads flushed on reconnect (buffered_reads), a full machine
  * log, and unverified outcomes (a paid check the phone answered late or never).
  *
+ * **Layouts.** The fake also plays the machine's side of firmware/PROTOCOL.md section 7: [machineSupportsLayout2] says whether
+ * it answers diag `07 02` with `87 00 02 02`; [replyToLayoutSelect] is what the phone's write gets. A fake that is silent leaves
+ * the phone on layout 1, byte for byte like an older machine. Frames it emits are encoded in the layout in force, so the
+ * gate's framing and the decoders meet exactly the bytes the real machine would send.
+ *
  * When [gate] is installed, the emitted card_read/heartbeat/rm_ack bytes go through the same
  * verification pipeline as the real link: signed with [signingKey] (or unsigned without one), a
  * corrupted trailer with [corruptNextSignature], and anything the gate refuses is dropped and
@@ -32,6 +37,22 @@ class FakeReturnMachineLink : ReturnMachineLink {
 
     private val _droppedCount = MutableStateFlow(0)
     override val droppedCount: StateFlow<Int> = _droppedCount.asStateFlow()
+
+    /** Shared with the real negotiation class, so the fake switches layouts by the same rule as the phone's link. */
+    val negotiation = RmLayoutNegotiation()
+    override val layout: StateFlow<RmProtocol.Layout> = negotiation.layout
+
+    /** Whether the simulated machine knows layout 2. False models an older firmware: it never answers `07 02`. */
+    var machineSupportsLayout2 = true
+
+    /** Every diag write the phone made to choose a layout, in order (the bytes of `07 02`). */
+    val layoutWrites = mutableListOf<List<Int>>()
+
+    /**
+     * The machine's reply to a layout select. The default is the firmware's own `87 00 02 02`. A test sets it to model
+     * status 1 or 2 (version unchanged), or null for silence.
+     */
+    var replyToLayoutSelect: ((requested: Int, inForce: Int) -> ByteArray?)? = null
 
     /** The verification pipeline for emitted bytes, built by the test over the same trust it wires elsewhere. */
     var gate: RmNotifyGate? = null
@@ -89,6 +110,28 @@ class FakeReturnMachineLink : ReturnMachineLink {
         return nextProvisionStatus
     }
 
+    /**
+     * What the phone does after it connects: write `07 02` and wait for the machine's reply. The fake answers like the firmware
+     * (it switches to layout 2 only for a machine that supports it) and feeds the answer to the same negotiation class the real
+     * link uses. Returns the layout in force afterwards.
+     */
+    suspend fun negotiateLayout(): RmProtocol.Layout {
+        val unanswered = negotiation
+        return unanswered.negotiate { bytes ->
+            layoutWrites.add(bytes.map { it.toInt() and 0xFF })
+            val requested = bytes[1].toInt() and 0xFF
+            if (machineSupportsLayout2) {
+                val inForce = if (requested == RmProtocol.Layout.V2.version) RmProtocol.Layout.V2.version else RmProtocol.Layout.V1.version
+                val reply = replyToLayoutSelect?.invoke(requested, inForce)
+                    ?: byteArrayOf(RmProtocol.DIAG_WIRE_REPLY.toByte(), 0, inForce.toByte(), 2)
+                negotiation.onDiagNotify(reply)
+            } else {
+                replyToLayoutSelect?.invoke(requested, 1)?.let { negotiation.onDiagNotify(it) }
+            }
+            true
+        }
+    }
+
     override fun startScanning() {
         if (_connectionState.value is RmConnectionState.Disconnected) {
             _connectionState.value = RmConnectionState.Scanning
@@ -112,6 +155,8 @@ class FakeReturnMachineLink : ReturnMachineLink {
     }
 
     fun simulateDisconnected() {
+        // The machine falls back to layout 1 on a disconnect, and so does the phone.
+        negotiation.reset()
         _connectionState.value = RmConnectionState.Disconnected
     }
 
@@ -121,23 +166,25 @@ class FakeReturnMachineLink : ReturnMachineLink {
         for (i in bytes.indices) {
             bytes[i] = clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
         }
-        _events.emit(RmEvent.PaidCheckReceived(checkSeq, bytes, uidHex))
+        _events.emit(RmEvent.PaidCheckReceived(checkSeq, bytes, uidHex, negotiation.layout.value))
     }
 
     /** A card_read as the machine sends it: signed when it has a key, and gated before it is believed. */
     suspend fun emitCardRead(read: RmProtocol.CardRead) {
         val suffix = RmSignature.SUFFIX_CARD_READ
-        val bytes = signOrPlain(suffix, RmProtocol.encodeCardRead(read))
+        val inForce = negotiation.layout.value
+        val bytes = signOrPlain(suffix, RmProtocol.encodeCardRead(read, inForce))
         val accepted = acceptThroughGate(suffix, bytes) ?: return
-        val decoded = if (gate != null) RmProtocol.decodeCardReadStrict(accepted) else RmProtocol.decodeCardRead(accepted)
+        val decoded = if (gate != null) RmProtocol.decodeCardReadStrict(accepted, inForce) else RmProtocol.decodeCardRead(accepted)
         decoded?.let { _events.emit(RmEvent.CardReadReceived(it)) }
     }
 
     suspend fun emitHeartbeat(heartbeat: RmProtocol.Heartbeat) {
         val suffix = RmSignature.SUFFIX_HEARTBEAT
-        val bytes = signOrPlain(suffix, RmProtocol.encodeHeartbeat(heartbeat))
+        val inForce = negotiation.layout.value
+        val bytes = signOrPlain(suffix, RmProtocol.encodeHeartbeat(heartbeat, inForce))
         val accepted = acceptThroughGate(suffix, bytes) ?: return
-        val decoded = if (gate != null) RmProtocol.decodeHeartbeatStrict(accepted) else RmProtocol.decodeHeartbeat(accepted)
+        val decoded = if (gate != null) RmProtocol.decodeHeartbeatStrict(accepted, inForce) else RmProtocol.decodeHeartbeat(accepted)
         decoded?.let {
             _lastHeartbeat.value = it
             _events.emit(RmEvent.HeartbeatReceived(it))

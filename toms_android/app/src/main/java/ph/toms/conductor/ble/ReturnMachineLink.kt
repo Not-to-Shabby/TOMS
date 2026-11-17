@@ -11,7 +11,17 @@ sealed interface RmConnectionState {
 }
 
 sealed interface RmEvent {
-    data class PaidCheckReceived(val checkSeq: Long, val uid: ByteArray, val uidHex: String) : RmEvent
+    /**
+     * [layout] is the layout in force when the check arrived on the Bluetooth thread. The machine sends its layout reply before
+     * any later notify, so this is exactly ordered; reading the layout later, from the view model's thread, could be a step
+     * behind. On layout 2 the machine reports how the check ended in the card_read that follows, so the phone does not guess.
+     */
+    data class PaidCheckReceived(
+        val checkSeq: Long,
+        val uid: ByteArray,
+        val uidHex: String,
+        val layout: RmProtocol.Layout = RmProtocol.Layout.V1,
+    ) : RmEvent
     data class CardReadReceived(val read: RmProtocol.CardRead) : RmEvent
     data class HeartbeatReceived(val heartbeat: RmProtocol.Heartbeat) : RmEvent
     data class RmAckReceived(val ack: RmProtocol.RmAck) : RmEvent
@@ -38,6 +48,12 @@ interface ReturnMachineLink {
 
     /** Notifies dropped by the verification pipeline since the app started (bad size, bad or missing trailer). */
     val droppedCount: StateFlow<Int>
+
+    /**
+     * The message layout in force on the current connection (firmware/PROTOCOL.md section 7). Layout 1 until the phone has
+     * written diag `07 02` and the machine confirmed it, and again after every disconnect.
+     */
+    val layout: StateFlow<RmProtocol.Layout>
 
     fun sendPaidReply(checkSeq: Long, verdict: Int)
     fun sendStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<RmProtocol.StateEntry>)

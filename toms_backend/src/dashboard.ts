@@ -313,8 +313,15 @@ export function registerDashboardRoutes(
               (SELECT count(*) FROM audit_events a
                 WHERE a.device_id = d.device_id AND a.received_at > now() - interval '24 hours') AS events_24h,
               (SELECT count(*) FROM audit_events a
-                WHERE a.device_id = d.device_id AND a.clock_suspect) AS clock_suspect_events
+                WHERE a.device_id = d.device_id AND a.clock_suspect) AS clock_suspect_events,
+              COALESCE(h.stored_reads, 0) AS rm_stored_reads,
+              COALESCE(h.unverified_reported, 0) AS rm_unverified_reported,
+              COALESCE(h.unverified_inferred, 0) AS rm_unverified_inferred,
+              COALESCE(h.lost_reads_reported, 0) AS rm_lost_reads_reported,
+              COALESCE(h.lost_reads_inferred, 0) AS rm_lost_reads_inferred,
+              COALESCE(h.late_replies, 0) AS rm_late_replies
        FROM devices d
+       LEFT JOIN rm_health h ON h.device_id = d.device_id
        ORDER BY last_seen DESC NULLS LAST, d.device_id`,
     );
     const num = (v: unknown) => (v == null ? null : Number(v));
@@ -331,6 +338,14 @@ export function registerDashboardRoutes(
         ...r,
         events_24h: Number(r.events_24h),
         clock_suspect_events: Number(r.clock_suspect_events),
+        // Return Machine health counts (rm_health, migration 016). Exact (machine-reported, layout 2) and inferred
+        // (phone-guessed, layout 1) are separate fields; they are never added together.
+        rm_stored_reads: Number(r.rm_stored_reads),
+        rm_unverified_reported: Number(r.rm_unverified_reported),
+        rm_unverified_inferred: Number(r.rm_unverified_inferred),
+        rm_lost_reads_reported: Number(r.rm_lost_reads_reported),
+        rm_lost_reads_inferred: Number(r.rm_lost_reads_inferred),
+        rm_late_replies: Number(r.rm_late_replies),
       })),
     });
   });

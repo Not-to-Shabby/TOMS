@@ -24,13 +24,49 @@ import ph.toms.conductor.data.db.TomsDatabase
 @Serializable
 data class RmStoredReadPayload(val machineId: String, val readSeq: Long, val buffered: Int, val atMillis: Long)
 
-/** The phone answered a paid check late (or never), so the machine played the unverified tone. */
+/**
+ * The machine played the unverified tone for a read. On layout 2 the machine says so itself (the card_read outcome byte:
+ * `timeout`, `no_link`); on layout 1 the phone infers it from its own late or absent reply (`timeout`, `disconnected`).
+ * [checkSeq] is the paid-check number when the phone saw the check, and null when only the outcome byte tells (a check that
+ * was never sent). [source] says which of the two it was, so the researcher never mixes the exact and the inferred counts.
+ */
 @Serializable
-data class RmUnverifiedPayload(val machineId: String, val checkSeq: Long, val delayMs: Long, val reason: String)
+data class RmUnverifiedPayload(
+    val machineId: String,
+    val checkSeq: Long?,
+    val delayMs: Long?,
+    val reason: String,
+    val source: String = SOURCE_INFERRED,
+    val readSeq: Long? = null,
+) {
+    companion object {
+        const val SOURCE_OUTCOME = "outcome"
+        const val SOURCE_INFERRED = "inferred"
+    }
+}
 
-/** The read_seq jumped ahead after a lost card: the machine's log overflowed and reads are gone. */
+/**
+ * Stored reads the machine lost because its flash log was full. On layout 2 the machine counts them itself
+ * (`dropped_reads` in the heartbeat) and [source] is `counter`, with [gap] the increase since the last heartbeat; on layout 1
+ * the phone sees only a read_seq jump after a lost card and [source] is `seq_jump`.
+ */
 @Serializable
-data class RmLostGapPayload(val machineId: String, val lastSeq: Long, val readSeq: Long, val gap: Long, val lastState: Int)
+data class RmLostGapPayload(
+    val machineId: String,
+    val lastSeq: Long,
+    val readSeq: Long,
+    val gap: Long,
+    val source: String = SOURCE_SEQ_JUMP,
+) {
+    companion object {
+        const val SOURCE_COUNTER = "counter"
+        const val SOURCE_SEQ_JUMP = "seq_jump"
+    }
+}
+
+/** Paid replies that arrived after the machine had given up waiting (layout 2 heartbeat `late_replies`). [count] is the increase. */
+@Serializable
+data class RmLateRepliesPayload(val machineId: String, val count: Long)
 
 /**
  * Turns verified Return Machine card reads into durable phone state:
@@ -53,7 +89,8 @@ interface RmReadIntake {
     fun onDisconnected()
     fun onHeartbeat(heartbeat: RmProtocol.Heartbeat)
     fun onCardRead(read: RmProtocol.CardRead)
-    fun onPaidCheck(checkSeq: Long)
+    /** [layout] is the layout the check arrived under (see [RmEvent.PaidCheckReceived]). */
+    fun onPaidCheck(checkSeq: Long, layout: RmProtocol.Layout = RmProtocol.Layout.V1)
     fun onPaidReplySent(checkSeq: Long)
 }
 
@@ -79,6 +116,13 @@ class RealRmReadIntake @Inject constructor(
     /** The machine's last reported buffered_reads: > 0 means reads are arriving from its flash log. */
     @Volatile private var lastBuffered = 0
 
+    /** The last layout-2 counters, to turn the absolute values into increases. Null until the first layout-2 heartbeat of a connection. */
+    private var lastDropped: Int? = null
+    private var lastLate: Int? = null
+
+    /** The read_seq highest seen, so a lost-gap event names the read it was noticed at. */
+    private var highestReadSeq = 0L
+
     /** Highest read_seq waiting for an ack, and the highest one already sent. */
     private var pendingAckMax = 0L
     private var lastAckSent = 0L
@@ -88,6 +132,10 @@ class RealRmReadIntake @Inject constructor(
 
     override fun onConnected(machineId: String) {
         this.machineId = machineId
+        // A new connection: the counters are read afresh from the first layout-2 heartbeat. late_replies restarts from 0 at
+        // every machine reboot, so a baseline carried across connections could read a reboot as a huge negative increase.
+        lastDropped = null
+        lastLate = null
     }
 
     override fun onDisconnected() {
@@ -111,9 +159,47 @@ class RealRmReadIntake @Inject constructor(
 
     override fun onHeartbeat(heartbeat: RmProtocol.Heartbeat) {
         lastBuffered = heartbeat.bufferedReads
+        val dropped = heartbeat.droppedReads
+        val late = heartbeat.lateReplies
+        if (dropped == null && late == null) return // layout 1: the machine does not report either
+        scope.launch {
+            mutex.withLock {
+                val id = machineId ?: return@withLock
+                val shiftId = trips.openShift()?.id
+                var recorded = false
+
+                // dropped_reads is kept in flash and saturates at 65535: the increase since the last heartbeat is the news.
+                // A value below the last one is a counter that restarted (a settings wipe) or a reboot of the phone's own
+                // baseline; either way nothing is lost *now*, so it only moves the baseline.
+                if (dropped != null) {
+                    val before = lastDropped
+                    lastDropped = dropped
+                    if (before != null && dropped > before) {
+                        val payload = RmLostGapPayload(id, highestReadSeq, highestReadSeq, (dropped - before).toLong(), RmLostGapPayload.SOURCE_COUNTER)
+                        trips.appendMachineEvent(EventTypes.RM_LOST_GAP, json.encodeToString(payload), shiftId)
+                        recorded = true
+                    }
+                }
+                // late_replies is RAM only and restarts from 0 at a reboot: a drop is a reboot, not a negative count.
+                if (late != null) {
+                    val before = lastLate
+                    lastLate = late
+                    if (before != null && late > before) {
+                        val payload = RmLateRepliesPayload(id, (late - before).toLong())
+                        trips.appendMachineEvent(EventTypes.RM_LATE_REPLIES, json.encodeToString(payload), shiftId)
+                        recorded = true
+                    }
+                }
+                if (recorded) trips.kick()
+            }
+        }
     }
 
-    override fun onPaidCheck(checkSeq: Long) {
+    override fun onPaidCheck(checkSeq: Long, layout: RmProtocol.Layout) {
+        // On layout 2 the machine reports how the check ended in the card_read that follows (the outcome byte), which is
+        // exact; a second record from the phone's own timer would count the same unverified tone twice. Layout 1 has no outcome
+        // byte, so there the phone keeps inferring it from its own late or absent reply.
+        if (layout == RmProtocol.Layout.V2) return
         scope.launch {
             val timer = scope.launch {
                 delay(paidTimeoutMs)
@@ -152,6 +238,7 @@ class RealRmReadIntake @Inject constructor(
                 val shiftId = trips.openShift()?.id
                 var lostGap: RmLostGapPayload? = null
                 var storedRead: RmStoredReadPayload? = null
+                var unverified: RmUnverifiedPayload? = null
 
                 db.withTransaction {
                     val prevSeq = db.rmReads().maxReadSeq(id)
@@ -165,22 +252,37 @@ class RealRmReadIntake @Inject constructor(
                     ) > 0
 
                     if (inserted) {
-                        // A lost card whose next read_seq skips ahead: the machine's log overflowed and
-                        // the reads in between are gone. Recorded once, at the first read after the gap.
+                        // Layout 1 only: a lost card whose next read_seq skips ahead means the machine's log overflowed and the
+                        // reads in between are gone. On layout 2 the machine counts those itself (heartbeat dropped_reads), and
+                        // recording the same loss twice would inflate it, so a layout-2 read (one that carries an outcome) never infers it.
                         val gap = prevSeq?.let { read.readSeq - it - 1 } ?: 0
-                        if (prevSeq != null && gap > 0 && prevState == RmProtocol.STATUS_LOST) {
-                            lostGap = RmLostGapPayload(id, prevSeq, read.readSeq, gap, prevState)
+                        if (!read.hasOutcome && prevSeq != null && gap > 0 && prevState == RmProtocol.STATUS_LOST) {
+                            lostGap = RmLostGapPayload(id, prevSeq, read.readSeq, gap, RmLostGapPayload.SOURCE_SEQ_JUMP)
                         }
                         if (stored) {
                             storedRead = RmStoredReadPayload(id, read.readSeq, lastBuffered, arrival)
                         }
+                        // Layout 2: the machine says whether it played the unverified tone for this very read. Recorded once, in
+                        // the same transaction as the row, so a resend of the read (which inserts nothing) records nothing.
+                        if (read.unverified) {
+                            unverified = RmUnverifiedPayload(
+                                machineId = id,
+                                checkSeq = null,
+                                delayMs = null,
+                                reason = if (read.outcome == RmProtocol.OUTCOME_UNVERIFIED_NO_LINK) REASON_NO_LINK else REASON_TIMEOUT,
+                                source = RmUnverifiedPayload.SOURCE_OUTCOME,
+                                readSeq = read.readSeq,
+                            )
+                        }
                         lostGap?.let { trips.appendMachineEvent(EventTypes.RM_LOST_GAP, json.encodeToString(it), shiftId) }
                         storedRead?.let { trips.appendMachineEvent(EventTypes.RM_STORED_READ, json.encodeToString(it), shiftId) }
+                        unverified?.let { trips.appendMachineEvent(EventTypes.RM_UNVERIFIED, json.encodeToString(it), shiftId) }
                     }
                 }
                 // The read row and its events are committed now — only then does the machine learn
                 // it may free anything.
-                if (lostGap != null || storedRead != null) trips.kick()
+                if (lostGap != null || storedRead != null || unverified != null) trips.kick()
+                if (read.readSeq > highestReadSeq) highestReadSeq = read.readSeq
                 ackUpTo(read.readSeq)
             }
         }
@@ -201,5 +303,6 @@ class RealRmReadIntake @Inject constructor(
         const val STORED_READ_WINDOW_MS = 10_000L
         const val REASON_TIMEOUT = "timeout"
         const val REASON_DISCONNECTED = "disconnected"
+        const val REASON_NO_LINK = "no_link"
     }
 }

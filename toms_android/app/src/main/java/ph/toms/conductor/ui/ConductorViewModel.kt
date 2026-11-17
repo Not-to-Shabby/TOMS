@@ -252,7 +252,7 @@ class ConductorViewModel @Inject constructor(
             rmLink.events.collect { event ->
                 when (event) {
                     is RmEvent.PaidCheckReceived -> {
-                        rmIntake.onPaidCheck(event.checkSeq)
+                        rmIntake.onPaidCheck(event.checkSeq, event.layout)
                         handleTerminalPaidCheck(event.checkSeq, event.uidHex)
                     }
                     is RmEvent.CardReadReceived -> {
