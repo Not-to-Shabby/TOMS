@@ -20,6 +20,8 @@ import ph.toms.conductor.ui.ShiftEndedDialog
 import ph.toms.conductor.ui.ShiftHistoryViewModel
 import ph.toms.conductor.ui.SyncViewModel
 import ph.toms.conductor.ui.theme.TomsTheme
+import ph.toms.conductor.workprofile.WorkProfileScreen
+import ph.toms.conductor.workprofile.WorkProfileViewModel
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -29,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private val conductor: ConductorViewModel by viewModels()
     private val sync: SyncViewModel by viewModels()
     private val history: ShiftHistoryViewModel by viewModels()
+    private val workProfile: WorkProfileViewModel by viewModels()
 
     @Inject lateinit var nfcReader: NfcReader
 
@@ -36,6 +39,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             TomsTheme {
+                // The phone-setup check comes first: nothing else starts until the app runs the way the research setup needs.
+                val wp by workProfile.state.collectAsState()
+                if (!wp.passed) {
+                    WorkProfileScreen(wp.check, workProfile::continueApp, workProfile::continueWithoutProfile, workProfile::recheck)
+                    return@TomsTheme
+                }
                 val s by session.state.collectAsState()
                 val c by conductor.state.collectAsState()
                 val sy by sync.state.collectAsState()

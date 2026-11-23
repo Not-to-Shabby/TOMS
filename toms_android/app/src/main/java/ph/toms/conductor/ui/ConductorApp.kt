@@ -2,6 +2,7 @@ package ph.toms.conductor.ui
 
 import android.Manifest
 import android.app.Activity
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
@@ -156,7 +157,12 @@ fun ConductorApp(
                 BigButton("Allow", {
                     BatteryOptimization.markAsked(activity)
                     askBattery = false
-                    activity.startActivity(BatteryOptimization.requestIntent(activity))
+                    // A work profile may have no handler for this settings screen (its admin limits which system apps exist
+                    // there); carrying on without the exemption is the same as the conductor saying "Not now".
+                    try {
+                        activity.startActivity(BatteryOptimization.requestIntent(activity))
+                    } catch (_: ActivityNotFoundException) {
+                    }
                 })
             },
             dismissButton = {
