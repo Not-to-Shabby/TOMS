@@ -350,7 +350,7 @@ static void test_api(void)
 		.max_state_entries = TOMS_STATE_TABLE_MAX,
 	};
 	CHECK(toms_codec_encode_device_info(buf, sizeof(buf), &di) == 7);
-	const uint8_t di_expect[7] = { 1, 0, 1, 2, 0x01, 0x80, 0x00 };
+	const uint8_t di_expect[7] = { 2, 0, 1, 2, 0x01, 0x80, 0x00 };
 	CHECK(memcmp(buf, di_expect, 7) == 0);
 	CHECK(toms_codec_encode_device_info(buf, 6, &di) == -ENOSPC);
 

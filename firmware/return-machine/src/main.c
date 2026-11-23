@@ -22,6 +22,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
 #include <toms/codec.h>
 #include <toms/state_table.h>
+#include <toms/wire.h>
 
 #include <zephyr/sys/printk.h> /* snprintk */
 
@@ -99,6 +100,31 @@ static K_MUTEX_DEFINE(card_lock);
 /* Wakes the flush thread: a read was stored, or a phone connected. */
 static K_SEM_DEFINE(flush_wake, 0, 1);
 
+/* How the paid check ended, as the phone is told in a v2 card_read. */
+static uint8_t outcome_for(int check_rc)
+{
+	if (check_rc == 0) {
+		return TOMS_OUTCOME_NORMAL;
+	}
+	if (check_rc == -ETIMEDOUT) {
+		return TOMS_OUTCOME_UNVERIFIED_TIMEOUT; /* sent, no reply in time */
+	}
+	return TOMS_OUTCOME_UNVERIFIED_NO_LINK; /* could not be sent: no phone, not subscribed, notify failed */
+}
+
+/* One live notify of a read in the given layout. 0 or the notify error. */
+static int deliver_live(const struct toms_card_read_msg *msg, uint8_t wire)
+{
+	uint8_t frame[32];
+	int len = toms_codec_encode_card_read_wire(frame, sizeof(frame), msg, wire);
+
+	if (len < 0) {
+		LOG_ERR("card_read encode failed (%d)", len);
+		return len;
+	}
+	return rm_ble_notify_card_read(frame, (size_t)len);
+}
+
 static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 {
 	k_mutex_lock(&card_lock, K_FOREVER);
@@ -118,41 +144,24 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	};
 	memcpy(msg.uid, uid, uid_len);
 
-	uint8_t frame[32];
-	int len = toms_codec_encode_card_read(frame, sizeof(frame), &msg);
-	if (len < 0) {
-		LOG_ERR("card_read encode failed (%d)", len);
-		play(TOMS_TONE_UNVERIFIED);
-		k_mutex_unlock(&card_lock);
-		return;
+	/* Wire v1 (what the shipped phone parses): the read goes out before the paid check, exactly
+	 * as before, and only when no older read is waiting so the phone sees them in read_seq
+	 * order. The outcome is not on the v1 wire. */
+	uint8_t wire = rm_ble_wire_version();
+	bool delivered = false;
+
+	if (seq > 0 && wire == TOMS_WIRE_V1 && readstore_unsent() == 0) {
+		delivered = deliver_live(&msg, TOMS_WIRE_V1) == 0;
 	}
 
-	/* A read goes out live only when no older read is waiting, so the phone always sees them in
-	 * read_seq order. Otherwise, or if the notify fails, it is stored in flash and the flush
-	 * thread sends it after the older ones. */
-	int rc = -ENOTCONN;
-
-	if (seq > 0 && readstore_unsent() == 0) {
-		rc = rm_ble_notify_card_read(frame, (size_t)len);
-	}
-	if (rc == 0) {
-		readstore_mark_sent(msg.read_seq);
-	} else if (seq > 0) {
-		int krc = readstore_keep(&msg);
-
-		LOG_INF("read %u stored in flash (notify %d, store %d), %u pending",
-			(unsigned int)msg.read_seq, rc, krc, (unsigned int)readstore_pending());
-		k_sem_give(&flush_wake);
-	} else {
-		LOG_ERR("no read_seq (%d): read not recorded", (int)seq);
-	}
-
-	/* Ask the phone, and fall back to the cached state when it cannot answer. */
+	/* Ask the phone. */
 	struct toms_config_msg cfg;
 	uint8_t verdict;
 
 	rm_ble_get_config(&cfg);
-	rc = rm_ble_paid_check(uid, uid_len, cfg.paid_timeout_ms, &verdict);
+	int rc = rm_ble_paid_check(uid, uid_len, cfg.paid_timeout_ms, &verdict);
+
+	msg.outcome = outcome_for(rc);
 	if (rc == 0) {
 		LOG_INF("paid_reply: verdict %u", verdict);
 		if (verdict == TOMS_VERDICT_UNPAID) {
@@ -164,9 +173,29 @@ static void on_read(const uint8_t *uid, uint8_t uid_len, uint8_t atype)
 	} else {
 		/* No answer from the phone: the read is unverified. Never the full alarm, whatever
 		 * the cached state says; the cache only goes to the phone in card_read. */
-		LOG_INF("no paid_reply (%d): unverified (cached state %u)", rc, status);
+		LOG_INF("no paid_reply (%d): unverified, outcome %u (cached state %u)", rc,
+			msg.outcome, status);
 		play(TOMS_TONE_UNVERIFIED);
 		display_set_verdict(0xFF, uid, uid_len, atype);
+	}
+
+	/* Wire v2: the read follows the check, so it can say how the check ended. If it cannot go
+	 * out live (an older read is waiting, the notify fails, no phone), it is stored in flash
+	 * with its outcome and the flush thread sends it, in read_seq order. */
+	if (seq > 0 && !delivered && wire == TOMS_WIRE_V2 && readstore_unsent() == 0) {
+		delivered = deliver_live(&msg, rm_ble_wire_version()) == 0;
+	}
+	if (delivered) {
+		readstore_mark_sent(msg.read_seq);
+	} else if (seq > 0) {
+		int krc = readstore_keep(&msg);
+
+		LOG_INF("read %u stored in flash (outcome %u, store %d), %u pending",
+			(unsigned int)msg.read_seq, msg.outcome, krc,
+			(unsigned int)readstore_pending());
+		k_sem_give(&flush_wake);
+	} else {
+		LOG_ERR("no read_seq (%d): read not recorded", (int)seq);
 	}
 	k_mutex_unlock(&card_lock);
 }
@@ -236,10 +265,16 @@ static void flush_loop(void *a, void *b, void *c)
 		while (up) {
 			uint8_t fr[32];
 			uint32_t seq;
+			uint8_t oc = TOMS_OUTCOME_NORMAL;
 
 			k_mutex_lock(&card_lock, K_FOREVER);
-			int n = readstore_next_unsent(fr, sizeof(fr), &seq);
+			int n = readstore_next_unsent(fr, sizeof(fr), &seq, &oc);
 
+			/* Stored frames are v1; this connection's layout is applied when sending. */
+			if (n > 0) {
+				n = toms_codec_card_read_to_wire(fr, sizeof(fr), (size_t)n, oc,
+								 rm_ble_wire_version());
+			}
 			if (n > 0 && rm_ble_notify_card_read(fr, (size_t)n) == 0) {
 				readstore_mark_sent(seq);
 				k_mutex_unlock(&card_lock);
@@ -347,12 +382,14 @@ static void send_heartbeat(void)
 		.nfc_status = (uint8_t)atomic_get(&nfc_status),
 		.state_version = st.state_version,
 		.buffered_reads = (uint16_t)readstore_pending(),
+		.dropped_reads = toms_u16_sat(readstore_dropped()),
+		.late_replies = rm_ble_late_replies(),
 		.reset_reason = reset_reason,
 	};
 	battery_read(&msg.battery_pct, &msg.battery_mv);
 
 	uint8_t frame[24];
-	int len = toms_codec_encode_heartbeat(frame, sizeof(frame), &msg);
+	int len = toms_codec_encode_heartbeat_wire(frame, sizeof(frame), &msg, rm_ble_wire_version());
 	if (len < 0) {
 		LOG_ERR("heartbeat encode failed (%d)", len);
 		return;

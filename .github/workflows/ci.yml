@@ -114,3 +114,22 @@ jobs:
       - name: Assemble Release APK (R8)
         working-directory: toms_android
         run: ./gradlew :app:assembleRelease
+
+  firmware-host:
+    name: Return Machine firmware (host checks)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compiler
+        run: gcc --version
+
+      # toms_core is the portable part of the Return Machine firmware: codec, signing, flash read log, state
+      # table, OTA rules. This runs its unit tests, a strict-warnings build, gcc -fanalyzer, the tests again
+      # under trap-mode UBSan, and a decoder fuzz with guard pages. It needs no Zephyr and no board.
+      # The Zephyr build itself is NOT run here: see firmware/ENV_SETUP.md ("CI") for why and for the commands.
+      - name: Host unit tests, static analysis, sanitizer, fuzz
+        working-directory: firmware/lib/toms_core
+        run: bash test/check_all.sh

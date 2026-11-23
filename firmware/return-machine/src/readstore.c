@@ -23,6 +23,8 @@ static uint8_t key_buf[TOMS_SIG_KEY_LEN];
 static bool key_present;
 static uint32_t saved_hwm;
 static bool hwm_present;
+static uint32_t saved_drop;
+static bool drop_present;
 
 static struct toms_readlog log_state;
 static K_MUTEX_DEFINE(lock);
@@ -97,6 +99,28 @@ static int io_save_hwm(void *ctx, uint32_t hwm)
 	return rc;
 }
 
+static int io_load_dropped(void *ctx, uint32_t *dropped)
+{
+	ARG_UNUSED(ctx);
+	if (!drop_present) {
+		return -ENOENT;
+	}
+	*dropped = saved_drop;
+	return 0;
+}
+
+static int io_save_dropped(void *ctx, uint32_t dropped)
+{
+	ARG_UNUSED(ctx);
+	int rc = settings_save_one("toms/k/drop", &dropped, sizeof(dropped));
+
+	if (rc == 0) {
+		saved_drop = dropped;
+		drop_present = true;
+	}
+	return rc;
+}
+
 static int load_rl(const char *key, size_t len, settings_read_cb read_cb, void *cb_arg,
 		   void *param)
 {
@@ -119,6 +143,9 @@ static int load_k(const char *key, size_t len, settings_read_cb read_cb, void *c
 	ARG_UNUSED(param);
 	if (strcmp(key, "key") == 0 && len == sizeof(key_buf)) {
 		key_present = read_cb(cb_arg, key_buf, sizeof(key_buf)) == (ssize_t)sizeof(key_buf);
+	} else if (strcmp(key, "drop") == 0 && len == sizeof(saved_drop)) {
+		drop_present = read_cb(cb_arg, &saved_drop, sizeof(saved_drop)) ==
+			       (ssize_t)sizeof(saved_drop);
 	} else if (strcmp(key, "hwm") == 0 && len == sizeof(saved_hwm)) {
 		hwm_present = read_cb(cb_arg, &saved_hwm, sizeof(saved_hwm)) ==
 			      (ssize_t)sizeof(saved_hwm);
@@ -143,7 +170,7 @@ int readstore_init(void)
 	}
 	if (rc == 0) {
 		struct toms_readlog_io io = {NULL, io_read, io_write, io_erase, io_load_hwm,
-					     io_save_hwm};
+					     io_save_hwm, io_load_dropped, io_save_dropped};
 
 		rc = toms_readlog_open(&log_state, &io, CAP);
 	}
@@ -216,13 +243,14 @@ uint32_t readstore_unsent(void)
 	return n;
 }
 
-int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq)
+int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq, uint8_t *outcome)
 {
 	if (!ready) {
 		return -ENODEV;
 	}
 	k_mutex_lock(&lock, K_FOREVER);
-	int n = toms_readlog_get_from(&log_state, log_state.sent_upto + 1u, frame, cap, seq);
+	int n = toms_readlog_get_from_ex(&log_state, log_state.sent_upto + 1u, frame, cap, seq,
+					 outcome);
 
 	k_mutex_unlock(&lock);
 	return n;

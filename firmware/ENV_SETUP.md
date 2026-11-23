@@ -41,3 +41,28 @@ Gotchas hit and fixed (write them down, they cost real time):
 C: drive is 100% full (a few hundred MB free; pip temp lives there). Builds
 run from D:, but pip and Python temp still touch C: — clean it up before any
 further installs.
+
+
+## CI
+
+`.github/workflows/ci.yml` has a `firmware-host` job. It runs `firmware/lib/toms_core/test/check_all.sh`
+on a plain Ubuntu runner: the toms_core unit tests, a strict-warnings build, `gcc -fanalyzer`, the tests
+under trap-mode UBSan, and the decoder fuzz. That covers the codec, signing, the flash read log, the state
+table and the wire-layout rules, without Zephyr and without a board.
+
+**The Zephyr build is not in CI.** It needs a west workspace (Zephyr v4.2.0 and its modules, several GB),
+the Zephyr SDK with the `xtensa-espressif_esp32s3_zephyr-elf` toolchain, the Espressif BLE blobs
+(`west blobs fetch hal_espressif`) and a build that takes minutes per variant. It was only ever run on the
+Windows machine above, and a CI job that has never run on a Linux runner would fail every push to `v2/**`
+until someone debugged it. Run it locally before a firmware PR and paste the memory summary:
+
+```
+# default (release-style: DEV_MODE off)
+west build -p always -b esp32s3_devkitc/esp32s3/procpu firmware/return-machine --build-dir build/devkitc
+# dev-mode variant (bench commands on)
+west build -p always -b esp32s3_devkitc/esp32s3/procpu firmware/return-machine --build-dir build/devkitc_dev -- -DEXTRA_CONF_FILE=prj_dev.conf
+```
+
+On this machine `bash firmware/tools/build_devkitc.sh` runs the first one with the PATH set. If the build is
+later moved into CI, start from the commands above, cache `~/zephyrproject`, and keep it as a separate
+workflow that is allowed to fail until it has run green a few times.
