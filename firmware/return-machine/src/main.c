@@ -423,6 +423,10 @@ static void on_button(void)
 
 int main(void)
 {
+	/* Pairing window: only if the button is held at power-up. Sampled first, before anything else
+	 * can take time, and acted on once Bluetooth is up. */
+	bool pairing_requested = button_is_held();
+
 	uint8_t rr = toms_reset_reason();
 	reset_reason = rr;
 	LOG_INF("TOMS Return Machine boot, reset: %s (%u)", toms_reset_reason_name(rr), rr);
@@ -461,6 +465,11 @@ int main(void)
 		LOG_ERR("BLE start failed (%d)", ble_rc);
 	}
 	trial_report_ble(ble_rc == 0);
+	if (ble_rc == 0 && pairing_requested) {
+		rm_ble_open_pairing();
+	} else if (pairing_requested) {
+		LOG_ERR("button held at power-up but Bluetooth did not start: no pairing window");
+	}
 
 	k_thread_create(&flush_thread, flush_stack, FLUSH_STACK, flush_loop, NULL, NULL, NULL,
 			FLUSH_PRIO, 0, K_NO_WAIT);

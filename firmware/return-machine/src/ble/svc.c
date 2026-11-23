@@ -22,8 +22,11 @@
 LOG_MODULE_REGISTER(ble_svc, LOG_LEVEL_INF);
 
 #include <toms/clock.h>
+#include <toms/authz.h>
 #include <toms/codec.h>
+#include <toms/keyring.h>
 #include <toms/late.h>
+#include <toms/pairing.h>
 #include <toms/sig.h>
 #include <toms/state_table.h>
 #include <toms/wire.h>
@@ -260,17 +263,14 @@ static int notify_signed(uint8_t suffix, bool subscribed, const uint8_t *data, s
  * unsigned write is still accepted; that gap is listed in the PR. */
 static int verify_write(uint8_t suffix, const uint8_t *data, uint16_t len, int consumed)
 {
-	uint8_t key[TOMS_SIG_KEY_LEN];
-
 	if (consumed < 0) {
 		return consumed;
 	}
-	if (!keystore_get(key)) {
+	if (!keystore_present()) {
 		return 0;
 	}
-	int rc = toms_sig_check(key, sizeof(key), suffix, data, len, (size_t)consumed);
+	int rc = keystore_check(suffix, data, len, (size_t)consumed);
 
-	memset(key, 0, sizeof(key));
 	if (rc == TOMS_SIG_ABSENT) {
 		unsigned_writes++;
 		return 0;
@@ -464,8 +464,111 @@ static int handle_sim_card(const uint8_t *data, uint16_t len)
 	return 0;
 }
 
-/* Set by diag command 0x00 on an encrypted link; cleared on disconnect. */
+/* Set by diag command 0x00 on an authenticated link; cleared on disconnect. */
 static bool diag_authenticated;
+
+/* ---- pairing window and the one bond -------------------------------------------------------- */
+static struct toms_pair_window pair_window;
+static struct k_spinlock pair_lock;
+
+static void count_bond_cb(const struct bt_bond_info *info, void *user_data)
+{
+	ARG_UNUSED(info);
+	(*(uint8_t *)user_data)++;
+}
+
+static uint8_t bond_count(void)
+{
+	uint8_t n = 0;
+
+	bt_foreach_bond(BT_ID_DEFAULT, count_bond_cb, &n);
+	return n;
+}
+
+/* Opens the window (called from main when the button was held at power-up). */
+void rm_ble_open_pairing(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&pair_lock);
+
+	toms_pair_window_open(&pair_window, (uint32_t)k_uptime_get(),
+			      CONFIG_TOMS_PAIR_WINDOW_S * 1000u);
+	k_spin_unlock(&pair_lock, key);
+	LOG_INF("pairing window open for %u s", (unsigned int)CONFIG_TOMS_PAIR_WINDOW_S);
+}
+
+uint32_t rm_ble_pairing_left_ms(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&pair_lock);
+	uint32_t left = toms_pair_window_left_ms(&pair_window, (uint32_t)k_uptime_get());
+
+	k_spin_unlock(&pair_lock, key);
+	return left;
+}
+
+/* The link level this connection has reached now. */
+static uint8_t link_level(void)
+{
+	return current_conn == NULL ? 0 : (uint8_t)bt_conn_get_security(current_conn);
+}
+
+static bool link_bonded(void)
+{
+	const bt_addr_le_t *dst = current_conn != NULL ? bt_conn_get_dst(current_conn) : NULL;
+
+	return dst != NULL && bt_le_bond_exists(BT_ID_DEFAULT, dst);
+}
+
+/* The diag value's own signature. Same rule as every other signed value: key in force or the
+ * previous key during grace. consumed = the command byte plus its argument bytes (05 00 = 2). */
+static int diag_sig(const uint8_t *data, uint16_t len, size_t consumed)
+{
+	if (!keystore_present()) {
+		return consumed == len ? TOMS_SIG_ABSENT : -EINVAL;
+	}
+	return keystore_check(TOMS_DIAG_SUFFIX, data, len, consumed);
+}
+
+/* Every diag command goes through here before it does anything. Returns true to go on. */
+static bool diag_allowed(const uint8_t *data, uint16_t len, uint8_t cmd, size_t consumed)
+{
+	struct toms_authz_in in = {
+		.cmd = cmd,
+		.link_level = link_level(),
+		.required_level = CONFIG_TOMS_AUTH_LEVEL,
+		.dev_mode = IS_ENABLED(CONFIG_TOMS_DEV_MODE),
+		.key_present = keystore_present(),
+		.sig = TOMS_SIG_ABSENT,
+		.bonded = link_bonded(),
+		.session_open = diag_authenticated,
+		.local_diag_mode = display_is_diag_mode(),
+	};
+
+	if (cmd == TOMS_DIAG_ALARM_CLEAR && in.key_present) {
+		in.sig = diag_sig(data, len, consumed);
+	}
+	switch (toms_authz_diag(&in)) {
+	case TOMS_AUTHZ_ALLOW:
+		return true;
+	case TOMS_AUTHZ_ALLOW_UNSIGNED_INTERIM:
+		LOG_WRN("diag 05 accepted UNSIGNED (interim rule: bonded central with an open session)");
+		return true;
+	case TOMS_AUTHZ_DENY_LINK:
+		LOG_WRN("diag 0x%02X refused: link level %u, need %u", cmd, in.link_level,
+			(unsigned int)CONFIG_TOMS_AUTH_LEVEL);
+		break;
+	case TOMS_AUTHZ_DENY_UNSIGNED:
+		LOG_WRN("diag 05 refused: a key exists and the command is not signed");
+		break;
+	case TOMS_AUTHZ_DENY_BAD_SIG:
+		bad_sigs++;
+		LOG_WRN("diag 0x%02X refused: bad signature", cmd);
+		break;
+	case TOMS_AUTHZ_DENY_NO_SESSION:
+		LOG_WRN("diag 0x%02X refused: no diagnostic session", cmd);
+		break;
+	}
+	return false;
+}
 
 static int handle_diag(const uint8_t *data, uint16_t len)
 {
@@ -482,14 +585,13 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	 * are ignored: older apps send a fixed code there, it is not checked, so there is no secret
 	 * in the image. */
 	if (cmd == 0x00) {
-		bool ok = IS_ENABLED(CONFIG_TOMS_DEV_MODE) ||
-			  (current_conn != NULL && bt_conn_get_security(current_conn) >= BT_SECURITY_L2);
+		bool ok = diag_allowed(data, len, cmd, 1);
 
 		diag_authenticated = ok;
 		if (ok) {
 			display_set_diag_mode(true);
 		}
-		LOG_INF("diag: session %s", ok ? "opened (encrypted link)" : "refused (link not encrypted)");
+		LOG_INF("diag: session %s", ok ? "opened (authenticated link)" : "refused (link not authenticated)");
 		uint8_t rsp[4] = { 0x80, 0x00, (uint8_t)(ok ? 0x01 : 0x00), (uint8_t)(ok ? 0x00 : 0xFF) };
 
 		(void)NOTIFY(0x0E, diag_notify, rsp, sizeof(rsp));
@@ -498,6 +600,13 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 
 	/* Command 0x05: Clear / Silence Unpaid Alarm (allowed for conductors anytime) */
 	if (cmd == 0x05) {
+		/* 05 00, plus the 8-byte signature once the machine has a key. */
+		if (!diag_allowed(data, len, cmd, 2)) {
+			uint8_t nack[4] = { 0x85, 0x00, 0x00, 0xFF };
+
+			(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
+			return -EACCES;
+		}
 		buzzer_alarm_stop();
 		display_clear_alarm();
 		LOG_INF("diag: unpaid alarm cleared/silenced by phone");
@@ -509,6 +618,12 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	/* Command 0x07: choose the message layout for this connection (wire v1 or v2, PROTOCOL.md
 	 * section 7). A connection starts on v1, the layout the shipped phone parses. */
 	if (cmd == TOMS_DIAG_CMD_WIRE) {
+		if (!diag_allowed(data, len, cmd, len)) {
+			uint8_t nack[4] = { TOMS_DIAG_WIRE_REPLY, 0xFF, wire.version, 2 };
+
+			(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
+			return -EACCES;
+		}
 		uint8_t rsp[4];
 		uint8_t st = toms_wire_handle_select(&wire, data, len, rsp);
 
@@ -517,13 +632,30 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 		return st == TOMS_WIRE_OK ? 0 : -EINVAL;
 	}
 
-	/* Command 0x06: store the per-machine signing key. Once, and only on an encrypted link;
+	/* Command 0x08: replace the signing key. 08 || new key (32) || 8-byte signature made with the key
+	 * in force over (0x0E || 08 || new key). The reply is [0x88, status, grace, 0]. The previous key
+	 * stays valid until the first value signed with the new one arrives, so a replace the phone
+	 * never confirmed cannot lock it out. */
+	if (cmd == TOMS_DIAG_KEY_REPLACE) {
+		uint8_t status = TOMS_REPLACE_REFUSED;
+		bool grace = false;
+
+		if (diag_allowed(data, len, cmd, len)) {
+			status = keystore_replace(data, len, &grace);
+			LOG_INF("diag: key replace -> status %u, grace %d", status, grace);
+		}
+		uint8_t rsp[4] = { 0x88, status, (uint8_t)(grace ? 1 : 0), 0 };
+
+		(void)NOTIFY(0x0E, diag_notify, rsp, sizeof(rsp));
+		return status == TOMS_REPLACE_OK ? 0 : -EACCES;
+	}
+
+	/* Command 0x06: store the per-machine signing key. Once, and only on an authenticated link;
 	 * the key arrives over the air at enrollment and is never part of the image. */
 	if (cmd == DIAG_CMD_PROVISION_KEY) {
 		uint8_t st = 0xFF;
 
-		if (len == 1u + TOMS_SIG_KEY_LEN && current_conn != NULL &&
-		    bt_conn_get_security(current_conn) >= BT_SECURITY_L2) {
+		if (len == 1u + TOMS_SIG_KEY_LEN && diag_allowed(data, len, cmd, len)) {
 			int krc = keystore_provision(&data[1]);
 
 			st = (krc == 0) ? 0 : (krc == -EEXIST ? 1 : 2);
@@ -535,7 +667,7 @@ static int handle_diag(const uint8_t *data, uint16_t len)
 	}
 
 	/* Bench commands 0x01..0x04: a dev build, or a session opened with command 0x00 */
-	if (!diag_authenticated && !display_is_diag_mode() && !IS_ENABLED(CONFIG_TOMS_DEV_MODE)) {
+	if (!diag_allowed(data, len, cmd, len)) {
 		LOG_WRN("diag: cmd 0x%02X rejected (machine diagnostic mode is off)", cmd);
 		uint8_t nack[4] = { (uint8_t)(0x80 | cmd), 0x00, 0x00, 0xFF };
 		(void)NOTIFY(0x0E, diag_notify, nack, sizeof(nack));
@@ -725,7 +857,39 @@ static void auth_cancel(struct bt_conn *conn)
 	ota_ui_clear_pair();
 }
 
+/* Who may start a pairing: only while the window is open (button held at power-up), only a peer that
+ * can take part in an authenticated pairing, and only one bond (the same peer may pair again). */
+static enum bt_security_err auth_pairing_accept(struct bt_conn *conn,
+						const struct bt_conn_pairing_feat *const feat)
+{
+	const bt_addr_le_t *dst = bt_conn_get_dst(conn);
+	bool peer_bonded = dst != NULL && bt_le_bond_exists(BT_ID_DEFAULT, dst);
+	uint8_t io = feat != NULL ? feat->io_capability : TOMS_IO_NO_INPUT_NO_OUTPUT;
+
+	k_spinlock_key_t key = k_spin_lock(&pair_lock);
+	enum toms_pair_verdict v = toms_pair_decide(&pair_window, (uint32_t)k_uptime_get(), io,
+						    bond_count(), peer_bonded);
+
+	k_spin_unlock(&pair_lock, key);
+	switch (v) {
+	case TOMS_PAIR_ALLOW:
+		LOG_INF("pairing accepted (window open, io %u, bonded peer %d)", io, peer_bonded);
+		return BT_SECURITY_ERR_SUCCESS;
+	case TOMS_PAIR_DENY_CLOSED:
+		LOG_WRN("pairing refused: the pairing window is closed (hold the button at power-up)");
+		break;
+	case TOMS_PAIR_DENY_IO:
+		LOG_WRN("pairing refused: peer io capability %u cannot do an authenticated pairing", io);
+		break;
+	case TOMS_PAIR_DENY_FULL:
+		LOG_WRN("pairing refused: the one bond is taken by another central");
+		break;
+	}
+	return BT_SECURITY_ERR_PAIR_NOT_ALLOWED;
+}
+
 static struct bt_conn_auth_cb auth_cb = {
+	.pairing_accept = auth_pairing_accept,
 	.passkey_display = auth_passkey_display,
 	.passkey_confirm = auth_passkey_confirm,
 	.cancel = auth_cancel,
@@ -735,6 +899,13 @@ static void auth_pairing_complete(struct bt_conn *conn, bool bonded)
 {
 	LOG_INF("pairing complete (bonded=%d)", bonded);
 	ota_ui_clear_pair();
+	if (bonded) {
+		/* the bond is made: close the window, nobody else can join */
+		k_spinlock_key_t key = k_spin_lock(&pair_lock);
+
+		toms_pair_window_close(&pair_window);
+		k_spin_unlock(&pair_lock, key);
+	}
 }
 
 static void auth_pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
@@ -764,6 +935,7 @@ static void make_name(char *out, size_t cap)
 int rm_ble_start(void)
 {
 	toms_state_table_init(&table);
+	toms_pair_window_init(&pair_window);
 	toms_late_init(&late);
 	toms_wire_reset(&wire);
 	toms_config_defaults(&cfg);

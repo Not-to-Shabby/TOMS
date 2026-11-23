@@ -68,6 +68,13 @@ int rm_ble_notify_card_read(const uint8_t *data, size_t len);
 int rm_ble_notify_heartbeat(const uint8_t *data, size_t len);
 int rm_ble_notify_diag(const uint8_t *data, size_t len);
 
+/* Opens the pairing window (CONFIG_TOMS_PAIR_WINDOW_S seconds). Call after rm_ble_start() when the
+ * button was held at power-up. */
+void rm_ble_open_pairing(void);
+
+/* Milliseconds of pairing window left, 0 when closed. */
+uint32_t rm_ble_pairing_left_ms(void);
+
 /* HCI round trip to the controller. 0 = the Bluetooth stack answered. */
 int rm_ble_probe(void);
 
