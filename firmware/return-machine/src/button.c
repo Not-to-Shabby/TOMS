@@ -52,6 +52,11 @@ bool button_is_held(void)
 	return gpio_pin_get_dt(&btn) == 1;
 }
 
+bool button_pressed_now(void)
+{
+	return gpio_is_ready_dt(&btn) && gpio_pin_get_dt(&btn) == 1;
+}
+
 int button_init(toms_button_cb_t cb)
 {
 	if (!gpio_is_ready_dt(&btn)) {

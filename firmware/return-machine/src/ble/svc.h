@@ -72,6 +72,10 @@ int rm_ble_notify_diag(const uint8_t *data, size_t len);
  * button was held at power-up. */
 void rm_ble_open_pairing(void);
 
+/* Forgets the one bond (not the signing key) and closes the pairing window. Returns the number of
+ * bonds left (0) or a negative errno. */
+int rm_ble_forget_bond(void);
+
 /* Milliseconds of pairing window left, 0 when closed. */
 uint32_t rm_ble_pairing_left_ms(void);
 

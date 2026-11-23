@@ -44,6 +44,9 @@ bool display_is_alarming(void);
 /* Switches between normal passenger transit UI (false) and hardware diagnostic test mode (true). */
 void display_set_diag_mode(bool active);
 
+/* Shows BOND CLEARED for `ms` milliseconds, then the normal pages come back. Any thread. */
+void display_show_bond_cleared(uint32_t ms);
+
 /* Checks if diagnostic test mode is currently active. */
 bool display_is_diag_mode(void);
 

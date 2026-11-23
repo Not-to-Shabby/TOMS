@@ -496,6 +496,30 @@ void rm_ble_open_pairing(void)
 	LOG_INF("pairing window open for %u s", (unsigned int)CONFIG_TOMS_PAIR_WINDOW_S);
 }
 
+/* Forgets the bond, and only the bond. The signing key lives in the settings record `toms/k/keys`,
+ * which this does not read or write; bt_unpair() removes the stack's own `bt/keys/...` and
+ * `bt/ccc/...` records. A connected central is disconnected by the stack. The pairing window is
+ * closed here: the caller opens a fresh one after the LCD has said BOND CLEARED. Returns the number
+ * of bonds still stored (0 = cleared), or a negative errno. */
+int rm_ble_forget_bond(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&pair_lock);
+
+	toms_pair_window_close(&pair_window);
+	k_spin_unlock(&pair_lock, key);
+
+	int rc = bt_unpair(BT_ID_DEFAULT, BT_ADDR_LE_ANY);
+
+	if (rc != 0) {
+		LOG_ERR("bt_unpair failed (%d)", rc);
+		return rc;
+	}
+	uint8_t left = bond_count();
+
+	LOG_WRN("bond cleared by the button hold; %u bond(s) left; the signing key is untouched", left);
+	return left;
+}
+
 uint32_t rm_ble_pairing_left_ms(void)
 {
 	k_spinlock_key_t key = k_spin_lock(&pair_lock);
@@ -857,7 +881,8 @@ static void auth_cancel(struct bt_conn *conn)
 	ota_ui_clear_pair();
 }
 
-/* Who may start a pairing: only while the window is open (button held at power-up), only a peer that
+/* (BT_SECURITY_ERR_PAIR_NOT_ALLOWED goes out as SMP "Unspecified Reason", 0x08.)
+ * Who may start a pairing: only while the window is open (button held at power-up), only a peer that
  * can take part in an authenticated pairing, and only one bond (the same peer may pair again). */
 static enum bt_security_err auth_pairing_accept(struct bt_conn *conn,
 						const struct bt_conn_pairing_feat *const feat)

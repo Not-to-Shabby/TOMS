@@ -16,7 +16,7 @@ FAIL=0
 step() { printf '\n=== %s\n' "$1"; }
 bad() { echo "FAILED: $1"; FAIL=1; }
 
-SRC="src/crc16.c src/ring.c src/state_table.c src/codec.c src/clock.c src/guard.c src/reset.c src/ota.c src/sha256.c src/sig.c src/readlog.c src/late.c src/wire.c src/pairing.c src/authz.c src/keyring.c"
+SRC="src/crc16.c src/ring.c src/state_table.c src/codec.c src/clock.c src/guard.c src/reset.c src/ota.c src/sha256.c src/sig.c src/readlog.c src/late.c src/wire.c src/pairing.c src/bondclr.c src/authz.c src/keyring.c"
 
 step "1/5 unit tests"
 bash test/run_tests.sh || bad "unit tests"
@@ -43,7 +43,7 @@ gcc $UB test/test_ota.c src/ota.c src/sha256.c -o /tmp/toms_test_ota_ub || bad "
 /tmp/toms_test_ota_ub || bad "UBSan ota tests"
 gcc $UB test/test_rm.c src/sig.c src/readlog.c src/late.c src/wire.c src/sha256.c src/crc16.c src/codec.c src/state_table.c -o /tmp/toms_test_rm_ub || bad "build UBSan rm tests"
 /tmp/toms_test_rm_ub || bad "UBSan rm tests"
-gcc $UB test/test_auth.c src/pairing.c src/authz.c src/keyring.c src/sig.c src/sha256.c src/crc16.c -o /tmp/toms_test_auth_ub || bad "build UBSan auth tests"
+gcc $UB test/test_auth.c src/pairing.c src/bondclr.c src/authz.c src/keyring.c src/sig.c src/sha256.c src/crc16.c -o /tmp/toms_test_auth_ub || bad "build UBSan auth tests"
 /tmp/toms_test_auth_ub || bad "UBSan auth tests"
 
 step "5/5 decoder fuzz with guard pages"

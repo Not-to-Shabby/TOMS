@@ -199,6 +199,21 @@ static void render_pair(const struct ota_ui_state *u)
 	draw_centered(H - 12, 1, C_GRAY, "MATCH ON PHONE - PRESS BTN");
 }
 
+static atomic_t bond_cleared_until; /* uptime ms, 0 = not showing */
+
+void display_show_bond_cleared(uint32_t ms)
+{
+	atomic_set(&bond_cleared_until, (atomic_val_t)((uint32_t)k_uptime_get() + ms));
+	k_sem_give(&wake);
+}
+
+static void render_bond_cleared(void)
+{
+	fill_all(C_BLACK);
+	draw_centered(46, 2, C_YELLOW, "BOND CLEARED");
+	draw_centered(H - 12, 1, C_GRAY, "MACHINE KEY KEPT");
+}
+
 static void render_pairing_window(uint32_t left_ms)
 {
 	char t[16];
@@ -666,6 +681,15 @@ static void display_loop(void *a, void *b, void *c)
 		}
 		/* The pairing window (button held at power-up) shows PAIRING with the seconds left. A pairing
 		 * in progress (the passkey screen above) or an update takes the panel first. */
+		uint32_t cleared_until = (uint32_t)atomic_get(&bond_cleared_until);
+
+		if (cleared_until != 0 && (int32_t)(cleared_until - (uint32_t)k_uptime_get()) > 0) {
+			render_bond_cleared();
+			(void)flush();
+			pairing_shown = true; /* redraw the page when this ends */
+			(void)k_sem_take(&wake, K_MSEC(200));
+			continue;
+		}
 		uint32_t pair_left = rm_ble_pairing_left_ms();
 
 		if (pair_left > 0) {

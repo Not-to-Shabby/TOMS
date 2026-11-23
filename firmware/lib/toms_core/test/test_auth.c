@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <toms/authz.h>
+#include <toms/bondclr.h>
 #include <toms/keyring.h>
 #include <toms/pairing.h>
 #include <toms/sig.h>
@@ -523,6 +524,195 @@ static void test_diagnostic_app(void)
 	CHECK(toms_pair_decide(&w, 10, TOMS_IO_KEYBOARD_DISPLAY, 0, false) == TOMS_PAIR_ALLOW);
 }
 
+/* ================================================================== forgetting the bond (hold 5 s) */
+/* Samples the button every TOMS_BONDCLR_POLL_MS from t0. `down_until`: pressed while t < down_until.
+ * Returns the time of the FIRE event, or 0 when none came within `limit_ms`. */
+static uint32_t run_hold(uint32_t t0, bool held_at_powerup, uint32_t down_until, uint32_t limit_ms,
+			 struct toms_bondclr *s)
+{
+	toms_bondclr_init(s, t0, held_at_powerup);
+	for (uint32_t t = t0 + TOMS_BONDCLR_POLL_MS; t - t0 <= limit_ms; t += TOMS_BONDCLR_POLL_MS) {
+		if (toms_bondclr_tick(s, t, t < down_until) == TOMS_BONDCLR_FIRE) {
+			return t;
+		}
+	}
+	return 0;
+}
+
+static void test_bond_clear(void)
+{
+	struct toms_bondclr s;
+	uint32_t fired;
+
+	/* constants the document states */
+	CHECK(TOMS_BONDCLR_HOLD_MS == 5000u && TOMS_BONDCLR_SHOW_MS == 2000u);
+
+	/* held from power-up through 5 s: fires once, at the 5 s sample, not before */
+	fired = run_hold(1000, true, 0xFFFFFFFFu, 30000, &s);
+	CHECK(fired == 1000u + 5000u);
+	CHECK(s.state == TOMS_BONDCLR_DONE && !toms_bondclr_active(&s));
+	CHECK(toms_bondclr_tick(&s, fired + 50, true) == TOMS_BONDCLR_NONE); /* only once */
+	CHECK(toms_bondclr_tick(&s, fired + 100, true) == TOMS_BONDCLR_NONE);
+
+	/* 4.95 s is not enough, whatever follows it */
+	toms_bondclr_init(&s, 0, true);
+	for (uint32_t t = 50; t <= 4950; t += 50) {
+		CHECK(toms_bondclr_tick(&s, t, true) == TOMS_BONDCLR_NONE);
+	}
+	CHECK(toms_bondclr_active(&s));
+	CHECK(toms_bondclr_tick(&s, 5000, true) == TOMS_BONDCLR_FIRE);
+
+	/* not held at power-up: a button press later never starts a count */
+	toms_bondclr_init(&s, 0, false);
+	CHECK(s.state == TOMS_BONDCLR_IDLE && !toms_bondclr_active(&s));
+	for (uint32_t t = 50; t <= 20000; t += 50) {
+		CHECK(toms_bondclr_tick(&s, t, true) == TOMS_BONDCLR_NONE);
+	}
+	CHECK(s.state == TOMS_BONDCLR_IDLE);
+
+	/* released before 5 s: gives up for good, even if pressed again straight away */
+	fired = run_hold(0, true, 3000, 30000, &s);
+	CHECK(fired == 0 && s.state == TOMS_BONDCLR_GAVE_UP);
+	CHECK(toms_bondclr_tick(&s, 3500, true) == TOMS_BONDCLR_NONE);
+	CHECK(toms_bondclr_tick(&s, 9000, true) == TOMS_BONDCLR_NONE);
+
+	/* released at 4.9 s: still short */
+	fired = run_hold(0, true, 4900, 30000, &s);
+	CHECK(fired == 0 && s.state == TOMS_BONDCLR_GAVE_UP);
+
+	/* contact bounce (a release shorter than TOMS_BONDCLR_RELEASE_MS) does not reset the count */
+	toms_bondclr_init(&s, 0, true);
+	enum toms_bondclr_event ev = TOMS_BONDCLR_NONE;
+
+	for (uint32_t t = 50; t <= 5000; t += 50) {
+		bool pressed = !(t == 2000 || t == 2050); /* two samples = 100 ms up */
+		ev = toms_bondclr_tick(&s, t, pressed);
+		if (t < 5000) {
+			CHECK(ev == TOMS_BONDCLR_NONE);
+		}
+	}
+	CHECK(ev == TOMS_BONDCLR_FIRE);
+	/* two separate bounces, far apart: each is measured on its own, the first is not remembered */
+	toms_bondclr_init(&s, 0, true);
+	ev = TOMS_BONDCLR_NONE;
+	for (uint32_t t = 50; t <= 5000; t += 50) {
+		bool up = (t == 1000 || t == 1050) || (t == 3000 || t == 3050) || (t == 4800 || t == 4850);
+		ev = toms_bondclr_tick(&s, t, !up);
+		if (t < 5000) {
+			CHECK(ev == TOMS_BONDCLR_NONE);
+		}
+	}
+	CHECK(ev == TOMS_BONDCLR_FIRE);
+	/* ... but a release of TOMS_BONDCLR_RELEASE_MS or longer ends it */
+	toms_bondclr_init(&s, 0, true);
+	for (uint32_t t = 50; t <= 4000; t += 50) {
+		bool pressed = !(t >= 2000 && t < 2000 + TOMS_BONDCLR_RELEASE_MS + 50);
+		toms_bondclr_tick(&s, t, pressed);
+	}
+	CHECK(s.state == TOMS_BONDCLR_GAVE_UP);
+	CHECK(toms_bondclr_tick(&s, 5000, true) == TOMS_BONDCLR_NONE);
+
+	/* a gap in the samples (the firmware was busy) is treated as a possible release: give up */
+	toms_bondclr_init(&s, 0, true);
+	CHECK(toms_bondclr_tick(&s, 50, true) == TOMS_BONDCLR_NONE);
+	CHECK(toms_bondclr_tick(&s, 50 + TOMS_BONDCLR_MAX_GAP_MS + 1, true) == TOMS_BONDCLR_NONE);
+	CHECK(s.state == TOMS_BONDCLR_GAVE_UP);
+	CHECK(toms_bondclr_tick(&s, 5600, true) == TOMS_BONDCLR_NONE); /* even though it is past 5 s */
+	/* a gap exactly at the limit is still fine */
+	toms_bondclr_init(&s, 0, true);
+	CHECK(toms_bondclr_tick(&s, TOMS_BONDCLR_MAX_GAP_MS, true) == TOMS_BONDCLR_NONE);
+	CHECK(toms_bondclr_active(&s));
+	/* a sample that goes back in time cannot be trusted either */
+	toms_bondclr_init(&s, 1000, true);
+	toms_bondclr_tick(&s, 1100, true);
+	CHECK(toms_bondclr_tick(&s, 1050, true) == TOMS_BONDCLR_NONE && s.state == TOMS_BONDCLR_GAVE_UP);
+
+	/* the single sample that crosses 5 s fires, even if samples are 400 ms apart */
+	toms_bondclr_init(&s, 0, true);
+	for (uint32_t t = 400; t < 5000; t += 400) {
+		CHECK(toms_bondclr_tick(&s, t, true) == TOMS_BONDCLR_NONE);
+	}
+	CHECK(toms_bondclr_tick(&s, 5200, true) == TOMS_BONDCLR_FIRE);
+
+	/* the 32-bit millisecond clock wraps; the hold across the wrap still counts 5 s, not more or less */
+	fired = run_hold(0xFFFFFFFFu - 2000u, true, 0xFFFFFFFFu, 30000, &s);
+	CHECK(fired == (uint32_t)(0xFFFFFFFFu - 2000u + 5000u));
+	/* the same, starting 16 ms before the wrap, in 50 ms steps: nothing before 5 s, FIRE at 5 s */
+	toms_bondclr_init(&s, 0xFFFFFFF0u, true);
+	for (uint32_t d = 50; d < 5000; d += 50) {
+		CHECK(toms_bondclr_tick(&s, 0xFFFFFFF0u + d, true) == TOMS_BONDCLR_NONE);
+	}
+	CHECK(toms_bondclr_tick(&s, 0xFFFFFFF0u + 5000u, true) == TOMS_BONDCLR_FIRE);
+	CHECK(0xFFFFFFF0u + 5000u < 5000u); /* the sample really is on the other side of the wrap */
+
+	/* a released button at power-up (a 'held' reading that was really noise) never fires */
+	toms_bondclr_init(&s, 0, true);
+	for (uint32_t t = 50; t <= 10000; t += 50) {
+		toms_bondclr_tick(&s, t, false);
+	}
+	CHECK(s.state == TOMS_BONDCLR_GAVE_UP);
+}
+
+/* The order of things after FIRE, as the firmware does them (main.c): the bond goes, the key does not,
+ * and the window opens only after BOND CLEARED has been on the screen. Modelled here with the real
+ * pairing rules and the real key ring, so the two cannot drift apart from what the doc says. */
+static void test_bond_clear_effects(void)
+{
+	struct toms_pair_window w;
+	struct toms_keyring ring;
+	uint8_t key[TOMS_SIG_KEY_LEN], got[TOMS_SIG_KEY_LEN];
+	uint8_t bonds = 1;     /* the phone's bond */
+	bool peer_bonded = true;
+
+	make_key(key, 0x31);
+	toms_keyring_init(&ring);
+	toms_keyring_provision(&ring, key);
+	toms_pair_window_init(&w);
+
+	/* before: a bond exists, so a second phone is refused even with a window; the window is closed */
+	CHECK(toms_pair_decide(&w, 100, TOMS_IO_DISPLAY_YESNO, bonds, false) == TOMS_PAIR_DENY_CLOSED);
+	toms_pair_window_open(&w, 100, 60000);
+	CHECK(toms_pair_decide(&w, 200, TOMS_IO_DISPLAY_YESNO, bonds, false) == TOMS_PAIR_DENY_FULL);
+	toms_pair_window_close(&w);
+
+	/* FIRE: the bond is cleared; the key ring is not touched */
+	bonds = 0;
+	peer_bonded = false;
+	CHECK(toms_keyring_get(&ring, got) && memcmp(got, key, sizeof(key)) == 0);
+	CHECK(!ring.has_prev);
+	/* BOND CLEARED shows for TOMS_BONDCLR_SHOW_MS with the window still closed: nobody can pair yet */
+	uint32_t t_clear = 5000;
+
+	CHECK(toms_pair_decide(&w, t_clear + 10, TOMS_IO_DISPLAY_YESNO, bonds, peer_bonded) == TOMS_PAIR_DENY_CLOSED);
+	CHECK(toms_pair_decide(&w, t_clear + TOMS_BONDCLR_SHOW_MS - 1, TOMS_IO_DISPLAY_YESNO, bonds, false) ==
+	      TOMS_PAIR_DENY_CLOSED);
+	/* then the window opens, for the usual 60 s, counted from then */
+	toms_pair_window_open(&w, t_clear + TOMS_BONDCLR_SHOW_MS, TOMS_PAIR_WINDOW_DEFAULT_MS);
+	CHECK(toms_pair_window_left_ms(&w, t_clear + TOMS_BONDCLR_SHOW_MS) == 60000u);
+	/* any authenticated-capable central may now take the slot, the old one included */
+	CHECK(toms_pair_decide(&w, t_clear + 3000, TOMS_IO_DISPLAY_YESNO, bonds, false) == TOMS_PAIR_ALLOW);
+	CHECK(toms_pair_decide(&w, t_clear + 3000, TOMS_IO_NO_INPUT_NO_OUTPUT, bonds, false) == TOMS_PAIR_DENY_IO);
+	/* once one bond is made the window closes and the slot is taken again */
+	bonds = 1;
+	toms_pair_window_close(&w);
+	CHECK(toms_pair_decide(&w, t_clear + 4000, TOMS_IO_DISPLAY_YESNO, bonds, false) == TOMS_PAIR_DENY_CLOSED);
+
+	/* the key still verifies what the old phone signed: forgetting the bond forgot nothing else */
+	uint8_t v[16] = {0x05, 0x00};
+	enum toms_key_used used;
+	bool committed;
+
+	toms_sig_append(key, sizeof(key), TOMS_DIAG_SUFFIX, v, 2, sizeof(v));
+	CHECK(toms_keyring_check(&ring, TOMS_DIAG_SUFFIX, v, 10, 2, &used, &committed) == TOMS_SIG_OK);
+	CHECK(used == TOMS_KEY_CURRENT);
+	/* and the blob that goes to flash is the same as before the clear (nothing rewrote it) */
+	uint8_t blob_a[TOMS_KEYRING_BLOB_LEN], blob_b[TOMS_KEYRING_BLOB_LEN];
+
+	toms_keyring_encode(&ring, blob_a);
+	toms_keyring_encode(&ring, blob_b);
+	CHECK(memcmp(blob_a, blob_b, sizeof(blob_a)) == 0);
+}
+
 int main(void)
 {
 	test_pair_window();
@@ -535,6 +725,8 @@ int main(void)
 	test_key_replace();
 	test_keyring_blob();
 	test_diagnostic_app();
+	test_bond_clear();
+	test_bond_clear_effects();
 	printf("auth: %d checks, %d failures\n", checks, failures);
 	return failures ? 1 : 0;
 }

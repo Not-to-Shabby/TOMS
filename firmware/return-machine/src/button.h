@@ -14,4 +14,8 @@ int button_init(toms_button_cb_t cb);
  * whether to open the pairing window; returns false when the pin is not usable. */
 bool button_is_held(void);
 
+/* The pin right now, no delay and no debounce: true = pressed. For the bond-clear hold tracker,
+ * which samples every 50 ms and does its own release filtering. False when the pin is unusable. */
+bool button_pressed_now(void);
+
 #endif /* TOMS_BUTTON_H */

@@ -422,7 +422,7 @@ Everything here is enforced by `toms_core` (`pairing.h`, `authz.h`, `keyring.h`)
 | Rule | Detail |
 | --- | --- |
 | Pairing window | A new pairing is accepted only while the window is open. It opens when the **button is held at power-up** (sampled at the start of `main`, read twice 30 ms apart) and shows **PAIRING** with the seconds left on the LCD. It closes after `CONFIG_TOMS_PAIR_WINDOW_S` (default **60 s**) or as soon as a bond is made. A reset without the button opens nothing. |
-| One bond | `CONFIG_BT_MAX_PAIRED=1`. While a bond exists, only that same central may pair again (even with the window open); any other is refused (`TOMS_PAIR_DENY_FULL`). **The firmware has no way to remove the bond.** A second phone therefore cannot be enrolled until the bond is removed another way (erasing the `storage` partition). This is an open decision, see the PR. |
+| One bond | `CONFIG_BT_MAX_PAIRED=1`. While a bond exists, only that same central may pair again (even with the window open); any other is refused (`TOMS_PAIR_DENY_FULL`). To enrol a different phone, forget the bond with the button: section 8.7. |
 | Authenticated pairing only | The central must announce an IO capability that can end in numeric comparison or a passkey: DisplayYesNo (1), KeyboardOnly (2) or KeyboardDisplay (4). DisplayOnly (0) and NoInputNoOutput (3) can only produce Just Works and are refused. With `CONFIG_BT_SMP_SC_ONLY=y` the stack also refuses legacy (non-Secure-Connections) pairing. |
 | Refusal | `pairing_accept` returns `BT_SECURITY_ERR_PAIR_NOT_ALLOWED` (SMP "Pairing Not Supported") for all three. Reconnecting with the existing bond never needs the window. |
 
@@ -506,6 +506,7 @@ The keys are stored in the settings partition as one record (`toms/k/keys`, 67 b
 previous key, CRC-16). The earlier single-key record is read as the key in force on first boot with this
 firmware and is replaced the first time the key changes. Nothing key-shaped is in the source or the image.
 
+
 ### 8.5 Every command the diagnostic app sends today, against these rules
 
 From `toms_android/ota` (branch `v2/return-machine-fw`): `OtaViewModel.kt` and `BleTransport.kt`.
@@ -531,6 +532,56 @@ log line, until the app signs it.
 2. **Sign `05`.** Append the 8-byte trailer of 8.3 once the machine has a key (`device_info.flags` bit 1).
 3. **Key replace.** Send `08` (8.4), wait for `88 00 ..`, keep the old key until a notify from the machine
    verifies under the new one, then drop it. Handle statuses 1 to 4 and 0xFF.
-4. **Re-pairing the same phone**: if the phone removed its pairing in Android settings but the machine still
-   has the bond, hold the machine's button at power-up and pair again (the same central may replace its own bond
-   while the window is open). A different phone cannot take the slot, see 8.1.
+4. **Re-pairing after the bond was cleared on the machine** (8.7): the phone still holds the old pairing, so a
+   connection fails on encryption. Remove the pairing in Android (Settings > Bluetooth > TOMS-RM > Forget) and
+   pair again inside the window. The signing key is kept, so nothing about the key needs redoing.
+
+### 8.7 Forgetting the bond (hold the button through the window)
+
+The one bond can be forgotten at the machine, without erasing the signing key:
+
+1. Hold the button while powering the machine up. The pairing window opens (8.1) and the LCD shows **PAIRING**.
+2. **Keep holding for 5 s**, counted continuously from the power-up sample (the count starts when `main()` has
+   read the button, early in boot, so do not let go before 5 s have passed).
+3. The LCD shows **BOND CLEARED** (and a short beep) for 2 s. The stored bond is deleted, the pairing window
+   is closed while this shows, and then a **fresh 60 s window** opens (the LCD goes back to **PAIRING**).
+4. Any central that can do an authenticated pairing may now take the one slot, the previous phone included.
+
+What is cleared and what is not:
+
+| Item | After the hold |
+| --- | --- |
+| The bond (long-term key, identity, the central's subscriptions `bt/ccc`) | **deleted** (`bt_unpair`, all bonds, the one slot) |
+| A central connected at that moment | disconnected by the stack |
+| The signing key ring (`toms/k/keys`, key in force and any grace key) | **kept**, never read or written by this path |
+| The read log, its sequence counter and the drop counter | kept |
+| The layout choice (`07`) | per connection: back to layout 1 on the next connect, as always |
+
+Rules, all in `toms/bondclr.h` and tested on the host:
+* Only a hold that **starts at power-up** counts. A button pressed later never starts the count.
+* Releasing for `TOMS_BONDCLR_RELEASE_MS` (150 ms) or longer **gives up for good** until the next power-up, and
+  so does a release the sampler could not see (a gap of more than `TOMS_BONDCLR_MAX_GAP_MS` = 500 ms between
+  samples, or a clock that goes backwards). A bounce shorter than 150 ms is forgiven.
+* The count is measured with differences of the 32-bit millisecond clock, so it is correct across the wrap.
+* It fires once, at the first sample at or after 5 s. While it is counting, the normal button actions are
+  ignored. If Bluetooth is not up within 10 s of that moment, or `bt_unpair` fails, the bond is **not**
+  cleared and the machine logs why.
+* A reset without the button, an OTA reboot or a watchdog reset never clears anything.
+
+**What a phone sees afterwards** (from reading the stack's and the apps' code; none of it was run):
+* The machine now has no record of the phone. The phone still has its half of the pairing. When the phone
+  reconnects, the machine cannot find the long-term key and refuses encryption ("PIN or key missing"), so
+  the link drops before any diag or data traffic. No characteristic is readable or writable that needs
+  encryption (every characteristic except the open read of `device_info`).
+* **Conductor app** (`AndroidBleReturnMachineLink`): it calls `createBond()` only when Android says the
+  device is *not* bonded, and Android still says it is. So it will keep failing and retrying until the user
+  removes the pairing in Android settings (Forget) and the phone reconnects.
+* **Diagnostic app** (`ph.toms.ota`, `BleTransport.connect`): it recognises a link that dies on encryption
+  with a bond held, removes the stale pairing itself and pairs again, once. That needs the window to be
+  open at that moment (hold the button through the 5 s, then connect within 60 s), otherwise the pairing
+  is refused with SMP "Unspecified Reason" (0x08) and it reports "pairing failed or was refused".
+* After re-pairing: layout 1 again, `time_sync` and the state table are sent again as on every connect, the
+  notify subscriptions are made again (the stored ones were deleted), and **signed notifies still verify**,
+  because the key was kept: no new `06` and no `08` are needed. A phone that never held the key still
+  cannot get one through `06` (the key exists), it needs `08` signed under the current key.
+* Stored reads in the flash log are still there and are offered again after the next connection.
