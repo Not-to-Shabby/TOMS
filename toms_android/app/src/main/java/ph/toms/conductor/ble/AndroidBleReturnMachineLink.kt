@@ -13,7 +13,10 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
@@ -41,7 +44,7 @@ import kotlinx.coroutines.withTimeout
 @SuppressLint("MissingPermission")
 class AndroidBleReturnMachineLink @Inject constructor(
     @ApplicationContext private val context: Context,
-    trust: RmMachineTrust,
+    private val trust: RmMachineTrust,
     private val enrolment: dagger.Lazy<RmKeyEnrolment>,
 ) : ReturnMachineLink {
 
@@ -65,6 +68,53 @@ class AndroidBleReturnMachineLink @Inject constructor(
     /** Layout 1 until the machine says layout 2 is in force after this connection's `07 02`; reset at every disconnect. */
     private val negotiation = RmLayoutNegotiation()
     override val layout: StateFlow<RmProtocol.Layout> = negotiation.layout
+
+    private val _pairingNotice = MutableStateFlow<RmKeyStatus?>(null)
+    override val pairingNotice: StateFlow<RmKeyStatus?> = _pairingNotice.asStateFlow()
+
+    /** What Android tells the phone about pairing with the machine, turned into plain words (see [RmPairingTracker]). */
+    private val pairing = RmPairingTracker { notice -> _pairingNotice.value = notice }
+
+    private var replyToReplace: CompletableDeferred<RmProtocol.ReplaceReply>? = null
+
+    private val pairingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, intent: Intent) {
+            val device = bluetoothDevice(intent) ?: return
+            if (device.address != machineAddress) return
+            when (intent.action) {
+                BluetoothDevice.ACTION_PAIRING_REQUEST ->
+                    pairing.onPairingRequest(intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1))
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> pairing.onBondChanged(
+                    intent.getIntExtra(BluetoothDevice.EXTRA_PREVIOUS_BOND_STATE, BluetoothDevice.BOND_NONE),
+                    intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE),
+                )
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bluetoothDevice(intent: Intent): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        } else {
+            intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+        }
+
+    init {
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_PAIRING_REQUEST)
+            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+        }
+        // Not exported: only the system sends these, and only the app reads them.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(pairingReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(pairingReceiver, filter)
+        }
+    }
+
+    /** The key this phone signs its writes with (null: no trailer). See [RmSignedWrites.writeKey]. */
+    private fun writeKey(): ByteArray? = RmSignedWrites.writeKey(trust, machineAddress)
 
     /** The address of the machine the GATT is attached to: the per-machine id the trust is keyed by. */
     private var machineAddress: String? = null
@@ -125,7 +175,12 @@ class AndroidBleReturnMachineLink @Inject constructor(
 
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 _connectionState.value = RmConnectionState.Connecting(name, address)
+                pairing.onConnected(bonded = device.bondState == BluetoothDevice.BOND_BONDED)
                 if (device.bondState == BluetoothDevice.BOND_NONE) {
+                    // Android chooses the pairing method from what this phone can show and enter (a phone with a screen and a
+                    // keyboard announces display-and-yes/no, which gives numeric comparison); the app cannot force it.
+                    // [pairing] reads what Android did and tells the conductor if it was not an authenticated pairing.
+                    pairing.onBondRequested()
                     device.createBond()
                 }
                 if (!g.requestMtu(247)) {
@@ -135,6 +190,8 @@ class AndroidBleReturnMachineLink @Inject constructor(
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 // The machine goes back to layout 1 on a disconnect, so the phone does too.
                 negotiation.reset()
+                pairing.onDisconnected()
+                replyToReplace?.cancel()
                 cleanup()
                 _connectionState.value = RmConnectionState.Disconnected
                 // Auto-retry scanning if disconnected unexpectedly
@@ -204,6 +261,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
         }
 
         override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            pairing.onWriteRefused(status)
             charWritten?.complete(status)
         }
 
@@ -251,7 +309,14 @@ class AndroidBleReturnMachineLink @Inject constructor(
                 }
             }
             RmProtocol.suffixOf(RmProtocol.CHAR_DIAG) -> {
-                RmProtocol.decodeProvisionReply(value)?.let { status -> provisionReply?.complete(status) }
+                RmProtocol.decodeProvisionReply(value)?.let { status ->
+                    if (status == RmProtocol.PROVISION_REFUSED) pairing.onLinkNotAuthenticated()
+                    provisionReply?.complete(status)
+                }
+                RmProtocol.decodeReplaceReply(value)?.let { reply ->
+                    if (reply.status == RmProtocol.REPLACE_NOT_AUTHENTICATED) pairing.onLinkNotAuthenticated()
+                    replyToReplace?.complete(reply)
+                }
                 negotiation.onDiagNotify(value)
             }
         }
@@ -358,12 +423,13 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private companion object {
         /** The machine answers the key provisioning write within one connection interval or two. */
         const val PROVISION_REPLY_TIMEOUT_MS = 5_000L
+        const val REPLACE_REPLY_TIMEOUT_MS = 5_000L
     }
 
     override fun sendPaidReply(checkSeq: Long, verdict: Int) {
         val g = gatt ?: return
         val ch = charPaidReply ?: return
-        val bytes = RmProtocol.encodePaidReply(checkSeq, verdict)
+        val bytes = RmSignedWrites.paidReply(writeKey(), checkSeq, verdict)
         scope.launch {
             gattMutex.withLock {
                 writeCharacteristic(g, ch, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
@@ -374,7 +440,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     override fun sendStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<RmProtocol.StateEntry>) {
         val g = gatt ?: return
         val ch = charStateUpdate ?: return
-        val bytes = RmProtocol.encodeStateUpdate(tableVersion, snapshot, entries)
+        val bytes = RmSignedWrites.stateUpdate(writeKey(), tableVersion, snapshot, entries)
         scope.launch {
             writeCharWithResp(g, ch, bytes)
         }
@@ -383,7 +449,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     override fun sendTimeSync(nowMillis: Long) {
         val g = gatt ?: return
         val ch = charTimeSync ?: return
-        val bytes = RmProtocol.encodeTimeSync(nowMillis)
+        val bytes = RmSignedWrites.timeSync(writeKey(), nowMillis)
         scope.launch {
             writeCharWithResp(g, ch, bytes)
         }
@@ -392,7 +458,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     override fun sendAlarmClear() {
         val g = gatt ?: return
         val ch = charDiag ?: return
-        val bytes = RmProtocol.encodeAlarmClear()
+        val bytes = RmSignedWrites.alarmClear(writeKey())
         scope.launch {
             writeCharWithResp(g, ch, bytes)
         }
@@ -401,7 +467,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
     override fun sendReadAck(upToReadSeq: Long) {
         val g = gatt ?: return
         val ch = charAck ?: return
-        val bytes = RmProtocol.encodeReadAck(upToReadSeq)
+        val bytes = RmSignedWrites.readAck(writeKey(), upToReadSeq)
         scope.launch {
             writeCharWithResp(g, ch, bytes)
         }
@@ -423,6 +489,24 @@ class AndroidBleReturnMachineLink @Inject constructor(
             }
         } finally {
             provisionReply = null
+        }
+    }
+
+    override suspend fun sendKeyReplace(currentKey: ByteArray, newKey: ByteArray): Int? {
+        val deferred = CompletableDeferred<RmProtocol.ReplaceReply>()
+        replyToReplace = deferred
+        try {
+            val g = gatt ?: return null
+            val ch = charDiag ?: return null
+            val written = writeCharWithResp(g, ch, RmProtocol.encodeKeyReplace(currentKey, newKey))
+            if (!written) return null
+            return try {
+                withTimeout(REPLACE_REPLY_TIMEOUT_MS) { deferred.await().status }
+            } catch (_: Exception) {
+                null
+            }
+        } finally {
+            replyToReplace = null
         }
     }
 

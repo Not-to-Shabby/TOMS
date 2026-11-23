@@ -128,6 +128,8 @@ data class ConductorState(
     val rmHeartbeat: RmProtocol.Heartbeat? = null,
     /** What the conductor reads about the Return Machine's signing key. Plain words, never a key. */
     val rmKeyStatus: RmKeyStatus = RmKeyStatus.NONE,
+    /** Set when the pairing with the Return Machine is not secure enough or was refused; null when nothing is wrong. */
+    val rmPairingNotice: RmKeyStatus? = null,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 
@@ -242,6 +244,7 @@ class ConductorViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { rmEnrolment.status.collect { s -> _state.update { it.copy(rmKeyStatus = s) } } }
+        viewModelScope.launch { rmLink.pairingNotice.collect { n -> _state.update { it.copy(rmPairingNotice = n) } } }
         viewModelScope.launch {
             rmLink.lastHeartbeat.collect { hb ->
                 hb?.let(rmIntake::onHeartbeat)

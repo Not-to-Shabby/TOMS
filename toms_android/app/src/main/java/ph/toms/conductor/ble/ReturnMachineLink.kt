@@ -58,6 +58,10 @@ interface ReturnMachineLink {
     fun sendPaidReply(checkSeq: Long, verdict: Int)
     fun sendStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<RmProtocol.StateEntry>)
     fun sendTimeSync(nowMillis: Long = System.currentTimeMillis())
+    /**
+     * `05 00`, with the trailer once the machine has a key (firmware/PROTOCOL.md section 8.3): without it the machine refuses to
+     * silence the alarm.
+     */
     fun sendAlarmClear()
 
     /**
@@ -72,6 +76,19 @@ interface ReturnMachineLink {
      * answer in time. Never logs the key.
      */
     suspend fun sendProvisionKey(key: ByteArray): Int?
+
+    /**
+     * Replaces the machine's signing key (diag `08`, section 8.4): [newKey], signed under [currentKey], the key the machine holds.
+     * Returns the machine's status byte (`RmProtocol.REPLACE_*`), [RmProtocol.REPLACE_UNRECOGNISED] when a firmware that does not
+     * know the command answered, or null when no answer came in time. Never logs either key.
+     */
+    suspend fun sendKeyReplace(currentKey: ByteArray, newKey: ByteArray): Int?
+
+    /**
+     * What the conductor should read about how this phone is paired with the machine (section 8.1), or null when nothing is wrong:
+     * a refused or weak pairing, or a write the machine refused for lack of an authenticated link.
+     */
+    val pairingNotice: StateFlow<RmKeyStatus?>
 
     fun startScanning()
     fun stopScanning()

@@ -242,6 +242,10 @@ fun MoreScreen(
                 ph.toms.conductor.ble.RmKeyStatus.Severity.NEUTRAL -> TomsColors.InkSoft
             },
         )
+        // Pairing problems come first: while the phone is not securely paired the machine refuses its writes, whatever the key says.
+        state.rmPairingNotice?.let { notice ->
+            Text(notice.text, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+        }
         state.rmHeartbeat?.let { hb ->
             Fact("RM battery", if (hb.isOnUsb) "USB power" else "${hb.batteryPct}% (${hb.batteryMv} mV)")
             Fact("RM uptime", "${hb.uptimeS}s")
