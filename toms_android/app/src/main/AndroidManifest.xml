@@ -26,6 +26,10 @@
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
+    <!-- An external USB card reader is optional: the phone's NFC still works without USB host mode. -->
+    <uses-feature
+        android:name="android.hardware.usb.host"
+        android:required="false" />
 
     <application
         android:name=".TomsApp"
@@ -41,6 +45,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Offered when a USB smart-card (CCID) reader is plugged in, so the system's "open with TOMS" box can remember the choice
+                 (the app is a candidate handler for the device). The app also asks for permission itself when it was not opened this way. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_card_reader_filter" />
         </activity>
         <!-- Keeps the process foreground while a shift is open (GPS + Return Machine BLE link with the
              screen off). Started only from the foreground UI at shift start; stopped at End Shift. -->

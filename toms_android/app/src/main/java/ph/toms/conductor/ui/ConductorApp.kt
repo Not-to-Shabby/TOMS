@@ -44,8 +44,8 @@ import kotlinx.coroutines.awaitCancellation
 import ph.toms.conductor.ble.RmConnectionState
 import ph.toms.conductor.domain.CalcMode
 import ph.toms.conductor.domain.StopMatcher
-import ph.toms.conductor.nfc.NfcAvailability
-import ph.toms.conductor.nfc.NfcReader
+import ph.toms.conductor.reader.CardReaderManager
+import ph.toms.conductor.reader.toCardRead
 import ph.toms.conductor.service.BatteryOptimization
 import ph.toms.conductor.settings.Handedness
 import ph.toms.conductor.sync.UplinkState
@@ -62,7 +62,7 @@ fun ConductorApp(
     vm: ConductorViewModel,
     syncVm: SyncViewModel,
     historyVm: ShiftHistoryViewModel,
-    nfcReader: NfcReader,
+    readers: CardReaderManager,
     header: String,
     state: ConductorState,
     sync: SyncState,
@@ -70,15 +70,20 @@ fun ConductorApp(
 ) {
     val activity = LocalContext.current as Activity
     val lifecycleOwner = LocalLifecycleOwner.current
-    val availability = remember { nfcReader.availability(activity) }
+    val reader by readers.summary.collectAsState()
     val shiftOpen = state.shift != null
     val historyState by historyVm.state.collectAsState()
 
-    // Read cards only while the screen is in use: reader mode is switched off in the background.
-    if (availability == NfcAvailability.Ready) {
-        LaunchedEffect(lifecycleOwner) {
-            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-                nfcReader.reads(activity).collect(vm::onCardRead)
+    // Read cards only while the screen is in use: reader mode (and the USB reader) is switched off in the background.
+    // Which reader reads, and the one stream of taps, is the CardReaderManager's; the boarding logic below sees only the taps.
+    LaunchedEffect(lifecycleOwner) {
+        readers.bindActivity(activity)
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            readers.start()
+            try {
+                readers.taps.collect { vm.onCardRead(it.toCardRead()) }
+            } finally {
+                readers.stop()
             }
         }
     }
@@ -200,7 +205,7 @@ fun ConductorApp(
     state.endedSummary?.let { ShiftEndedDialog(it, state.config, state.endedContinues, vm::acknowledgeEnded) }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        StatusStrip(header, availability, state, sync)
+        StatusStrip(header, reader, state, sync)
         Box(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp)) {
             // Shift history replaces the tab content while it is open; Back or its own Back button closes it.
             if (historyState.visible) {
@@ -260,6 +265,9 @@ fun ConductorApp(
                         })
                     },
                     onRetryRefused = { syncVm.retryRefused(onFlushed = vm::syncApprovedCards) },
+                    reader = reader,
+                    onReaderChoice = vm::setReaderChoice,
+                    onReaderRetry = readers::retry,
                     onForgetOldPairing = vm::forgetOldPairing,
                     onShiftSummary = vm::openSummary,
                     onShiftHistory = historyVm::open,
@@ -274,7 +282,7 @@ fun ConductorApp(
 /** One line, dots and words, so a glance is enough: which bus, is the card reader on, is GPS good, what is unsent. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorState, sync: SyncState) {
+private fun StatusStrip(header: String, readerSummary: ph.toms.conductor.reader.ReaderSummary, state: ConductorState, sync: SyncState) {
     val gps: Pair<String, Status> = run {
         val fix = state.fix
         when {
@@ -283,10 +291,11 @@ private fun StatusStrip(header: String, nfc: NfcAvailability, state: ConductorSt
             else -> "GPS ok" to Status.Good
         }
     }
-    val reader: Pair<String, Status> = when (nfc) {
-        NfcAvailability.Ready -> "Reader ready" to Status.Good
-        NfcAvailability.Disabled -> "NFC is off" to Status.Bad
-        NfcAvailability.Unsupported -> "No NFC" to Status.Bad
+    val reader: Pair<String, Status> = readerSummary.chip to when {
+        readerSummary.working -> Status.Good
+        readerSummary.status is ph.toms.conductor.reader.ReaderStatus.PermissionNeeded &&
+            !(readerSummary.status as ph.toms.conductor.reader.ReaderStatus.PermissionNeeded).denied -> Status.Neutral
+        else -> Status.Bad
     }
     val rm: Pair<String, Status> = when (val c = state.rmConnection) {
         is RmConnectionState.Connected -> {

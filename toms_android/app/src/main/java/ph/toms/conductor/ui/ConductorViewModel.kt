@@ -117,6 +117,8 @@ data class ConductorState(
     val handedness: Handedness = Handedness.Right,
     /** Keep the screen on while a shift is open; the conductor can allow dimming in the settings. */
     val keepScreenOn: Boolean = true,
+    /** Which card reader the conductor picked, and what it says right now (see CardReaderManager). */
+    val readerChoice: ph.toms.conductor.reader.ReaderChoice = ph.toms.conductor.reader.ReaderChoice.AUTO,
     /** Set when the foreground service was skipped (location and Bluetooth permissions both off). */
     val serviceNote: String? = null,
     val recentReads: List<CardRead> = emptyList(),
@@ -212,6 +214,7 @@ class ConductorViewModel @Inject constructor(
         viewModelScope.launch { reloadCards() }
         viewModelScope.launch { settings.handedness.collect { h -> _state.update { it.copy(handedness = h) } } }
         viewModelScope.launch { settings.keepScreenOn.collect { on -> _state.update { it.copy(keepScreenOn = on) } } }
+        viewModelScope.launch { settings.readerChoice.collect { c -> _state.update { it.copy(readerChoice = c) } } }
         // The saved fares: what is on the phone now, and any copy a sync saves later, even one made by the background worker.
         viewModelScope.launch { trips.observeServerConfig().collect { saved -> if (saved != null) applyServerConfig(saved) } }
         // Enrolling a phone (a token appears), and starting the app with one, fetches the card list and the fares.
@@ -499,6 +502,8 @@ class ConductorViewModel @Inject constructor(
 
     /** Keep the screen on while a shift is open; off lets it dim normally. */
     fun setKeepScreenOn(value: Boolean) = settings.setKeepScreenOn(value)
+
+    fun setReaderChoice(value: ph.toms.conductor.reader.ReaderChoice) = settings.setReaderChoice(value)
 
     // ---- the tap
 

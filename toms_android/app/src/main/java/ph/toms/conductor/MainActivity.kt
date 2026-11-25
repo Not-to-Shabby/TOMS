@@ -9,7 +9,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
-import ph.toms.conductor.nfc.NfcReader
+import ph.toms.conductor.reader.CardReaderManager
 import ph.toms.conductor.ui.AssignmentScreen
 import ph.toms.conductor.ui.ConductorApp
 import ph.toms.conductor.ui.ConductorViewModel
@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
     private val history: ShiftHistoryViewModel by viewModels()
     private val workProfile: WorkProfileViewModel by viewModels()
 
-    @Inject lateinit var nfcReader: NfcReader
+    @Inject lateinit var readers: CardReaderManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
                             vm = conductor,
                             syncVm = sync,
                             historyVm = history,
-                            nfcReader = nfcReader,
+                            readers = readers,
                             header = "$vehicleDisplay  ·  ${assignment.route.name}",
                             state = c,
                             sync = sy,

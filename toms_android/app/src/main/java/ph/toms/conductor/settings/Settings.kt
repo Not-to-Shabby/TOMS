@@ -21,6 +21,10 @@ interface SettingsStore {
     /** Keep the screen on while a shift is open. Off lets the screen dim normally. Default: on. */
     val keepScreenOn: StateFlow<Boolean>
     fun setKeepScreenOn(value: Boolean)
+
+    /** Which card reader to use. Default: Auto (a USB reader when one is plugged in, the phone's NFC otherwise). */
+    val readerChoice: StateFlow<ph.toms.conductor.reader.ReaderChoice>
+    fun setReaderChoice(value: ph.toms.conductor.reader.ReaderChoice)
 }
 
 /** Keeps the value in memory. Used by tests. */
@@ -35,6 +39,12 @@ class MemorySettings(initial: Handedness = Handedness.Right) : SettingsStore {
     override val keepScreenOn: StateFlow<Boolean> = screen.asStateFlow()
     override fun setKeepScreenOn(value: Boolean) {
         screen.value = value
+    }
+
+    private val reader = MutableStateFlow(ph.toms.conductor.reader.ReaderChoice.AUTO)
+    override val readerChoice: StateFlow<ph.toms.conductor.reader.ReaderChoice> = reader.asStateFlow()
+    override fun setReaderChoice(value: ph.toms.conductor.reader.ReaderChoice) {
+        reader.value = value
     }
 }
 
@@ -60,6 +70,18 @@ class PrefsSettings @Inject constructor(
         screen.value = value
     }
 
+    private val reader = MutableStateFlow(
+        // An unknown or missing value falls back to Auto.
+        runCatching { ph.toms.conductor.reader.ReaderChoice.valueOf(prefs.getString(KEY_READER, null) ?: "") }
+            .getOrDefault(ph.toms.conductor.reader.ReaderChoice.AUTO),
+    )
+    override val readerChoice: StateFlow<ph.toms.conductor.reader.ReaderChoice> = reader.asStateFlow()
+
+    override fun setReaderChoice(value: ph.toms.conductor.reader.ReaderChoice) {
+        prefs.edit().putString(KEY_READER, value.name).apply()
+        reader.value = value
+    }
+
     private fun read(): Handedness =
         // An unknown or missing value (an older version, a corrupted file) falls back to the default.
         runCatching { Handedness.valueOf(prefs.getString(KEY_HAND, null) ?: "") }.getOrDefault(Handedness.Right)
@@ -67,5 +89,6 @@ class PrefsSettings @Inject constructor(
     private companion object {
         const val KEY_HAND = "handedness"
         const val KEY_SCREEN_ON = "keep_screen_on"
+        const val KEY_READER = "reader_choice"
     }
 }
