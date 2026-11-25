@@ -74,6 +74,12 @@ int rm_ble_probe(void);
 /* True while a phone is connected and subscribed to card_read. */
 bool rm_ble_card_subscribed(void);
 
+/* Message layout in force on this connection: TOMS_WIRE_V1 until the phone selects v2. */
+uint8_t rm_ble_wire_version(void);
+
+/* Paid replies that arrived after the unverified tone, saturating at 65535. */
+uint16_t rm_ble_late_replies(void);
+
 typedef void (*rm_ble_diag_cmd_cb_t)(uint8_t cmd, uint8_t arg);
 void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb);
 

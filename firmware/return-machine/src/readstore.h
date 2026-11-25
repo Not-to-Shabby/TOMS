@@ -30,8 +30,9 @@ void readstore_mark_sent(uint32_t seq);
 /* Stored reads not yet sent on this boot. */
 uint32_t readstore_unsent(void);
 
-/* Oldest stored read not yet sent on this boot, in read_seq order. -ENOENT when none. */
-int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq);
+/* Oldest stored read not yet sent on this boot, in read_seq order. The frame is the v1 card_read;
+ * *outcome is what the paid check ended with (TOMS_OUTCOME_*). -ENOENT when none. */
+int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq, uint8_t *outcome);
 
 /* A phone (re)connected: offer every stored read again, oldest first. */
 void readstore_rewind(void);
@@ -43,6 +44,7 @@ int readstore_next(uint32_t from_seq, uint8_t *frame, size_t cap, uint32_t *seq)
 int readstore_ack(uint32_t upto_seq);
 
 uint32_t readstore_pending(void);
+/* Reads overwritten before they were sent live. Kept in flash, so it survives power cycles. */
 uint32_t readstore_dropped(void);
 
 /* Copies the signing key out. False when none is provisioned. */
