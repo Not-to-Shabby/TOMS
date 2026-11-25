@@ -72,15 +72,28 @@ class AndroidBleReturnMachineLink @Inject constructor(
     private val _pairingNotice = MutableStateFlow<RmKeyStatus?>(null)
     override val pairingNotice: StateFlow<RmKeyStatus?> = _pairingNotice.asStateFlow()
 
+    private val _staleBond = MutableStateFlow(false)
+    override val staleBond: StateFlow<Boolean> = _staleBond.asStateFlow()
+
     /** What Android tells the phone about pairing with the machine, turned into plain words (see [RmPairingTracker]). */
-    private val pairing = RmPairingTracker { notice -> _pairingNotice.value = notice }
+    private val pairing = RmPairingTracker(
+        onStaleChanged = { stale -> _staleBond.value = stale },
+        publish = { notice -> _pairingNotice.value = notice },
+    )
+
+    /**
+     * The machine this phone last tried to reach. Kept after a disconnect on purpose: a bond the machine cleared is noticed while the
+     * link is down, and removing it (or hearing Android remove it) happens with no connection.
+     */
+    @Volatile private var lastAddress: String? = null
+    @Volatile private var lastDevice: BluetoothDevice? = null
 
     private var replyToReplace: CompletableDeferred<RmProtocol.ReplaceReply>? = null
 
     private val pairingReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, intent: Intent) {
             val device = bluetoothDevice(intent) ?: return
-            if (device.address != machineAddress) return
+            if (device.address != (machineAddress ?: lastAddress)) return
             when (intent.action) {
                 BluetoothDevice.ACTION_PAIRING_REQUEST ->
                     pairing.onPairingRequest(intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1))
@@ -175,7 +188,7 @@ class AndroidBleReturnMachineLink @Inject constructor(
 
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
                 _connectionState.value = RmConnectionState.Connecting(name, address)
-                pairing.onConnected(bonded = device.bondState == BluetoothDevice.BOND_BONDED)
+                pairing.onLinkUp(bonded = device.bondState == BluetoothDevice.BOND_BONDED)
                 if (device.bondState == BluetoothDevice.BOND_NONE) {
                     // Android chooses the pairing method from what this phone can show and enter (a phone with a screen and a
                     // keyboard announces display-and-yes/no, which gives numeric comparison); the app cannot force it.
@@ -190,7 +203,9 @@ class AndroidBleReturnMachineLink @Inject constructor(
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 // The machine goes back to layout 1 on a disconnect, so the phone does too.
                 negotiation.reset()
-                pairing.onDisconnected()
+                // A link that came up and ended before it was usable, while Android still holds the pairing, is the signature of a
+                // bond the machine cleared (firmware/PROTOCOL.md 8.7); the tracker counts it. Out-of-range attempts never come up.
+                pairing.onLinkDown(bonded = device.bondState == BluetoothDevice.BOND_BONDED)
                 replyToReplace?.cancel()
                 cleanup()
                 _connectionState.value = RmConnectionState.Disconnected
@@ -235,8 +250,9 @@ class AndroidBleReturnMachineLink @Inject constructor(
                     service.getCharacteristic(RmProtocol.CHAR_DIAG),
                 ).filterNotNull()
 
+                var subscribedAll = true
                 for (c in notifyChars) {
-                    subscribeCharacteristic(g, c)
+                    if (!subscribeCharacteristic(g, c)) subscribedAll = false
                     delay(50)
                 }
 
@@ -245,6 +261,11 @@ class AndroidBleReturnMachineLink @Inject constructor(
                 // Every connection starts on layout 1, whatever the last one used.
                 negotiation.reset()
                 _connectionState.value = RmConnectionState.Connected(name, address)
+                if (subscribedAll) {
+                    pairing.onLinkReady()
+                } else {
+                    pairing.onSetupFailed(bonded = g.device.bondState == BluetoothDevice.BOND_BONDED)
+                }
 
                 // Sync time immediately on connection
                 sendTimeSync()
@@ -361,8 +382,35 @@ class AndroidBleReturnMachineLink @Inject constructor(
         }
     }
 
+    override suspend fun forgetStalePairing(): ForgetPairingResult {
+        val address = lastAddress ?: return ForgetPairingResult.NOT_NEEDED
+        val device = lastDevice ?: runCatching { adapter?.getRemoteDevice(address) }.getOrNull()
+            ?: return ForgetPairingResult.REFUSED
+        if (device.bondState != BluetoothDevice.BOND_BONDED) return ForgetPairingResult.NOT_NEEDED
+        // removeBond is a system API, hidden from apps in the public SDK. It is looked up by name; a phone that hides or refuses it
+        // answers with an exception, which is not an error here: the conductor is told to forget the pairing in Bluetooth settings.
+        val asked = try {
+            device.javaClass.getMethod("removeBond").invoke(device) as? Boolean ?: false
+        } catch (_: Throwable) {
+            false
+        }
+        if (!asked) {
+            pairing.onForgetRefused()
+            return ForgetPairingResult.REFUSED
+        }
+        val end = System.currentTimeMillis() + FORGET_WAIT_MS
+        while (device.bondState == BluetoothDevice.BOND_BONDED && System.currentTimeMillis() < end) delay(200)
+        if (device.bondState == BluetoothDevice.BOND_BONDED) {
+            pairing.onForgetRefused()
+            return ForgetPairingResult.REFUSED
+        }
+        return ForgetPairingResult.REMOVED
+    }
+
     private fun connectTo(device: BluetoothDevice, name: String) {
         machineAddress = device.address
+        lastAddress = device.address
+        lastDevice = device
         _connectionState.value = RmConnectionState.Connecting(name, device.address)
         gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -424,6 +472,9 @@ class AndroidBleReturnMachineLink @Inject constructor(
         /** The machine answers the key provisioning write within one connection interval or two. */
         const val PROVISION_REPLY_TIMEOUT_MS = 5_000L
         const val REPLACE_REPLY_TIMEOUT_MS = 5_000L
+
+        /** How long to wait for Android to say the old pairing is gone after it accepted the request to remove it. */
+        const val FORGET_WAIT_MS = 15_000L
     }
 
     override fun sendPaidReply(checkSeq: Long, verdict: Int) {

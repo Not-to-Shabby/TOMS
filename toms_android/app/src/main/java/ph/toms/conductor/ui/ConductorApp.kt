@@ -254,6 +254,7 @@ fun ConductorApp(
                         })
                     },
                     onRetryRefused = { syncVm.retryRefused(onFlushed = vm::syncApprovedCards) },
+                    onForgetOldPairing = vm::forgetOldPairing,
                     onShiftSummary = vm::openSummary,
                     onShiftHistory = historyVm::open,
                     onSignOut = onSignOut,

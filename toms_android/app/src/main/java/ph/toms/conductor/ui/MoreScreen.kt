@@ -53,6 +53,7 @@ fun MoreScreen(
     onRetryRefused: () -> Unit = {},
     onShiftSummary: () -> Unit = {},
     onShiftHistory: () -> Unit = {},
+    onForgetOldPairing: () -> Unit = {},
     onSignOut: () -> Unit = {},
 ) {
     var editUrl by remember { mutableStateOf<String?>(null) }
@@ -245,6 +246,21 @@ fun MoreScreen(
         // Pairing problems come first: while the phone is not securely paired the machine refuses its writes, whatever the key says.
         state.rmPairingNotice?.let { notice ->
             Text(notice.text, style = MaterialTheme.typography.bodyMedium, color = TomsColors.Bad)
+        }
+        if (state.rmStaleBond) {
+            val context = androidx.compose.ui.platform.LocalContext.current
+            BigButton("Forget old pairing", onForgetOldPairing, Modifier.fillMaxWidth())
+            QuietButton(
+                "Open Bluetooth settings",
+                {
+                    // Some profiles have no settings screen for this; the text above already says what to do by hand.
+                    try {
+                        context.startActivity(android.content.Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS))
+                    } catch (_: android.content.ActivityNotFoundException) {
+                    }
+                },
+                Modifier.fillMaxWidth(),
+            )
         }
         state.rmHeartbeat?.let { hb ->
             Fact("RM battery", if (hb.isOnUsb) "USB power" else "${hb.batteryPct}% (${hb.batteryMv} mV)")

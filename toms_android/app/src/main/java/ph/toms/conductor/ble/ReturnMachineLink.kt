@@ -27,6 +27,17 @@ sealed interface RmEvent {
     data class RmAckReceived(val ack: RmProtocol.RmAck) : RmEvent
 }
 
+enum class ForgetPairingResult {
+    /** Android removed the pairing; the link pairs afresh on the next connection. */
+    REMOVED,
+
+    /** Android did not remove it (the system API is unavailable or refused); it has to be forgotten in Bluetooth settings. */
+    REFUSED,
+
+    /** There is no old pairing left to remove (already gone, or no machine was ever connected). */
+    NOT_NEEDED,
+}
+
 /**
  * Interface abstracting the Bluetooth Low Energy link to the exit Return Machine.
  *
@@ -89,6 +100,19 @@ interface ReturnMachineLink {
      * a refused or weak pairing, or a write the machine refused for lack of an authenticated link.
      */
     val pairingNotice: StateFlow<RmKeyStatus?>
+
+    /**
+     * True while the phone holds a pairing the machine has deleted (firmware/PROTOCOL.md section 8.7): connections keep ending before
+     * they are usable although Android says the machine is bonded. The screen offers [forgetStalePairing] then.
+     */
+    val staleBond: StateFlow<Boolean>
+
+    /**
+     * Asks Android to remove the phone's old pairing with the machine, so the next connection pairs afresh. The method that does this
+     * (`BluetoothDevice.removeBond`) is a system API, not part of the public SDK: it is tried, and when Android refuses it the result
+     * is [ForgetPairingResult.REFUSED] and the notice tells the conductor to do it in Bluetooth settings. Never throws.
+     */
+    suspend fun forgetStalePairing(): ForgetPairingResult
 
     fun startScanning()
     fun stopScanning()

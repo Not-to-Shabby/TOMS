@@ -87,8 +87,54 @@ class FakeReturnMachineLink : ReturnMachineLink {
     private val _pairingNotice = MutableStateFlow<RmKeyStatus?>(null)
     override val pairingNotice: StateFlow<RmKeyStatus?> = _pairingNotice.asStateFlow()
 
+    private val _staleBond = MutableStateFlow(false)
+    override val staleBond: StateFlow<Boolean> = _staleBond.asStateFlow()
+
     /** What the phone reads about pairing, set by a test through the same tracker the real link uses. */
-    val pairing = RmPairingTracker { _pairingNotice.value = it }
+    val pairing = RmPairingTracker(
+        onStaleChanged = { _staleBond.value = it },
+        publish = { _pairingNotice.value = it },
+    )
+
+    /**
+     * Whether Android still holds this phone's half of the pairing. A machine that cleared its bond (firmware/PROTOCOL.md 8.7) leaves
+     * this true: the machine forgot the phone, the phone did not forget the machine.
+     */
+    var androidHoldsBond = false
+
+    /** Whether Android lets the app remove the old pairing. False models a phone that hides or refuses the system call. */
+    var androidAllowsRemoveBond = true
+    var forgetCalls = 0
+
+    /** The machine clears its bond (button held through the pairing window): the phone's pairing is now stale. */
+    fun simulateMachineClearedBond() {
+        androidHoldsBond = true
+    }
+
+    /**
+     * One connection attempt the way the real link reports it: the link comes up, then ends before it is usable. With the machine's
+     * bond cleared and Android still holding the pairing, every attempt ends this way. [linkComesUp] false models an attempt that never
+     * reached the machine (out of range), which is not this problem.
+     */
+    fun simulateConnectAttempt(linkComesUp: Boolean = true, becomesUsable: Boolean = false) {
+        if (!linkComesUp) return
+        // The very calls the real link makes, in the same order: up, then ready or not, then down.
+        pairing.onLinkUp(bonded = androidHoldsBond)
+        if (becomesUsable) pairing.onLinkReady()
+        pairing.onLinkDown(bonded = androidHoldsBond)
+    }
+
+    override suspend fun forgetStalePairing(): ForgetPairingResult {
+        forgetCalls++
+        if (!androidHoldsBond) return ForgetPairingResult.NOT_NEEDED
+        if (!androidAllowsRemoveBond) {
+            pairing.onForgetRefused()
+            return ForgetPairingResult.REFUSED
+        }
+        androidHoldsBond = false
+        pairing.onBondChanged(RmPairingTracker.BOND_BONDED, RmPairingTracker.BOND_NONE)
+        return ForgetPairingResult.REMOVED
+    }
 
     private fun connectedAddress(): String? = (_connectionState.value as? RmConnectionState.Connected)?.deviceAddress
 
