@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Any USB device with a Smart Card interface (USB class 11, CCID), whatever the maker. Class and subclass only: a reader's vendor and
+     product ids are not listed because the app reads any CCID reader the same way (see documentation/usb_reader.md). -->
+<resources>
+    <usb-device class="11" />
+</resources>

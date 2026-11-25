@@ -53,6 +53,9 @@ fun MoreScreen(
     onRetryRefused: () -> Unit = {},
     onShiftSummary: () -> Unit = {},
     onShiftHistory: () -> Unit = {},
+    reader: ph.toms.conductor.reader.ReaderSummary? = null,
+    onReaderChoice: (ph.toms.conductor.reader.ReaderChoice) -> Unit = {},
+    onReaderRetry: () -> Unit = {},
     onSignOut: () -> Unit = {},
 ) {
     var editUrl by remember { mutableStateOf<String?>(null) }
@@ -124,6 +127,26 @@ fun MoreScreen(
         }
         Text(
             "Every button is full width, so both hands reach everything. This only swaps the keypad corners.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = TomsColors.InkSoft,
+        )
+
+        Text("Card reader", style = MaterialTheme.typography.titleMedium, color = TomsColors.InkSoft)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            HandChoice("Phone NFC", state.readerChoice == ph.toms.conductor.reader.ReaderChoice.PHONE_NFC) { onReaderChoice(ph.toms.conductor.reader.ReaderChoice.PHONE_NFC) }
+            HandChoice("USB reader", state.readerChoice == ph.toms.conductor.reader.ReaderChoice.USB) { onReaderChoice(ph.toms.conductor.reader.ReaderChoice.USB) }
+            HandChoice("Auto", state.readerChoice == ph.toms.conductor.reader.ReaderChoice.AUTO) { onReaderChoice(ph.toms.conductor.reader.ReaderChoice.AUTO) }
+        }
+        reader?.let { r ->
+            Text(
+                "In use: ${r.name}. ${r.detail}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (r.working) TomsColors.Good else TomsColors.Warn,
+            )
+            if (r.canRetry) QuietButton("Try again", onReaderRetry, Modifier.fillMaxWidth())
+        }
+        Text(
+            "Auto uses a USB card reader when one is plugged into the phone, and the phone's NFC when not. Only one is used at a time.",
             style = MaterialTheme.typography.bodyMedium,
             color = TomsColors.InkSoft,
         )
