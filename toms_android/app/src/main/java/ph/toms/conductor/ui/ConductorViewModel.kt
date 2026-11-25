@@ -130,6 +130,10 @@ data class ConductorState(
     val rmHeartbeat: RmProtocol.Heartbeat? = null,
     /** What the conductor reads about the Return Machine's signing key. Plain words, never a key. */
     val rmKeyStatus: RmKeyStatus = RmKeyStatus.NONE,
+    /** Set when the pairing with the Return Machine is not secure enough or was refused; null when nothing is wrong. */
+    val rmPairingNotice: RmKeyStatus? = null,
+    /** True while the phone holds a pairing the Return Machine deleted: More offers to forget it. */
+    val rmStaleBond: Boolean = false,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 
@@ -248,6 +252,8 @@ class ConductorViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { rmEnrolment.status.collect { s -> _state.update { it.copy(rmKeyStatus = s) } } }
+        viewModelScope.launch { rmLink.pairingNotice.collect { n -> _state.update { it.copy(rmPairingNotice = n) } } }
+        viewModelScope.launch { rmLink.staleBond.collect { stale -> _state.update { it.copy(rmStaleBond = stale) } } }
         viewModelScope.launch {
             rmLink.lastHeartbeat.collect { hb ->
                 hb?.let(rmIntake::onHeartbeat)
@@ -297,6 +303,11 @@ class ConductorViewModel @Inject constructor(
     }
 
     // ---- Return Machine BLE integration
+
+    /** Removes the phone's old pairing with the Return Machine, after the machine cleared its own (firmware/PROTOCOL.md 8.7). */
+    fun forgetOldPairing() {
+        viewModelScope.launch { rmLink.forgetStalePairing() }
+    }
 
     fun startBleScanning() = rmLink.startScanning()
     fun stopBleScanning() = rmLink.stopScanning()

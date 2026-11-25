@@ -42,7 +42,10 @@ enum class RmProvisionResult {
     /** The machine stored the key; it waits as pending until the machine's first signed message verifies. */
     WRITTEN,
 
-    /** The machine already had a key (this one, or another) and cannot replace it over the air. */
+    /**
+     * The machine keeps a key the phone cannot work with: it holds one the phone does not have (it answered a replace with "not signed
+     * under the current key"), or it is an older firmware that cannot replace its key at all.
+     */
     MACHINE_KEPT_ITS_KEY,
 
     /** The machine could not store the key in its settings partition. */
@@ -60,10 +63,22 @@ enum class RmProvisionResult {
 
 /**
  * The phone side of key provisioning: fetch the key from the server, store it pending, write it to the
- * connected machine over the encrypted diag link, and let the machine's first verified signed message
- * activate it. The firmware keeps a key it already has (diag 06 is once-only), so a rotation, or a
- * machine whose key the server does not know, ends in [RmProvisionResult.MACHINE_KEPT_ITS_KEY] and
- * is reported to the server as a mismatch instead of being retried forever.
+ * connected machine over the authenticated diag link, and let the machine's first verified signed message
+ * activate it.
+ *
+ * **First key:** diag `06`, once only. **A newer key than the one the phone already trusts (a rotation):** diag `08`
+ * (firmware/PROTOCOL.md section 8.4), the new key signed under the key the machine holds, which is the phone's active key. The
+ * machine keeps the old key for one step, so the phone keeps verifying and signing with the old key until the first message that
+ * verifies under the new one activates it ([RmKeyEnrolment.onVerified]). A replace whose reply was lost is simply sent again: the
+ * machine accepts the old key during that step.
+ *
+ * What each answer to `08` ends in:
+ *  - ok: written, waiting for the machine's first message under the new key;
+ *  - no key on the machine (it was reset): the new key is written with `06` instead;
+ *  - not signed under the current key: the machine holds a key the phone does not have, flagged as a mismatch;
+ *  - an answer that is not a real status (a firmware without command 08): flagged as needing a re-flash, never read as success;
+ *  - could not be saved / refused / malformed: the pending key is dropped so the next attempt starts from the active key;
+ *  - no answer: the pending key stays, and the replace is sent again.
  */
 interface RmProvisioner {
     /**
@@ -90,13 +105,65 @@ class RealRmProvisioner @Inject constructor(
         // mismatch path already told the server. A new version, or none yet, is what gets provisioned.
         val activeVersion = trust.activeVersion(machineId)
         val pendingVersion = trust.pendingVersion(machineId)
-        if (activeVersion == issued.keyVersion || pendingVersion == issued.keyVersion) {
-            return RmProvisionResult.WRITTEN
+        if (activeVersion == issued.keyVersion) return RmProvisionResult.WRITTEN
+
+        // A newer key than the one the phone trusts: replace it on the machine (diag 08) instead of provisioning (diag 06).
+        if (activeVersion != null && issued.keyVersion > activeVersion) {
+            return replaceKey(machineId, issued, activeVersion, alreadyPending = pendingVersion == issued.keyVersion)
         }
+        if (pendingVersion == issued.keyVersion) return RmProvisionResult.WRITTEN
 
         val stored = trust.provision(machineId, issued.key, issued.keyVersion, issued.previousValidUntilMillis)
         if (!stored) return RmProvisionResult.NOT_POSSIBLE
 
+        return writeFirstKey(machineId, issued, activeVersion)
+    }
+
+    /** A rotation: diag 08, signed under the active key the machine holds. */
+    private suspend fun replaceKey(machineId: String, issued: RmKeyFetch.Issued, activeVersion: Int, alreadyPending: Boolean): RmProvisionResult {
+        val current = trust.activeKey(machineId) ?: return RmProvisionResult.NOT_POSSIBLE
+        if (!alreadyPending && !trust.provision(machineId, issued.key, issued.keyVersion, issued.previousValidUntilMillis)) {
+            current.fill(0)
+            return RmProvisionResult.NOT_POSSIBLE
+        }
+        val status = try {
+            link.sendKeyReplace(current, issued.key)
+        } finally {
+            current.fill(0)
+        }
+        return when (status) {
+            RmProtocol.REPLACE_OK -> RmProvisionResult.WRITTEN
+            // The machine has no key (it was reset since): nothing to replace, so the new key is written the first-time way.
+            RmProtocol.REPLACE_NO_KEY -> writeFirstKey(machineId, issued, activeVersion)
+            RmProtocol.REPLACE_BAD_SIGNATURE -> {
+                trust.discardPending(machineId)
+                flag(machineId, "machine_has_other_key")
+            }
+            RmProtocol.REPLACE_UNRECOGNISED -> {
+                trust.discardPending(machineId)
+                flag(machineId, "rotation_needs_reflash")
+            }
+            RmProtocol.REPLACE_STORAGE -> {
+                trust.discardPending(machineId)
+                RmProvisionResult.FLASH_ERROR
+            }
+            // No answer: keep the pending key. The machine may have applied the replace; its first message under the new key
+            // activates it, and a resend is accepted under the one-step grace either way.
+            null -> RmProvisionResult.NO_REPLY
+            else -> {
+                trust.discardPending(machineId)
+                RmProvisionResult.REFUSED
+            }
+        }
+    }
+
+    private suspend fun flag(machineId: String, reason: String): RmProvisionResult {
+        trust.markMismatch(machineId, reason)
+        keys.reportMismatch(reason)
+        return RmProvisionResult.MACHINE_KEPT_ITS_KEY
+    }
+
+    private suspend fun writeFirstKey(machineId: String, issued: RmKeyFetch.Issued, activeVersion: Int?): RmProvisionResult {
         return when (link.sendProvisionKey(issued.key)) {
             RmProtocol.PROVISION_STORED -> RmProvisionResult.WRITTEN
             RmProtocol.PROVISION_ALREADY_SET -> {
