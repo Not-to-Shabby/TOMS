@@ -14,8 +14,11 @@ This specification defines the production Bluetooth Low Energy (BLE) interface b
   * Connectable, 1-second advertising interval when disconnected.
 * **Security & Bonding (LE Secure Connections)**:
   * Firmware enforces `BT_GATT_PERM_WRITE_ENCRYPT` on all protected operational characteristics.
-  * Security Level: **BT_SECURITY_L2** (Authenticated, encrypted link via Numeric Comparison / Passkey).
-  * The board automatically confirms the pairing handshake on the BLE bus while rendering the 6-digit passkey on the LCD display.
+  * Security Level: see section 8. Level 2 is "encrypted, NOT authenticated" (Just Works): it is enough for the
+    GATT write permission but not for diag `00`, `05`, `06`, `07`, `08`, which need level 4 (3 in a build without
+    Secure Connections Only).
+  * The board confirms the numeric-comparison handshake on its side and renders the 6-digit passkey on the LCD,
+    but only while the pairing window is open (button held at power-up), and only for one bond. Section 8.
   * Bond keys persist in the Return Machine's non-volatile storage (`storage` NVS partition) and survive reboots and OTA upgrades.
   * Unauthenticated writes from unbonded centrals are rejected with `BT_ATT_ERR_AUTHENTICATION` (0x05) or `BT_ATT_ERR_WRITE_NOT_PERMITTED` (0x03).
 * **MTU & Throughput**:
@@ -175,12 +178,14 @@ Hardware diagnostic test bench commands:
 * `cmd = 0x02`: Display Next Page
 * `cmd = 0x03`: Toggle LCD Backlight
 * `cmd = 0x04`: Query PN532 NFC Hardware Health
-* `cmd = 0x05`: Clear / silence the alarm (`05 00`, what `RmProtocol.encodeAlarmClear()` sends). Accepted on an encrypted link.
+* `cmd = 0x05`: Clear / silence the alarm: `05 00`, and once the machine has a signing key, `05 00` + 8-byte
+  signature (section 8.3). Needs an authenticated link.
 * `cmd = 0x07`: Select the message layout for this connection: `07 01` or `07 02`. Answered
   `[0x87, status, version_in_force, max_version]` (status 0 ok, 1 unsupported version, 2 malformed;
   on 1 and 2 the layout is unchanged). Section 7.
-* `cmd = 0x06`: Provision the signing key: `06` + 32 key bytes. Accepted once, only on an encrypted link; answered with `[0x86, status, 0, 0]` (0 stored, 1 already set, 2 flash error, 0xFF refused).
-* `cmd = 0x00`: open a diagnostic session and turn the machine's diagnostic mode on. Accepted on an encrypted (bonded) link; answered `[0x80, 0, 1, 0]` (open) or `[0x80, 0, 0, 0xFF]` (refused). Bytes after the command are ignored: the old fixed code is no longer checked, so nothing secret is in the image. The session ends on disconnect.
+* `cmd = 0x06`: Provision the signing key: `06` + 32 key bytes. Accepted once, only on an authenticated link; answered with `[0x86, status, 0, 0]` (0 stored, 1 already set, 2 flash error, 0xFF refused). Once set, the key can only be replaced with `08`.
+* `cmd = 0x08`: Replace the signing key, 41 bytes, section 8.4. Answered `[0x88, status, grace, 0]`.
+* `cmd = 0x00`: open a diagnostic session and turn the machine's diagnostic mode on. Accepted on an authenticated link; answered `[0x80, 0, 1, 0]` (open) or `[0x80, 0, 0, 0xFF]` (refused). Bytes after the command are ignored: the old fixed code is no longer checked, so nothing secret is in the image. The session ends on disconnect.
 
 `0x01`-`0x04` need an open session, the machine's local diagnostic mode (button held 3 s), or a `CONFIG_TOMS_DEV_MODE` build.
 
@@ -403,3 +408,180 @@ byte(s) as part of a trailer and fails the signature, so the phone must switch b
   or acked. That is the reason for the opt-in. If it happens, `07 01` restores layout 1.
 * A phone that ignores trailing bytes (the older lenient decoders) still reads every layout-1
   field from a layout-2 frame, because the new bytes are at the end.
+
+
+---
+
+## 8. Pairing, link level and the signing key
+
+Everything here is enforced by `toms_core` (`pairing.h`, `authz.h`, `keyring.h`) and tested on the host
+(`test_auth.c`). None of it has run on hardware.
+
+### 8.1 Who may pair
+
+| Rule | Detail |
+| --- | --- |
+| Pairing window | A new pairing is accepted only while the window is open. It opens when the **button is held at power-up** (sampled at the start of `main`, read twice 30 ms apart) and shows **PAIRING** with the seconds left on the LCD. It closes after `CONFIG_TOMS_PAIR_WINDOW_S` (default **60 s**) or as soon as a bond is made. A reset without the button opens nothing. |
+| One bond | `CONFIG_BT_MAX_PAIRED=1`. While a bond exists, only that same central may pair again (even with the window open); any other is refused (`TOMS_PAIR_DENY_FULL`). To enrol a different phone, forget the bond with the button: section 8.7. |
+| Authenticated pairing only | The central must announce an IO capability that can end in numeric comparison or a passkey: DisplayYesNo (1), KeyboardOnly (2) or KeyboardDisplay (4). DisplayOnly (0) and NoInputNoOutput (3) can only produce Just Works and are refused. With `CONFIG_BT_SMP_SC_ONLY=y` the stack also refuses legacy (non-Secure-Connections) pairing. |
+| Refusal | `pairing_accept` returns `BT_SECURITY_ERR_PAIR_NOT_ALLOWED` (SMP "Pairing Not Supported") for all three. Reconnecting with the existing bond never needs the window. |
+
+The 6-digit number is shown on the LCD, and the machine confirms its side of numeric comparison itself (as
+before). The window plus the one-bond rule are what keep a stranger out; the user still compares the numbers.
+
+### 8.2 Link level per diag command
+
+"Authenticated link" = `bt_conn_get_security() >= CONFIG_TOMS_AUTH_LEVEL`. That is **4** (authenticated LE Secure
+Connections, 128-bit key) in this build because Secure Connections Only is on; a build with
+`CONFIG_BT_SMP_SC_ONLY=n` falls back to **3** (authenticated, legacy allowed). Level 2 never passes.
+`CONFIG_TOMS_DEV_MODE` builds skip the check.
+
+| cmd | what | link | other condition |
+| --- | --- | --- | --- |
+| `00` | open a diagnostic session | authenticated | none; bytes after `00` are ignored |
+| `01`-`04` | buzzer, screen, backlight, NFC test | not link-gated (GATT still needs encryption) | an open session (`00`), the machine's local diagnostic mode, or a dev build |
+| `05` | silence the alarm | authenticated | signature rule, 8.3 |
+| `06` | store the first signing key | authenticated | none (once) |
+| `07` | choose the message layout | authenticated | none |
+| `08` | replace the signing key | authenticated | signed, 8.4 |
+
+A refused command gets a reply with status byte `0xFF`: `[0x80,0,0,0xFF]` (00), `[0x85,0,0,0xFF]` (05),
+`[0x86,0xFF,0,0]` (06), `[0x87,0xFF,version,2]` (07), `[0x88,0xFF,grace,0]` (08).
+
+### 8.3 `05` signed (silence the alarm)
+
+```
+05 00 [ s0 s1 s2 s3 s4 s5 s6 s7 ]        2 bytes without a key, 10 bytes with the signature
+```
+`s0..s7` = the first 8 bytes of `HMAC-SHA256(key, 0x0E || 05 00)`: the usual trailer (section 6) with the diag
+characteristic suffix `0x0E` and the two command bytes as the payload.
+
+| Machine state | `05 00` unsigned | `05 00` + valid signature | `05 00` + wrong signature |
+| --- | --- | --- | --- |
+| no key yet | accepted (authenticated link) | accepted | refused |
+| key present, normal build | **interim rule**: accepted only from a bonded central that has an open diagnostic session (`00`), and logged at WARN; otherwise refused | accepted | refused |
+| key present, `CONFIG_TOMS_DEV_MODE` | accepted | accepted | refused (a wrong signature is refused in every build) |
+
+The interim rule exists because the phone does not sign yet (a separate Android PR does). It is meant to be
+removed once the phone signs: then an unsigned `05` is refused as soon as a key exists. A signature made with the
+previous key during grace (8.4) is accepted too.
+
+### 8.4 `08` replace the signing key
+
+```
+offset  size  field
+0       1     08
+1..32   32    new key
+33..40  8     signature
+total   41    (TOMS_KEY_REPLACE_LEN)
+```
+signature = the first 8 bytes of `HMAC-SHA256(current_key, 0x0E || 08 || new_key)`: the signed bytes are the
+suffix `0x0E`, the command byte and the 32 key bytes (34 bytes).
+
+Reply on the diag characteristic: `[0x88, status, grace, 0]`.
+
+| status | meaning | key changed |
+| --- | --- | --- |
+| 0 | the new key is in force | yes |
+| 1 | no key yet: provision with `06` first | no |
+| 2 | not signed under the current key (or the grace key), or a partial / zero trailer | no |
+| 3 | wrong length or wrong command byte | no |
+| 4 | could not be saved to flash | no |
+| 0xFF | the link was not authenticated enough | no |
+
+`grace` = 1 when the previous key is still accepted.
+
+**One-step grace.** A replace the phone never saw the reply to must not lock it out:
+1. a successful replace puts the new key in force and keeps the old one as the grace key;
+2. a value signed with the grace key still verifies, and so does a retried `08` signed with it (it overwrites
+   the new key; the grace key stays the one the phone still has);
+3. the first value that verifies under the **new** key ends the grace: the old key is forgotten and flash is
+   updated;
+4. another replace overwrites the grace key with the key it replaced, so only one previous key is ever kept.
+
+The machine signs everything it sends with the key in force. Order for the phone: send `08`, keep the old key
+until a signed notify from the machine verifies under the new key, then forget the old one.
+
+The keys are stored in the settings partition as one record (`toms/k/keys`, 67 bytes: flags, key in force,
+previous key, CRC-16). The earlier single-key record is read as the key in force on first boot with this
+firmware and is replaced the first time the key changes. Nothing key-shaped is in the source or the image.
+
+
+### 8.5 Every command the diagnostic app sends today, against these rules
+
+From `toms_android/ota` (branch `v2/return-machine-fw`): `OtaViewModel.kt` and `BleTransport.kt`.
+
+| App action | Bytes | Where in the app | Today's firmware | After this change |
+| --- | --- | --- | --- | --- |
+| connect, pair | `createBond()`, numeric comparison | BleTransport.kt:169-172 | any central pairs | pairs only in the window, as DisplayYesNo/KeyboardDisplay, one bond |
+| unlock on connect | `00` + `TOMS!` | BleTransport.kt:260, OtaViewModel.kt:323 | session opens on an L2 link | opens on an authenticated link; the five bytes are ignored |
+| buzzer test | `01 <tone>` | OtaViewModel.kt:462 | needs a session | unchanged: needs the session `00` opened |
+| next screen | `02` | OtaViewModel.kt:470 | needs a session | unchanged |
+| backlight | `03` | OtaViewModel.kt:478 | needs a session | unchanged |
+| PN532 check | `04` | OtaViewModel.kt:490 | needs a session | unchanged |
+| silence alarm | `05 00` | BleTransport.kt:275, OtaViewModel.kt:439 | accepted unconditionally | no key: accepted; key present: accepted unsigned only as a bonded central with an open session (the app has both), logged |
+
+The app never sends `06`, `07` or `08`, so those three do not affect it. The unsigned `05` keeps working, with a
+log line, until the app signs it.
+
+### 8.6 What the phone must change (Android; not part of this change)
+
+1. **Authenticated pairing.** Pair with numeric comparison (`createBond()` on a device that announces DisplayYesNo
+   or KeyboardDisplay); a Just Works pairing is refused. Needs LE Secure Connections (every phone since
+   Android 6). The user must hold the machine's button while powering it up, then pair within 60 s.
+2. **Sign `05`.** Append the 8-byte trailer of 8.3 once the machine has a key (`device_info.flags` bit 1).
+3. **Key replace.** Send `08` (8.4), wait for `88 00 ..`, keep the old key until a notify from the machine
+   verifies under the new one, then drop it. Handle statuses 1 to 4 and 0xFF.
+4. **Re-pairing after the bond was cleared on the machine** (8.7): the phone still holds the old pairing, so a
+   connection fails on encryption. Remove the pairing in Android (Settings > Bluetooth > TOMS-RM > Forget) and
+   pair again inside the window. The signing key is kept, so nothing about the key needs redoing.
+
+### 8.7 Forgetting the bond (hold the button through the window)
+
+The one bond can be forgotten at the machine, without erasing the signing key:
+
+1. Hold the button while powering the machine up. The pairing window opens (8.1) and the LCD shows **PAIRING**.
+2. **Keep holding for 5 s**, counted continuously from the power-up sample (the count starts when `main()` has
+   read the button, early in boot, so do not let go before 5 s have passed).
+3. The LCD shows **BOND CLEARED** (and a short beep) for 2 s. The stored bond is deleted, the pairing window
+   is closed while this shows, and then a **fresh 60 s window** opens (the LCD goes back to **PAIRING**).
+4. Any central that can do an authenticated pairing may now take the one slot, the previous phone included.
+
+What is cleared and what is not:
+
+| Item | After the hold |
+| --- | --- |
+| The bond (long-term key, identity, the central's subscriptions `bt/ccc`) | **deleted** (`bt_unpair`, all bonds, the one slot) |
+| A central connected at that moment | disconnected by the stack |
+| The signing key ring (`toms/k/keys`, key in force and any grace key) | **kept**, never read or written by this path |
+| The read log, its sequence counter and the drop counter | kept |
+| The layout choice (`07`) | per connection: back to layout 1 on the next connect, as always |
+
+Rules, all in `toms/bondclr.h` and tested on the host:
+* Only a hold that **starts at power-up** counts. A button pressed later never starts the count.
+* Releasing for `TOMS_BONDCLR_RELEASE_MS` (150 ms) or longer **gives up for good** until the next power-up, and
+  so does a release the sampler could not see (a gap of more than `TOMS_BONDCLR_MAX_GAP_MS` = 500 ms between
+  samples, or a clock that goes backwards). A bounce shorter than 150 ms is forgiven.
+* The count is measured with differences of the 32-bit millisecond clock, so it is correct across the wrap.
+* It fires once, at the first sample at or after 5 s. While it is counting, the normal button actions are
+  ignored. If Bluetooth is not up within 10 s of that moment, or `bt_unpair` fails, the bond is **not**
+  cleared and the machine logs why.
+* A reset without the button, an OTA reboot or a watchdog reset never clears anything.
+
+**What a phone sees afterwards** (from reading the stack's and the apps' code; none of it was run):
+* The machine now has no record of the phone. The phone still has its half of the pairing. When the phone
+  reconnects, the machine cannot find the long-term key and refuses encryption ("PIN or key missing"), so
+  the link drops before any diag or data traffic. No characteristic is readable or writable that needs
+  encryption (every characteristic except the open read of `device_info`).
+* **Conductor app** (`AndroidBleReturnMachineLink`): it calls `createBond()` only when Android says the
+  device is *not* bonded, and Android still says it is. So it will keep failing and retrying until the user
+  removes the pairing in Android settings (Forget) and the phone reconnects.
+* **Diagnostic app** (`ph.toms.ota`, `BleTransport.connect`): it recognises a link that dies on encryption
+  with a bond held, removes the stale pairing itself and pairs again, once. That needs the window to be
+  open at that moment (hold the button through the 5 s, then connect within 60 s), otherwise the pairing
+  is refused with SMP "Unspecified Reason" (0x08) and it reports "pairing failed or was refused".
+* After re-pairing: layout 1 again, `time_sync` and the state table are sent again as on every connect, the
+  notify subscriptions are made again (the stored ones were deleted), and **signed notifies still verify**,
+  because the key was kept: no new `06` and no `08` are needed. A phone that never held the key still
+  cannot get one through `06` (the key exists), it needs `08` signed under the current key.
+* Stored reads in the flash log are still there and are offered again after the next connection.

@@ -21,6 +21,25 @@ config TOMS_ALARM_TIMEOUT_S
 		pressed. The alarm lives in the buzzer and display state, so a BLE reconnect neither
 		loses nor repeats it.
 
+config TOMS_PAIR_WINDOW_S
+	int "Seconds the pairing window stays open after a button-held power-up"
+	default 60
+	range 10 300
+	help
+		A new Bluetooth bond is only accepted while this window is open. It opens when the button
+		is held at power-up and shows PAIRING on the LCD. An existing bond reconnects at any time.
+
+config TOMS_AUTH_LEVEL
+	int "Link security the diag commands 00, 05, 06, 07 and 08 need (3 or 4)"
+	default 4 if BT_SMP_SC_ONLY
+	default 3
+	range 3 4
+	help
+		3 = authenticated pairing (numeric comparison or passkey) with encryption.
+		4 = the same with LE Secure Connections and a 128-bit key. The stack only reports 4 when
+		Secure Connections Only mode is on (CONFIG_BT_SMP_SC_ONLY), which is why the default
+		follows it. A link that is only encrypted (level 2, Just Works) never passes.
+
 config TOMS_PAID_TIMEOUT_MS
 	int "Paid-check timeout in milliseconds (brief allows 1000-2000)"
 	default 1500

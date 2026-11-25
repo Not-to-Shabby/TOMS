@@ -20,6 +20,7 @@ LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 #include "toms_pins.h"
 #include "trial.h"
 
+#include <toms/bondclr.h>
 #include <toms/codec.h>
 #include <toms/state_table.h>
 #include <toms/wire.h>
@@ -400,10 +401,17 @@ static void send_heartbeat(void)
 	}
 }
 
+/* Set while the 5 s hold is being counted. A bounce of the held button must not run the normal button
+ * actions (long-press diagnostic mode, pairing confirm) in the middle of it. */
+static atomic_t bondclr_counting = ATOMIC_INIT(0);
+
 static uint16_t btn_press_count;
 
 static void on_button(void)
 {
+	if (atomic_get(&bondclr_counting) != 0) {
+		return; /* the power-up hold is being counted; a bounce is not a press */
+	}
 	btn_press_count++;
 	LOG_INF("button pressed (#%u)", (unsigned int)btn_press_count);
 	if (buzzer_is_alarming() || display_is_alarming()) {
@@ -421,8 +429,66 @@ static void on_button(void)
 	rm_ble_notify_diag(ev, sizeof(ev));
 }
 
+/* Bond clear: hold the button at power-up (the pairing window opens), keep holding for 5 s, and the
+ * one stored bond is forgotten; the signing key is kept. The hold is tracked by a thread that starts
+ * at power-up, before the slow parts of boot, and it gives up for good on a release or a missed
+ * sample (toms/bondclr.h). The bond itself can only be removed once Bluetooth is up. */
+static K_SEM_DEFINE(ble_ready, 0, 1);
+#define BONDCLR_STACK 1536
+#define BONDCLR_PRIO 6
+static K_THREAD_STACK_DEFINE(bondclr_stack, BONDCLR_STACK);
+static struct k_thread bondclr_thread;
+
+static void bondclr_loop(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+
+	struct toms_bondclr s;
+
+	toms_bondclr_init(&s, (uint32_t)k_uptime_get(), true);
+	atomic_set(&bondclr_counting, 1);
+	while (toms_bondclr_active(&s)) {
+		k_msleep(TOMS_BONDCLR_POLL_MS);
+		if (toms_bondclr_tick(&s, (uint32_t)k_uptime_get(), button_pressed_now()) !=
+		    TOMS_BONDCLR_FIRE) {
+			continue;
+		}
+		atomic_set(&bondclr_counting, 0);
+		LOG_WRN("button held %u s from power-up: clearing the bond", TOMS_BONDCLR_HOLD_MS / 1000u);
+		if (k_sem_take(&ble_ready, K_SECONDS(10)) != 0) {
+			LOG_ERR("Bluetooth is not up: the bond was NOT cleared");
+			return;
+		}
+		int left = rm_ble_forget_bond();
+
+		if (left != 0) {
+			LOG_ERR("the bond was NOT cleared (%d)", left);
+			return;
+		}
+		display_show_bond_cleared(TOMS_BONDCLR_SHOW_MS);
+		buzzer_play(TOMS_TONE_OK);
+		k_msleep(TOMS_BONDCLR_SHOW_MS);
+		rm_ble_open_pairing(); /* a fresh window, counted from now */
+		return;
+	}
+	atomic_set(&bondclr_counting, 0);
+	LOG_INF("bond-clear hold ended before %u s: nothing cleared", TOMS_BONDCLR_HOLD_MS / 1000u);
+}
+
 int main(void)
 {
+	/* Pairing window: only if the button is held at power-up. Sampled first, before anything else
+	 * can take time, and acted on once Bluetooth is up. */
+	bool pairing_requested = button_is_held();
+
+	if (pairing_requested) {
+		k_thread_create(&bondclr_thread, bondclr_stack, BONDCLR_STACK, bondclr_loop, NULL, NULL,
+				NULL, BONDCLR_PRIO, 0, K_NO_WAIT);
+		k_thread_name_set(&bondclr_thread, "bondclr");
+	}
+
 	uint8_t rr = toms_reset_reason();
 	reset_reason = rr;
 	LOG_INF("TOMS Return Machine boot, reset: %s (%u)", toms_reset_reason_name(rr), rr);
@@ -461,6 +527,14 @@ int main(void)
 		LOG_ERR("BLE start failed (%d)", ble_rc);
 	}
 	trial_report_ble(ble_rc == 0);
+	if (ble_rc == 0 && pairing_requested) {
+		rm_ble_open_pairing();
+	} else if (pairing_requested) {
+		LOG_ERR("button held at power-up but Bluetooth did not start: no pairing window");
+	}
+	if (ble_rc == 0) {
+		k_sem_give(&ble_ready); /* after the window is open: a bond clear then closes it, not the reverse */
+	}
 
 	k_thread_create(&flush_thread, flush_stack, FLUSH_STACK, flush_loop, NULL, NULL, NULL,
 			FLUSH_PRIO, 0, K_NO_WAIT);

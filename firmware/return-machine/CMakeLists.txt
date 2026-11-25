@@ -30,6 +30,10 @@ target_sources(app PRIVATE
   ${TOMS_CORE}/src/sig.c
   ${TOMS_CORE}/src/readlog.c
   ${TOMS_CORE}/src/late.c
+  ${TOMS_CORE}/src/pairing.c
+  ${TOMS_CORE}/src/bondclr.c
+  ${TOMS_CORE}/src/authz.c
+  ${TOMS_CORE}/src/keyring.c
   ${TOMS_CORE}/src/wire.c
 )
 
