@@ -23,12 +23,27 @@
 
 #define GET_U16(p) ((uint16_t)((uint16_t)(p)[0] | ((uint16_t)(p)[1] << 8)))
 
+uint16_t toms_u16_sat(uint32_t v)
+{
+	return v > 0xFFFFu ? (uint16_t)0xFFFFu : (uint16_t)v;
+}
+
 int toms_codec_encode_card_read(uint8_t *buf, size_t cap, const struct toms_card_read_msg *m)
 {
-	if (buf == NULL || m == NULL || m->uid_len == 0 || m->uid_len > TOMS_UID_MAX) {
+	return toms_codec_encode_card_read_wire(buf, cap, m, TOMS_WIRE_V1);
+}
+
+int toms_codec_encode_card_read_wire(uint8_t *buf, size_t cap, const struct toms_card_read_msg *m,
+				     uint8_t wire)
+{
+	if ((wire != TOMS_WIRE_V1 && wire != TOMS_WIRE_V2) || buf == NULL || m == NULL ||
+	    m->uid_len == 0 || m->uid_len > TOMS_UID_MAX) {
 		return -EINVAL;
 	}
-	size_t need = 15u + m->uid_len;
+	if (wire == TOMS_WIRE_V2 && m->outcome > TOMS_OUTCOME_UNVERIFIED_NO_LINK) {
+		return -EINVAL;
+	}
+	size_t need = (wire == TOMS_WIRE_V2 ? 16u : 15u) + m->uid_len;
 	if (cap < need) {
 		return -ENOSPC;
 	}
@@ -40,17 +55,39 @@ int toms_codec_encode_card_read(uint8_t *buf, size_t cap, const struct toms_card
 	memcpy(&buf[13], m->uid, m->uid_len);
 	buf[13 + m->uid_len] = m->atype;
 	buf[14 + m->uid_len] = m->state_cached;
+	if (wire == TOMS_WIRE_V2) {
+		buf[15 + m->uid_len] = m->outcome;
+	}
 	return (int)need;
 }
 
 int toms_codec_decode_card_read(const uint8_t *data, size_t len, struct toms_card_read_msg *m)
 {
-	if (data == NULL || m == NULL || len < 15u) {
+	return toms_codec_decode_card_read_wire(data, len, m, TOMS_WIRE_V1);
+}
+
+int toms_codec_decode_card_read_wire(const uint8_t *data, size_t len, struct toms_card_read_msg *m,
+				     uint8_t wire)
+{
+	if (wire != TOMS_WIRE_V1 && wire != TOMS_WIRE_V2) {
+		return -EINVAL;
+	}
+	size_t fixed = (wire == TOMS_WIRE_V2) ? 16u : 15u;
+
+	if (data == NULL || m == NULL || len < fixed) {
 		return -EINVAL;
 	}
 	uint8_t uid_len = data[12];
-	if (uid_len == 0 || uid_len > TOMS_UID_MAX || len < 15u + uid_len) {
+	if (uid_len == 0 || uid_len > TOMS_UID_MAX || len < fixed + uid_len) {
 		return -EINVAL;
+	}
+	uint8_t outcome = TOMS_OUTCOME_NORMAL;
+
+	if (wire == TOMS_WIRE_V2) {
+		outcome = data[15 + uid_len];
+		if (outcome > TOMS_OUTCOME_UNVERIFIED_NO_LINK) {
+			return -EINVAL;
+		}
 	}
 
 	m->read_seq = GET_U32(&data[0]);
@@ -60,15 +97,45 @@ int toms_codec_decode_card_read(const uint8_t *data, size_t len, struct toms_car
 	memcpy(m->uid, &data[13], uid_len);
 	m->atype = data[13 + uid_len];
 	m->state_cached = data[14 + uid_len];
-	return (int)(15u + uid_len);
+	m->outcome = outcome;
+	return (int)(fixed + uid_len);
+}
+
+int toms_codec_card_read_to_wire(uint8_t *buf, size_t cap, size_t v1_len, uint8_t outcome,
+				 uint8_t wire)
+{
+	if ((wire != TOMS_WIRE_V1 && wire != TOMS_WIRE_V2) || buf == NULL || v1_len < 16u ||
+	    v1_len > 15u + TOMS_UID_MAX || buf[12] == 0 || buf[12] > TOMS_UID_MAX ||
+	    v1_len != 15u + buf[12] || cap < v1_len) {
+		return (buf != NULL && cap < v1_len) ? -ENOSPC : -EINVAL;
+	}
+	if (wire == TOMS_WIRE_V1) {
+		return (int)v1_len;
+	}
+	if (outcome > TOMS_OUTCOME_UNVERIFIED_NO_LINK) {
+		return -EINVAL;
+	}
+	if (cap < v1_len + 1u) {
+		return -ENOSPC;
+	}
+	buf[v1_len] = outcome;
+	return (int)(v1_len + 1u);
 }
 
 int toms_codec_encode_heartbeat(uint8_t *buf, size_t cap, const struct toms_heartbeat_msg *m)
 {
-	if (buf == NULL || m == NULL) {
+	return toms_codec_encode_heartbeat_wire(buf, cap, m, TOMS_WIRE_V1);
+}
+
+int toms_codec_encode_heartbeat_wire(uint8_t *buf, size_t cap, const struct toms_heartbeat_msg *m,
+				     uint8_t wire)
+{
+	if ((wire != TOMS_WIRE_V1 && wire != TOMS_WIRE_V2) || buf == NULL || m == NULL) {
 		return -EINVAL;
 	}
-	if (cap < 15u) {
+	size_t need = (wire == TOMS_WIRE_V2) ? 19u : 15u;
+
+	if (cap < need) {
 		return -ENOSPC;
 	}
 
@@ -79,7 +146,11 @@ int toms_codec_encode_heartbeat(uint8_t *buf, size_t cap, const struct toms_hear
 	PUT_U32(&buf[8], m->state_version);
 	PUT_U16(&buf[12], m->buffered_reads);
 	buf[14] = m->reset_reason;
-	return 15;
+	if (wire == TOMS_WIRE_V2) {
+		PUT_U16(&buf[15], m->dropped_reads);
+		PUT_U16(&buf[17], m->late_replies);
+	}
+	return (int)need;
 }
 
 int toms_codec_encode_paid_check(uint8_t *buf, size_t cap, uint32_t check_seq, const uint8_t *uid,

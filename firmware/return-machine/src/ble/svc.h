@@ -68,11 +68,28 @@ int rm_ble_notify_card_read(const uint8_t *data, size_t len);
 int rm_ble_notify_heartbeat(const uint8_t *data, size_t len);
 int rm_ble_notify_diag(const uint8_t *data, size_t len);
 
+/* Opens the pairing window (CONFIG_TOMS_PAIR_WINDOW_S seconds). Call after rm_ble_start() when the
+ * button was held at power-up. */
+void rm_ble_open_pairing(void);
+
+/* Forgets the one bond (not the signing key) and closes the pairing window. Returns the number of
+ * bonds left (0) or a negative errno. */
+int rm_ble_forget_bond(void);
+
+/* Milliseconds of pairing window left, 0 when closed. */
+uint32_t rm_ble_pairing_left_ms(void);
+
 /* HCI round trip to the controller. 0 = the Bluetooth stack answered. */
 int rm_ble_probe(void);
 
 /* True while a phone is connected and subscribed to card_read. */
 bool rm_ble_card_subscribed(void);
+
+/* Message layout in force on this connection: TOMS_WIRE_V1 until the phone selects v2. */
+uint8_t rm_ble_wire_version(void);
+
+/* Paid replies that arrived after the unverified tone, saturating at 65535. */
+uint16_t rm_ble_late_replies(void);
 
 typedef void (*rm_ble_diag_cmd_cb_t)(uint8_t cmd, uint8_t arg);
 void rm_ble_set_diag_cmd_cb(rm_ble_diag_cmd_cb_t cb);

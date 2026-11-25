@@ -30,8 +30,9 @@ void readstore_mark_sent(uint32_t seq);
 /* Stored reads not yet sent on this boot. */
 uint32_t readstore_unsent(void);
 
-/* Oldest stored read not yet sent on this boot, in read_seq order. -ENOENT when none. */
-int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq);
+/* Oldest stored read not yet sent on this boot, in read_seq order. The frame is the v1 card_read;
+ * *outcome is what the paid check ended with (TOMS_OUTCOME_*). -ENOENT when none. */
+int readstore_next_unsent(uint8_t *frame, size_t cap, uint32_t *seq, uint8_t *outcome);
 
 /* A phone (re)connected: offer every stored read again, oldest first. */
 void readstore_rewind(void);
@@ -43,12 +44,28 @@ int readstore_next(uint32_t from_seq, uint8_t *frame, size_t cap, uint32_t *seq)
 int readstore_ack(uint32_t upto_seq);
 
 uint32_t readstore_pending(void);
+/* Reads overwritten before they were sent live. Kept in flash, so it survives power cycles. */
 uint32_t readstore_dropped(void);
 
 /* Copies the signing key out. False when none is provisioned. */
 bool keystore_get(uint8_t key[TOMS_SIG_KEY_LEN]);
 
-/* Stores the key if there is none yet. -EEXIST when one is already set. */
+/* Stores the key if there is none yet. -EEXIST when one is already set (it can then only be
+ * replaced, with keystore_replace). */
 int keystore_provision(const uint8_t key[TOMS_SIG_KEY_LEN]);
+
+/* True when a key is in force. */
+bool keystore_present(void);
+
+/* Verifies a received diag value against the key in force, and against the previous key during
+ * the one-step grace after a replace. Same results as toms_sig_check(): TOMS_SIG_OK,
+ * TOMS_SIG_ABSENT (no trailer), or negative. Without a key: TOMS_SIG_ABSENT or -EINVAL. The first
+ * value that verifies with a replaced key's new key ends the grace and the end is saved. */
+int keystore_check(uint8_t suffix, const uint8_t *data, size_t len, size_t consumed);
+
+/* Handles diag 0x08 (the whole value written). Returns the TOMS_REPLACE_* status; on OK the new key
+ * is in force and saved, on any other status nothing changed. *grace says whether the previous key
+ * is still accepted. */
+uint8_t keystore_replace(const uint8_t *data, size_t len, bool *grace);
 
 #endif /* TOMS_READSTORE_H */

@@ -50,6 +50,21 @@ object RmProtocol {
     const val CMD_PROVISION_KEY = 0x06
     const val DIAG_PROVISION_REPLY = 0x86
 
+    // diag command and reply for replacing the signing key (firmware/PROTOCOL.md section 8.4)
+    const val CMD_KEY_REPLACE = 0x08
+    const val DIAG_REPLACE_REPLY = 0x88
+
+    /** Status byte of the replace reply. */
+    const val REPLACE_OK = 0
+    const val REPLACE_NO_KEY = 1
+    const val REPLACE_BAD_SIGNATURE = 2
+    const val REPLACE_MALFORMED = 3
+    const val REPLACE_STORAGE = 4
+    const val REPLACE_NOT_AUTHENTICATED = 0xFF
+
+    /** Not a status the machine sends: a 0x88 frame that is not a replace reply (an older firmware's echo of an unknown command). */
+    const val REPLACE_UNRECOGNISED = -1
+
     // diag command and reply for choosing the message layout of this connection (section 7.1)
     const val CMD_WIRE_LAYOUT = 0x07
     const val DIAG_WIRE_REPLY = 0x87
@@ -347,6 +362,24 @@ object RmProtocol {
         }
 
     /** The reply to key provisioning on the diag characteristic: [0x86, status, 0, 0]. Null for any other diag notify. */
+    /** The machine's answer to a key replace: [0x88, status, grace, 0]. [grace] is true while the previous key is still accepted. */
+    class ReplaceReply(val status: Int, val grace: Boolean)
+
+    /**
+     * Null for any frame that is not a 0x88 reply. A 0x88 frame that does not have the shape the machine uses for a real answer
+     * (last byte 0, a known status, and grace set on success) comes back as [REPLACE_UNRECOGNISED]: a firmware that does not know
+     * command 08 echoes `[0x88, <first key byte>, 0, 0]` or `[0x88, 0, 0, 0xFF]`, and neither may be read as "key replaced".
+     */
+    fun decodeReplaceReply(data: ByteArray): ReplaceReply? {
+        if (data.size != 4 || (data[0].toInt() and 0xFF) != DIAG_REPLACE_REPLY) return null
+        val status = data[1].toInt() and 0xFF
+        val grace = (data[2].toInt() and 0xFF) == 1
+        val shaped = data[3].toInt() == 0 && (data[2].toInt() and 0xFF) <= 1 &&
+            status in listOf(REPLACE_OK, REPLACE_NO_KEY, REPLACE_BAD_SIGNATURE, REPLACE_MALFORMED, REPLACE_STORAGE, REPLACE_NOT_AUTHENTICATED) &&
+            (status != REPLACE_OK || grace)
+        return if (shaped) ReplaceReply(status, grace) else ReplaceReply(REPLACE_UNRECOGNISED, false)
+    }
+
     fun decodeProvisionReply(data: ByteArray): Int? =
         if (data.size == 4 && (data[0].toInt() and 0xFF) == DIAG_PROVISION_REPLY) data[1].toInt() and 0xFF else null
 
@@ -429,6 +462,19 @@ object RmProtocol {
      * Firmware rm_ble_handle_diag executes: buzzer_alarm_stop() and display_clear_alarm().
      */
     fun encodeAlarmClear(): ByteArray = byteArrayOf(CMD_CLEAR_ALARM.toByte(), 0x00.toByte())
+
+    /** `05 00` plus, once the machine has a key, the trailer over `0x0E || 05 00` (firmware/PROTOCOL.md section 8.3). */
+    fun encodeAlarmClear(key: ByteArray?): ByteArray = RmSignature.signWrite(key, RmSignature.SUFFIX_DIAG, encodeAlarmClear())
+
+    /**
+     * The key replace write: `08`, the new key, then the first 8 bytes of HMAC-SHA256(current key, 0x0E || 08 || new key)
+     * (41 bytes, firmware/PROTOCOL.md section 8.4). The keys exist only in memory here and are never logged.
+     */
+    fun encodeKeyReplace(currentKey: ByteArray, newKey: ByteArray): ByteArray {
+        require(newKey.size == RmSignature.KEY_LEN) { "The new key must be ${RmSignature.KEY_LEN} bytes" }
+        val body = byteArrayOf(CMD_KEY_REPLACE.toByte()) + newKey
+        return RmSignature.sign(currentKey, RmSignature.SUFFIX_DIAG, body)
+    }
 
     fun encodeStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<StateEntry>): ByteArray {
         val count = entries.size.coerceAtMost(128)

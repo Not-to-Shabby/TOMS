@@ -81,6 +81,12 @@ class RealRmKeyEnrolment @Inject constructor(
     /** Whether the server has been told the current key verified, so a stream of verified notifies does not repeat it. */
     private var reportedVerifiedVersion = 0
 
+    /**
+     * Why the last attempt to write a key to the machine did not work, in plain words, until the next attempt or until the machine's
+     * messages verify. Null when the last attempt worked or none was made. A mismatch has its own text from the trust state.
+     */
+    @Volatile private var failureNote: RmKeyStatus? = null
+
     override fun onConnected(machineId: String) {
         this.machineId = machineId
         publishStatus()
@@ -92,6 +98,7 @@ class RealRmKeyEnrolment @Inject constructor(
         loop?.cancel()
         loop = null
         machineId = null
+        failureNote = null
         // The trust state still tells the truth about the key; only the connection-dependent text changes.
         publishStatus()
     }
@@ -109,6 +116,7 @@ class RealRmKeyEnrolment @Inject constructor(
                         // The machine took the new key: pending becomes active, and the old key is dropped.
                         val version = trust.pendingVersion(machineId) ?: return@withLock
                         if (trust.activate(machineId)) {
+                            failureNote = null
                             reportedVerifiedVersion = version
                             keys.reportVerified(version)
                         }
@@ -150,6 +158,7 @@ class RealRmKeyEnrolment @Inject constructor(
         var attempt = 0
         while (true) {
             val result = mutex.withLock { provisioner.provisionConnectedMachine() }
+            failureNote = noteFor(result)
             publishStatus()
             when (result) {
                 RmProvisionResult.WRITTEN -> return
@@ -165,9 +174,32 @@ class RealRmKeyEnrolment @Inject constructor(
         }
     }
 
+    /** What the conductor reads when a write of the key did not work. Never a key, a status byte or a command name. */
+    private fun noteFor(result: RmProvisionResult): RmKeyStatus? = when (result) {
+        RmProvisionResult.FLASH_ERROR ->
+            RmKeyStatus(
+                "The Return Machine could not save the new key. Try again; if it keeps happening, the machine needs an administrator.",
+                RmKeyStatus.Severity.BAD,
+            )
+        RmProvisionResult.REFUSED ->
+            RmKeyStatus(
+                "The Return Machine refused the new key. Check that this phone is paired with it securely (hold its button while " +
+                    "switching it on, then pair again), and try again.",
+                RmKeyStatus.Severity.BAD,
+            )
+        RmProvisionResult.NO_REPLY ->
+            RmKeyStatus("The Return Machine did not answer about the new key yet. The phone will ask again.", RmKeyStatus.Severity.WARN)
+        else -> null
+    }
+
     /** The one place the status text is composed, from the trust state and whether a machine is connected. */
     private fun publishStatus() {
         val connected = machineId != null
+        val note = failureNote
+        if (note != null && connected && trust.state.value !is RmTrustState.Mismatch) {
+            _status.value = note
+            return
+        }
         _status.value = when (val s = trust.state.value) {
             RmTrustState.NoKey ->
                 if (connected) RmKeyStatus("Waiting for a key for this Return Machine from the server.", RmKeyStatus.Severity.WARN)
@@ -182,11 +214,12 @@ class RealRmKeyEnrolment @Inject constructor(
 
     private fun mismatchText(reason: String) = when (reason) {
         "machine_has_other_key" ->
-            "The Return Machine keeps a different key than the server issued (it was reset or re-flashed). " +
-                "Its messages cannot be verified. An administrator must clear its key storage."
-        "rotation_needs_reflash" ->
-            "The key was rotated but the Return Machine still holds the old one and cannot replace it over the air. " +
+            "The Return Machine keeps a different key than the one this phone holds (it was reset or set up from somewhere else). " +
+                "The new key could not be sent because it must be signed under the machine's current key. " +
                 "An administrator must clear its key storage."
+        "rotation_needs_reflash" ->
+            "The key was changed on the server, but this Return Machine could not take the new one (its software is too old to " +
+                "replace a key). An administrator must update it or clear its key storage."
         else -> "The Return Machine's messages are not arriving signed with the key the server issued."
     }
 

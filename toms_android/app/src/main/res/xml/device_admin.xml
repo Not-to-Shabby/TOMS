@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No password, wipe, lock or camera policy: TOMS sets only the policies a profile owner needs for itself
+     (uninstall block, screen-capture, user control). Declaring none keeps the admin from asking for more. -->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies />
+</device-admin>

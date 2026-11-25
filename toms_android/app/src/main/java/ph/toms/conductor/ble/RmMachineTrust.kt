@@ -72,6 +72,12 @@ interface RmMachineTrust {
     fun activate(machineId: String): Boolean
 
     /**
+     * Drops a pending key the machine did not take (it refused the replace, or has no way to take it), so the next attempt starts
+     * from the key that is active. The active key and its version are untouched. True when there was a pending key.
+     */
+    fun discardPending(machineId: String): Boolean
+
+    /**
      * The machine does not accept the key, keeps another one, or signs with a key the phone does not hold. The state
      * shows [RmTrustState.Mismatch] — also when the phone holds no key at all (version 0), so the conductor is
      * never left reading "waiting" while the dashboard shows a problem — until [provision] or [clearMismatch].
@@ -170,6 +176,17 @@ class PrefsRmMachineTrust @Inject constructor(
             .remove(KEY_PENDING_MACHINE).remove(KEY_PENDING_KEY).remove(KEY_PENDING_VERSION)
             .remove(previousOf(machineId)).remove(previousUntilOf(machineId))
             .remove(mismatchOf(machineId))
+            .commit()
+        refresh()
+        return ok
+    }
+
+    @Synchronized
+    override fun discardPending(machineId: String): Boolean {
+        if (prefs.getString(KEY_PENDING_MACHINE, null) != machineId) return false
+        val ok = prefs.edit()
+            .remove(KEY_PENDING_MACHINE).remove(KEY_PENDING_KEY).remove(KEY_PENDING_VERSION)
+            .remove(previousOf(machineId)).remove(previousUntilOf(machineId))
             .commit()
         refresh()
         return ok

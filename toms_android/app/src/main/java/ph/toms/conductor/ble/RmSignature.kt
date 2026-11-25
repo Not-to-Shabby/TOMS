@@ -23,6 +23,16 @@ object RmSignature {
     const val SUFFIX_HEARTBEAT = 0x05
     const val SUFFIX_RM_ACK = 0x0A
 
+    /**
+     * The phone's own writes carry the same trailer, with the written characteristic's suffix (firmware/PROTOCOL.md section 8):
+     * state_update, paid_reply, time_sync, ack, and the diag characteristic for the signed commands (`05` and `08`).
+     */
+    const val SUFFIX_STATE_UPDATE = 0x02
+    const val SUFFIX_PAID_REPLY = 0x04
+    const val SUFFIX_TIME_SYNC = 0x06
+    const val SUFFIX_ACK = 0x08
+    const val SUFFIX_DIAG = 0x0E
+
     /** The trailer for [payload], or throws if the key is the wrong size. */
     fun trailer(key: ByteArray, suffix: Int, payload: ByteArray): ByteArray {
         require(key.size == KEY_LEN) { "The Return Machine key must be $KEY_LEN bytes" }
@@ -32,6 +42,10 @@ object RmSignature {
         mac.update(payload)
         return mac.doFinal().copyOf(TRAILER_LEN)
     }
+
+    /** [payload] for a write: with the trailer when the phone has a key the machine holds, the bare payload when it has none. */
+    fun signWrite(key: ByteArray?, suffix: Int, payload: ByteArray): ByteArray =
+        if (key == null) payload else sign(key, suffix, payload)
 
     /** Appends the trailer. Used by the fake link to build a realistic signed notify. */
     fun sign(key: ByteArray, suffix: Int, payload: ByteArray): ByteArray = payload + trailer(key, suffix, payload)

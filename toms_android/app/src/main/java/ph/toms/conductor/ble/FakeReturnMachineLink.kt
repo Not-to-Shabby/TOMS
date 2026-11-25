@@ -18,6 +18,13 @@ import kotlinx.coroutines.flow.asStateFlow
  * the phone on layout 1, byte for byte like an older machine. Frames it emits are encoded in the layout in force, so the
  * gate's framing and the decoders meet exactly the bytes the real machine would send.
  *
+ * **Writes.** The phone's writes are built by the same [RmSignedWrites] the real link uses (signed when [trust] holds an active key
+ * for the connected machine) and then judged by a model of the hardened firmware (`firmware/PROTOCOL.md` section 8, draft PR #35):
+ * [machineKey] is the key the simulated machine holds ([machineGraceKey] the one kept for one step after a replace);
+ * a wrong trailer is refused, a missing one is accepted for the plain writes, and `05` needs a valid trailer once the machine has a
+ * key. [linkAuthenticated] false models a pairing that is not authenticated: the machine refuses `05`, `06`, `07` and `08`.
+ * Every write and the machine's verdict on it are in [writes]. This is a reading of the spec, not a machine.
+ *
  * When [gate] is installed, the emitted card_read/heartbeat/rm_ack bytes go through the same
  * verification pipeline as the real link: signed with [signingKey] (or unsigned without one), a
  * corrupted trailer with [corruptNextSignature], and anything the gate refuses is dropped and
@@ -54,6 +61,108 @@ class FakeReturnMachineLink : ReturnMachineLink {
      */
     var replyToLayoutSelect: ((requested: Int, inForce: Int) -> ByteArray?)? = null
 
+    /** The phone's trust store, used to pick the key the phone signs its writes with. Null: writes are unsigned. */
+    var trust: RmMachineTrust? = null
+
+    /** The key the simulated machine holds (null: it has none), and the key it still accepts for one step after a replace. */
+    var machineKey: ByteArray? = null
+    var machineGraceKey: ByteArray? = null
+
+    /** Whether the link is authenticated (section 8.2). False: `05`, `06`, `07`, `08` are refused with status 0xFF. */
+    var linkAuthenticated = true
+
+    /** How the machine answers a key replace: normally from its rules; or these raw bytes (an older firmware's echo); or null = silence. */
+    var machineKnowsReplace = true
+    var replaceReplyRaw: ByteArray? = null
+    var machineAnswersReplace = true
+
+    /** Whether the machine would accept an unsigned `05` from a bonded central with an open session (the interim rule; the phone has no session). */
+    var interimUnsignedAlarm = false
+
+    data class RecordedWrite(val suffix: Int, val bytes: ByteArray, val accepted: Boolean, val reason: String)
+
+    /** Every write the phone made to a signed characteristic, with what the machine decided. */
+    val writes = mutableListOf<RecordedWrite>()
+
+    private val _pairingNotice = MutableStateFlow<RmKeyStatus?>(null)
+    override val pairingNotice: StateFlow<RmKeyStatus?> = _pairingNotice.asStateFlow()
+
+    private val _staleBond = MutableStateFlow(false)
+    override val staleBond: StateFlow<Boolean> = _staleBond.asStateFlow()
+
+    /** What the phone reads about pairing, set by a test through the same tracker the real link uses. */
+    val pairing = RmPairingTracker(
+        onStaleChanged = { _staleBond.value = it },
+        publish = { _pairingNotice.value = it },
+    )
+
+    /**
+     * Whether Android still holds this phone's half of the pairing. A machine that cleared its bond (firmware/PROTOCOL.md 8.7) leaves
+     * this true: the machine forgot the phone, the phone did not forget the machine.
+     */
+    var androidHoldsBond = false
+
+    /** Whether Android lets the app remove the old pairing. False models a phone that hides or refuses the system call. */
+    var androidAllowsRemoveBond = true
+    var forgetCalls = 0
+
+    /** The machine clears its bond (button held through the pairing window): the phone's pairing is now stale. */
+    fun simulateMachineClearedBond() {
+        androidHoldsBond = true
+    }
+
+    /**
+     * One connection attempt the way the real link reports it: the link comes up, then ends before it is usable. With the machine's
+     * bond cleared and Android still holding the pairing, every attempt ends this way. [linkComesUp] false models an attempt that never
+     * reached the machine (out of range), which is not this problem.
+     */
+    fun simulateConnectAttempt(linkComesUp: Boolean = true, becomesUsable: Boolean = false) {
+        if (!linkComesUp) return
+        // The very calls the real link makes, in the same order: up, then ready or not, then down.
+        pairing.onLinkUp(bonded = androidHoldsBond)
+        if (becomesUsable) pairing.onLinkReady()
+        pairing.onLinkDown(bonded = androidHoldsBond)
+    }
+
+    override suspend fun forgetStalePairing(): ForgetPairingResult {
+        forgetCalls++
+        if (!androidHoldsBond) return ForgetPairingResult.NOT_NEEDED
+        if (!androidAllowsRemoveBond) {
+            pairing.onForgetRefused()
+            return ForgetPairingResult.REFUSED
+        }
+        androidHoldsBond = false
+        pairing.onBondChanged(RmPairingTracker.BOND_BONDED, RmPairingTracker.BOND_NONE)
+        return ForgetPairingResult.REMOVED
+    }
+
+    private fun connectedAddress(): String? = (_connectionState.value as? RmConnectionState.Connected)?.deviceAddress
+
+    private fun writeKey(): ByteArray? = trust?.let { RmSignedWrites.writeKey(it, connectedAddress()) }
+
+    /** The firmware's `verify_write`: a trailer that is there must be right; one that is missing is accepted for the plain writes. */
+    private fun judgePlainWrite(suffix: Int, bytes: ByteArray, payloadLen: Int) {
+        val key = machineKey
+        if (key == null) { writes.add(RecordedWrite(suffix, bytes, true, "machine has no key")); return }
+        if (bytes.size == payloadLen) { writes.add(RecordedWrite(suffix, bytes, true, "unsigned, accepted and counted")); return }
+        val ok = checkTrailer(suffix, bytes, payloadLen)
+        writes.add(RecordedWrite(suffix, bytes, ok, if (ok) "signature valid" else "bad signature, refused"))
+    }
+
+    /** Valid under the key in force (which ends the grace) or the grace key. A partial trailer is wrong, not absent. */
+    private fun checkTrailer(suffix: Int, bytes: ByteArray, payloadLen: Int, endsGrace: Boolean = true): Boolean {
+        if (bytes.size != payloadLen + RmSignature.TRAILER_LEN) return false
+        val payload = bytes.copyOfRange(0, payloadLen)
+        val trailer = bytes.copyOfRange(payloadLen, bytes.size)
+        val cur = machineKey
+        if (cur != null && RmSignature.verify(cur, suffix, payload, trailer)) {
+            if (endsGrace) machineGraceKey = null
+            return true
+        }
+        val grace = machineGraceKey
+        return grace != null && RmSignature.verify(grace, suffix, payload, trailer)
+    }
+
     /** The verification pipeline for emitted bytes, built by the test over the same trust it wires elsewhere. */
     var gate: RmNotifyGate? = null
 
@@ -87,22 +196,95 @@ class FakeReturnMachineLink : ReturnMachineLink {
 
     override fun sendPaidReply(checkSeq: Long, verdict: Int) {
         sentPaidReplies.add(SentPaidReply(checkSeq, verdict))
+        val bytes = RmSignedWrites.paidReply(writeKey(), checkSeq, verdict)
+        judgePlainWrite(RmSignature.SUFFIX_PAID_REPLY, bytes, 5)
     }
 
     override fun sendStateUpdate(tableVersion: Long, snapshot: Boolean, entries: List<RmProtocol.StateEntry>) {
         sentStateUpdates.add(SentStateUpdate(tableVersion, snapshot, entries))
+        val plain = RmProtocol.encodeStateUpdate(tableVersion, snapshot, entries)
+        judgePlainWrite(RmSignature.SUFFIX_STATE_UPDATE, RmSignedWrites.stateUpdate(writeKey(), tableVersion, snapshot, entries), plain.size)
     }
 
     override fun sendTimeSync(nowMillis: Long) {
         sentTimeSyncs.add(SentTimeSync(nowMillis))
+        judgePlainWrite(RmSignature.SUFFIX_TIME_SYNC, RmSignedWrites.timeSync(writeKey(), nowMillis), 6)
     }
 
     override fun sendAlarmClear() {
         alarmClearCalls++
+        val bytes = RmSignedWrites.alarmClear(writeKey())
+        val key = machineKey
+        val accepted: Boolean
+        val reason: String
+        when {
+            !linkAuthenticated -> { accepted = false; reason = "link not authenticated (0x85 0 0 0xFF)"; pairing.onLinkNotAuthenticated() }
+            key == null -> { accepted = true; reason = "machine has no key" }
+            bytes.size == 2 -> {
+                accepted = interimUnsignedAlarm
+                reason = if (accepted) "unsigned, interim rule" else "unsigned, refused once a key exists"
+            }
+            else -> {
+                accepted = checkTrailer(RmSignature.SUFFIX_DIAG, bytes, 2)
+                reason = if (accepted) "signature valid" else "bad signature, refused"
+            }
+        }
+        writes.add(RecordedWrite(RmSignature.SUFFIX_DIAG, bytes, accepted, reason))
+        if (accepted) alarmClearsAccepted++
     }
+
+    /** How many `05` writes the simulated machine actually acted on (the alarm went quiet). */
+    var alarmClearsAccepted = 0
 
     override fun sendReadAck(upToReadSeq: Long) {
         sentReadAcks.add(SentReadAck(upToReadSeq))
+        judgePlainWrite(RmSignature.SUFFIX_ACK, RmSignedWrites.readAck(writeKey(), upToReadSeq), 5)
+    }
+
+    /** How many replace writes the phone made, and the bytes of the last one (to check its layout). */
+    var replaceWrites = 0
+    var lastReplaceWrite: ByteArray? = null
+
+    override suspend fun sendKeyReplace(currentKey: ByteArray, newKey: ByteArray): Int? {
+        replaceWrites++
+        val bytes = RmProtocol.encodeKeyReplace(currentKey, newKey)
+        lastReplaceWrite = bytes
+        if (!machineKnowsReplace) {
+            // An older firmware: no command 08. It echoes [0x88, byte 1, 0, 0] (or nacks 0x88 .. 0xFF); never a real status.
+            writes.add(RecordedWrite(RmSignature.SUFFIX_DIAG, bytes, false, "command 08 not known"))
+            return decodeRaw(replaceReplyRaw ?: byteArrayOf(0x88.toByte(), newKey[0], 0, 0))
+        }
+        val status = when {
+            !linkAuthenticated -> RmProtocol.REPLACE_NOT_AUTHENTICATED
+            machineKey == null -> RmProtocol.REPLACE_NO_KEY
+            bytes.size != 41 || bytes[0].toInt() != RmProtocol.CMD_KEY_REPLACE -> RmProtocol.REPLACE_MALFORMED
+            else -> {
+                // The signature is checked on a copy: a replace is not a "use" of the key that ends a grace.
+                val payload = bytes.copyOfRange(0, 33)
+                val trailer = bytes.copyOfRange(33, 41)
+                val cur = machineKey!!
+                val underCurrent = RmSignature.verify(cur, RmSignature.SUFFIX_DIAG, payload, trailer)
+                val underGrace = machineGraceKey?.let { RmSignature.verify(it, RmSignature.SUFFIX_DIAG, payload, trailer) } == true
+                if (!underCurrent && !underGrace) {
+                    RmProtocol.REPLACE_BAD_SIGNATURE
+                } else {
+                    if (underCurrent) machineGraceKey = cur // the key replaced becomes the grace key; a retry keeps the old grace key
+                    machineKey = newKey.copyOf()
+                    RmProtocol.REPLACE_OK
+                }
+            }
+        }
+        writes.add(RecordedWrite(RmSignature.SUFFIX_DIAG, bytes, status == RmProtocol.REPLACE_OK, "replace status $status"))
+        if (!machineAnswersReplace) return null
+        val reply = replaceReplyRaw
+            ?: byteArrayOf(0x88.toByte(), status.toByte(), (if (machineGraceKey != null) 1 else 0).toByte(), 0)
+        return decodeRaw(reply)
+    }
+
+    private fun decodeRaw(reply: ByteArray): Int? {
+        val decoded = RmProtocol.decodeReplaceReply(reply) ?: return null
+        if (decoded.status == RmProtocol.REPLACE_NOT_AUTHENTICATED) pairing.onLinkNotAuthenticated()
+        return decoded.status
     }
 
     override suspend fun sendProvisionKey(key: ByteArray): Int? {
@@ -157,6 +339,7 @@ class FakeReturnMachineLink : ReturnMachineLink {
     fun simulateDisconnected() {
         // The machine falls back to layout 1 on a disconnect, and so does the phone.
         negotiation.reset()
+        pairing.onDisconnected()
         _connectionState.value = RmConnectionState.Disconnected
     }
 
@@ -200,7 +383,7 @@ class FakeReturnMachineLink : ReturnMachineLink {
     }
 
     private fun signOrPlain(suffix: Int, payload: ByteArray): ByteArray {
-        val key = signingKey ?: return payload
+        val key = signingKey ?: machineKey ?: return payload
         val signed = RmSignature.sign(key, suffix, payload)
         if (!corruptNextSignature) return signed
         corruptNextSignature = false

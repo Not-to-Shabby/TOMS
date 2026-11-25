@@ -119,6 +119,8 @@ data class ConductorState(
     val keepScreenOn: Boolean = true,
     /** Which card reader the conductor picked, and what it says right now (see CardReaderManager). */
     val readerChoice: ph.toms.conductor.reader.ReaderChoice = ph.toms.conductor.reader.ReaderChoice.AUTO,
+    /** Set when the foreground service was skipped (location and Bluetooth permissions both off). */
+    val serviceNote: String? = null,
     val recentReads: List<CardRead> = emptyList(),
     /** On Collect, the trip of the card that was just tapped, so its row can be highlighted. */
     val focusTripId: String? = null,
@@ -130,6 +132,10 @@ data class ConductorState(
     val rmHeartbeat: RmProtocol.Heartbeat? = null,
     /** What the conductor reads about the Return Machine's signing key. Plain words, never a key. */
     val rmKeyStatus: RmKeyStatus = RmKeyStatus.NONE,
+    /** Set when the pairing with the Return Machine is not secure enough or was refused; null when nothing is wrong. */
+    val rmPairingNotice: RmKeyStatus? = null,
+    /** True while the phone holds a pairing the Return Machine deleted: More offers to forget it. */
+    val rmStaleBond: Boolean = false,
 ) {
     val preview: GroupQuote? get() = BoardFlow.previewTotal(tally, boardingStopId, destinationStopId, config)
 
@@ -142,6 +148,10 @@ data class ConductorState(
 
 /** What the Board says, and the tap shows, when no fares have been downloaded. A paid trip is not started. */
 const val NO_FARES_MESSAGE = "No fares loaded. Connect and sync."
+
+/** Shown when the shift foreground service was skipped: both permissions were off at shift start. */
+const val SERVICE_NOTE =
+    "Background protection is off. Allow location and Bluetooth in Android settings, then restart the shift."
 
 /** Keeps the chosen stops when the new config still has them; otherwise the first stop, and the second as the destination. */
 private fun TomsConfig.pickStops(boarding: String, destination: String): Pair<String, String> {
@@ -245,6 +255,8 @@ class ConductorViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { rmEnrolment.status.collect { s -> _state.update { it.copy(rmKeyStatus = s) } } }
+        viewModelScope.launch { rmLink.pairingNotice.collect { n -> _state.update { it.copy(rmPairingNotice = n) } } }
+        viewModelScope.launch { rmLink.staleBond.collect { stale -> _state.update { it.copy(rmStaleBond = stale) } } }
         viewModelScope.launch {
             rmLink.lastHeartbeat.collect { hb ->
                 hb?.let(rmIntake::onHeartbeat)
@@ -294,6 +306,11 @@ class ConductorViewModel @Inject constructor(
     }
 
     // ---- Return Machine BLE integration
+
+    /** Removes the phone's old pairing with the Return Machine, after the machine cleared its own (firmware/PROTOCOL.md 8.7). */
+    fun forgetOldPairing() {
+        viewModelScope.launch { rmLink.forgetStalePairing() }
+    }
 
     fun startBleScanning() = rmLink.startScanning()
     fun stopBleScanning() = rmLink.stopScanning()
@@ -373,16 +390,16 @@ class ConductorViewModel @Inject constructor(
     private suspend fun applyStart(result: StartShiftResult) {
         when (result) {
             is StartShiftResult.Started -> {
-                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                val note = if (shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)) null else SERVICE_NOTE
                 statusReporter.start(result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
-                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null, serviceNote = note) }
             }
             is StartShiftResult.Resumed -> {
-                shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)
+                val note = if (shiftService.startForShift(result.shift.vehicleId, result.shift.routeId)) null else SERVICE_NOTE
                 statusReporter.start(result.shift.id) { _state.value.fix }
                 rmLink.startScanning()
-                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null) }
+                _state.update { it.copy(shift = result.shift, blockedBy = null, endPrompt = null, serviceNote = note) }
             }
             is StartShiftResult.NeedsEnding -> {
                 val prompt = promptFor(result.open)

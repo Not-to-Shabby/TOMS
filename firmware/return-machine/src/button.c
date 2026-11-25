@@ -35,6 +35,28 @@ static void edge_fired(const struct device *dev, struct gpio_callback *cb, uint3
 	k_work_reschedule(&debounce_work, K_MSEC(DEBOUNCE_MS));
 }
 
+bool button_is_held(void)
+{
+	if (!gpio_is_ready_dt(&btn)) {
+		return false;
+	}
+	if (gpio_pin_configure_dt(&btn, GPIO_INPUT) != 0) {
+		return false;
+	}
+	/* The external pull-up and 100 nF need a moment after power-up; read twice, 30 ms apart, and
+	 * only count it when both reads say pressed. */
+	if (gpio_pin_get_dt(&btn) != 1) {
+		return false;
+	}
+	k_msleep(30);
+	return gpio_pin_get_dt(&btn) == 1;
+}
+
+bool button_pressed_now(void)
+{
+	return gpio_is_ready_dt(&btn) && gpio_pin_get_dt(&btn) == 1;
+}
+
 int button_init(toms_button_cb_t cb)
 {
 	if (!gpio_is_ready_dt(&btn)) {
