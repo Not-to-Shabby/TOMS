@@ -25,6 +25,8 @@ android {
             buildConfigField("boolean", "TEST_FARES", (findProperty("testFares") == "true").toString())
             // Debug builds start pointing at the local backend (adb reverse tcp:3000 tcp:3000), which they may reach over plain HTTP.
             buildConfigField("String", "DEFAULT_SERVER_URL", "\"http://127.0.0.1:3000\"")
+            // Development phones have no work profile, so debug builds run without one. `-PrequireWorkProfile=true` turns the gate on to try it.
+            buildConfigField("boolean", "REQUIRE_WORK_PROFILE", (findProperty("requireWorkProfile") == "true").toString())
         }
         release {
             // Never: a release build charges only fares the server published.
@@ -32,6 +34,8 @@ android {
             // Release has no server address until the owner sets one on More. It is a setting, not built in, and a
             // release build only talks HTTPS, so there is no local default that could work.
             buildConfigField("String", "DEFAULT_SERVER_URL", "\"\"")
+            // A release build runs only as the owner of its own work profile; the first-run check explains what is missing.
+            buildConfigField("boolean", "REQUIRE_WORK_PROFILE", "true")
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
