@@ -13,6 +13,7 @@ import { envelopeSchema, ingestEvents } from './ingest';
 import { RateLimiter } from './rateLimit';
 import type { KeyVault } from './keyVault';
 import { registerReturnMachineRoutes } from './returnMachines';
+import { registerPairingRoutes } from './pairing';
 
 export interface AppDeps {
   pool: Pool;
@@ -40,6 +41,8 @@ export interface AppDeps {
   keyVault?: KeyVault;
   /** Return Machine key fetches per phone. Defaults to 6 per minute. */
   rmKeyFetchLimiter?: RateLimiter;
+  /** Pairing attempts per address. Defaults to 10 per minute. */
+  pairLimiter?: RateLimiter;
 }
 
 const id = z.coerce.number().int().positive();
@@ -76,6 +79,7 @@ export function createApp({
   reportTimezone = 'Asia/Manila',
   keyVault,
   rmKeyFetchLimiter,
+  pairLimiter,
 }: AppDeps) {
   const app = express();
   const auth = makeAuth({ pool, jwtSecret });
@@ -253,6 +257,7 @@ export function createApp({
   registerDashboardRoutes(app, { pool, admin, tz: reportTimezone });
   registerCardRoutes(app, { pool, admin, auth });
   registerReturnMachineRoutes(app, { pool, admin, auth, vault: keyVault, fetchLimiter: rmKeyFetchLimiter });
+  registerPairingRoutes(app, { pool, admin, jwtSecret, pairLimiter });
   registerFareRoutes(app, { pool, admin });
   registerDeviceConfigRoutes(app, { pool, auth });
   registerReceiptRoutes(app, { pool, limiter: publicLimiter ?? new RateLimiter(120, 60_000) });
