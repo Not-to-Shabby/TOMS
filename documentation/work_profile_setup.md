@@ -99,6 +99,8 @@ Notes: the account rule, the encryption rule and the offline rule of the intent 
 - [ ] GPS fixes and the Return Machine link keep running with the screen off for a full shift.
 - [ ] The battery-optimization prompt opens, or the app carries on without it and the researcher can set it from Settings.
 - [ ] The upload worker sends events from inside the profile.
+- [ ] Pairing, camera: tapping "Scan to enrol" inside the work profile shows the camera permission prompt, and after it is allowed the preview opens and a pairing QR is read. Also note what happens when it is denied. (Needs the app step of `device_pairing.md`; not built yet.)
+- [ ] Pairing, typed code: with the camera permission denied, or the camera not usable inside the profile, a code typed by hand (any case, dashes or none) still enrols the phone. (Same.)
 - [ ] Turning the work profile off (quiet mode) and on again leaves the shift intact.
 - [ ] Rebooting the phone starts the work profile and TOMS resumes on the open shift.
 - [ ] Removing the work profile removes TOMS and its data (confirms the warning in section 1.3), and whether the user can do it from Settings with TOMS as the profile owner.
