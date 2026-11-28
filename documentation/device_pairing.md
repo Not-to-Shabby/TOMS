@@ -1,6 +1,6 @@
 # Pairing a phone with a one-time code
 
-**Status.** The server side is built (migration 017, `toms_backend/src/pairing.ts`, `toms_backend/test/pairing.test.ts`). The dashboard "Phones" page and the app's "Scan to enrol" screen are **not built**: sections 6 and 7 are the contract they have to meet. Nothing here has run on a phone.
+**Status.** The server side is built (migration 017, `toms_backend/src/pairing.ts`, `toms_backend/test/pairing.test.ts`), and so is the dashboard "Phones" page (`toms_web/src/pages/Phones.tsx`, section 6). The app's "Scan to enrol" screen is **not built**: section 7 is the contract it has to meet, and until it exists a code issued on the dashboard cannot be used from a phone (the page says so). Nothing here has run on a phone.
 
 ## 1. Why
 
@@ -81,12 +81,17 @@ All administrator routes need an administrator login: no token gives 401, a cond
 - `device_pairing_audit`: who did what to which public id and vehicle. A test checks that no secret, whole code, stored hash or token appears in the audit rows, in the three list routes, or in anything written to the console, across issue, wrong tries, lock, pair and cancel.
 - A phone's token is stored the way it always was: only the hash.
 
-## 6. For the dashboard step
+## 6. The dashboard step (built: Dashboard > Phones)
 
-- Show the code and the QR **once**, with a countdown from `expires_in_seconds`; clear them when it reaches zero or the page is left. Do not keep the code in storage or put it in a URL.
-- When `qr_payload` is `null`, show the typed code only.
-- Show each code's `status`. For a `used` code show `used_device_id`, and tell the administrator to check it is the phone they meant; revoke it if not.
-- **Revoke needs a confirmation step**, in the dashboard (the route is unchanged and has none). A revoked Device ID stays revoked: it can never be enrolled or paired again (a test checks both routes). Replacing a phone is a new code and a new Device ID.
+The rules below are what the page does, and each is covered by a test in `toms_web/src/pages/Phones.test.tsx`.
+
+- The code and the QR are shown **once**, with a countdown that runs from this computer's clock (`expires_in_seconds` from the answer, not the server's `expires_at`), and they leave the screen when the countdown reaches zero, when a phone uses the code, when it locks or is cancelled, or when the page is left. The code is never put in browser storage or in the address, and the list shows only the public id (`K7M2-····-····`).
+- The page reads the lists every 3 seconds while a code is on screen, so the moment a phone uses the code it says which one (**Paired: phone … is now enrolled on …**) and tells the administrator to check it is the phone they meant. A tab that was in the background looks at the clock again as soon as it is shown.
+- When `qr_payload` is `null` only the typed code is shown, and the page says there is no QR.
+- Each code's `status` is shown. For a `used` code the page shows `used_device_id`, the phone's name, and a revoke button.
+- **Revoke needs a confirmation step.** Both revoke buttons (the phone list and the codes list) open a dialog that names the phone, its vehicle and its last upload, and says it cannot be undone and that the Device ID can never be enrolled again; nothing is sent until its own **Revoke phone** button is pressed, it cannot be pressed twice while the request is out, and Cancel, Escape or a click outside send nothing. The route itself is unchanged and has no confirmation of its own.
+- **Not available until the app step exists:** the page carries a note saying the conductor app has no enrolment screen yet and naming the command that works today (`setup-pilot.mjs … enrol-device`), and the code panel says "The app cannot use this code yet". Both come from one flag, `APP_ENROL_SCREEN_READY` in `toms_web/src/lib/pairing.ts`, which is `false`. **The app PR sets it to `true`**, which removes the note and changes the panel to "choose Scan to enrol… or type the code"; a test covers both readings.
+- Not on the page: a way to see a phone's token (there is none), a way to un-revoke (there is none, by design), and any change to how the server issues or checks codes.
 
 ## 7. For the app step
 
